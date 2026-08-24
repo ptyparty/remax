@@ -52,7 +52,14 @@ jobs:
           prerelease: true
           make_latest: false
           body: |
-            Rolling build of the most recent push to main.
-            Download `remax-linux-x86_64`, `chmod +x` it, and put it on your PATH.
+            Rolling build of the most recent push to main. Install with:
+
+            ```sh
+            mkdir -p "$HOME/.local/bin" && \
+              curl -fL https://github.com/${{ github.repository }}/releases/download/latest/remax-linux-x86_64 \
+                -o "$HOME/.local/bin/remax" && \
+              chmod +x "$HOME/.local/bin/remax"
+            ```
+
             Built in the flipstone haskell-tools container (Debian, glibc-linked).
           files: out/remax-linux-x86_64
