@@ -213,6 +213,7 @@ data St = St
   , stEmacsPrefix :: Maybe Char -- a pending C-c / C-x chord (emacs keymap)
   , stDeferAdvance :: Bool -- hold the post-mark jump until the note popup closes
   , stAltFile :: Maybe (FilePath, Int) -- where Space a bounces back to
+  , stAnchor :: Maybe (FilePath, Int) -- the hunk under review; ' returns here
   }
 
 repoText :: St -> Text
@@ -337,9 +338,17 @@ runReview mode root = do
           , stEmacsPrefix = Nothing
           , stDeferAdvance = False
           , stAltFile = Nothing
+          , stAnchor = Nothing
           }
       st1 = case firstUnrespondedOrPending st0 of
-        Just (f, h) -> (park f h st0) {stMsg = stMsg st0}
+        Just (f, h) ->
+          let
+            parked = (park f h st0) {stMsg = stMsg st0}
+          in
+            parked
+              { stAnchor =
+                  fmap (\fv -> (fvPath fv, stCurH parked)) (currentFileMay parked)
+              }
         Nothing -> st0
     -- the first frame paints with plain tokens; this tick colorizes
     -- the file on screen immediately after, off the startup path
@@ -1421,7 +1430,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'h') [] -> adoptHunkUnderCursor
         V.EvKey (V.KChar 'a') [] -> gotoAltFile
         V.EvKey (V.KChar '/') [] -> openGrepPicker ""
-        V.EvKey (V.KChar '\'') [] -> parkM (stCurF st) (stCurH st)
+        V.EvKey (V.KChar '\'') [] -> jumpToAnchor
         V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
         V.EvKey (V.KChar 'n') [] ->
           unless (T.null (stLastSearch st)) (searchStep 1 (stLastSearch st))
@@ -1491,7 +1500,7 @@ handleHelixKey i fv ed ev = do
           unless (T.null (stLastSearch st)) (searchStep 1 (stLastSearch st))
         V.EvKey (V.KChar 'N') [] ->
           unless (T.null (stLastSearch st)) (searchStep (-1) (stLastSearch st))
-        V.EvKey (V.KChar '\'') [] -> parkM (stCurF st) (stCurH st)
+        V.EvKey (V.KChar '\'') [] -> jumpToAnchor
         V.EvKey (V.KChar 'X') [] -> selectCurrentHunk
         -- paste with an empty kill slot would be a silent no-op; the
         -- message also catches fingers trained on the old p toggle
@@ -1749,7 +1758,7 @@ switchRun d = do
             else case reverse before ++ reverse pairs of
               (p : _) -> p
               [] -> here
-      parkM (fst target) (snd target)
+      parkAnchor (fst target) (snd target)
 
 -- '*': prime the search with the selected text (single-line selections)
 -- or the identifier under the cursor, then jump to its next occurrence.
@@ -1916,14 +1925,46 @@ gotoAltFile = do
         Nothing -> setMsg ("alternate file left the session: " <> T.pack path)
         Just f -> parkM f h
 
+-- Review-flow navigation parks AND drops the review anchor there, so '
+-- can always come back; investigation moves (pickers, grep, ga, open)
+-- park without touching it.
+parkAnchor :: Int -> Int -> EventM Name St ()
+parkAnchor f h = do
+  parkM f h
+  st <- get
+  case currentFileMay st of
+    Just fv ->
+      modify $ \s ->
+        s {stAnchor = Just (fvPath fv, clampH (fvRuns fv) (stCurH st))}
+    Nothing -> pure ()
+
+-- ': jump back to the hunk under review, wherever the investigation
+-- wandered — across files included. With no anchor yet, it reframes
+-- the current hunk as before.
+jumpToAnchor :: EventM Name St ()
+jumpToAnchor = do
+  st <- get
+  case stAnchor st of
+    Just (path, h) ->
+      case findIndex ((== path) . fvPath) (stFiles st) of
+        Just f -> parkM f h
+        Nothing -> setMsg ("anchored file left the session: " <> T.pack path)
+    Nothing -> parkM (stCurF st) (stCurH st)
+
 -- Space h: adopt the hunk the cursor is standing in as the current one
--- — the deliberate counterpart of ', which jumps to the current hunk.
+-- — the deliberate counterpart of ', which jumps back to the hunk
+-- under review.
 adoptHunkUnderCursor :: EventM Name St ()
 adoptHunkUnderCursor = do
   st <- get
   case hunkUnderCursor st of
     Nothing -> setMsg "cursor isn't in a hunk"
-    Just h -> modify (\s -> s {stCurH = h, stMsg = " "})
+    Just h -> do
+      modify (\s -> s {stCurH = h, stMsg = " "})
+      adopted <- get
+      case currentFileMay adopted of
+        Just fv -> modify (\s -> s {stAnchor = Just (fvPath fv, h)})
+        Nothing -> pure ()
 
 selectCurrentHunk :: EventM Name St ()
 selectCurrentHunk = do
@@ -2207,7 +2248,7 @@ advanceToPending = do
     unvisited = filter (pairUnvisited st) wrapped
     pending = filter (pairPending st) wrapped
   case unvisited ++ pending of
-    ((f, h) : _) -> parkM f h
+    ((f, h) : _) -> parkAnchor f h
     [] -> modify (\s -> s {stMsg = "All hunks have verdicts — q to quit."})
 
 applyToDisk :: Int -> EventM Name St ()
@@ -2413,8 +2454,8 @@ refreshGit = do
           when wasEmpty $ do
             woken <- get
             case firstUnrespondedOrPending woken of
-              Just (f, h) -> parkM f h
-              Nothing -> parkM 0 0
+              Just (f, h) -> parkAnchor f h
+              Nothing -> parkAnchor 0 0
 
 -- The : command line ----------------------------------------------------------
 

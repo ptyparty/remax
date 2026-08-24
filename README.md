@@ -135,7 +135,7 @@ Normal mode:
 | `Space /` | project-wide search (`git grep` behind the picker; also `:grep TEXT`): type, pick a hit, Enter jumps to the file and line with the match selected and `n`/`N` primed |
 | `:` | the command line — see below |
 | `*` | search for the selection (single-line) or the identifier under the cursor — primes `n`/`N` and jumps to the next occurrence |
-| `'` | jump back to the current hunk's anchor |
+| `'` | jump back to the hunk under review — **global**: review-flow navigation (`]`/`[`, auto-advance, `Space h`) drops the anchor there, and investigation moves (pickers, `Space /`, `ga`, `:open`) don't touch it, so wandering off to check something always has a way home |
 | `E` | suspend and open `$EDITOR` (hx-aware: helix gets `file:line`, classic editors get `+line`) on the current file at the cursor's line; the session reloads whatever you changed when you return |
 | `)` / `(` | next / previous file |
 | `Ctrl-p` | fuzzy file finder over the whole repository (tracked + untracked); type a subsequence, Enter opens, Esc closes |
