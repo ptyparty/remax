@@ -1025,17 +1025,20 @@ renderFile st fv =
           if isCurRun
             then withAttr curRunAttr (str "\9612") -- wide: ▌
             else withAttr borderAttr (str "\9614") -- thin: ▎
+            -- the cursor paints this cell's background instead of hiding
+            -- the glyph, so the line you're on still shows its own verdict
+        statusGlyph = case verdict of
+          Just Flagged -> withAttr flagMarkAttr (str "!")
+          Just Questioned -> withAttr questionMarkAttr (str "?")
+          Just Reviewed -> withAttr doneMarkAttr (str "\183")
+          Nothing ->
+            case rKey r of
+              Just _ -> withAttr pendingMarkAttr (str "\183")
+              Nothing -> str " "
         statusCol =
           if isCursor
-            then withAttr cursorMarkAttr (str "\9612")
-            else case verdict of
-              Just Flagged -> withAttr flagMarkAttr (str "!")
-              Just Questioned -> withAttr questionMarkAttr (str "?")
-              Just Reviewed -> withAttr doneMarkAttr (str "\183")
-              Nothing ->
-                case rKey r of
-                  Just _ -> withAttr pendingMarkAttr (str "\183")
-                  Nothing -> str " "
+            then withDefAttr cursorMarkAttr statusGlyph
+            else statusGlyph
         numCol = case rNewRow r of
           Just nr ->
             let
@@ -3845,7 +3848,7 @@ mkAttrMap mth =
       , (trayDeclAttr, scopeAttr mth "function" (fg V.blue))
       , (headerFileAttr, scopeAttr mth "markup.heading" (fg V.brightYellow))
       , (headerOkAttr, scopeAttr mth "diff.plus" (fg V.brightGreen))
-      , (cursorMarkAttr, fg V.yellow)
+      , (cursorMarkAttr, V.black `on` V.yellow)
       , (addedMarkAttr, scopeAttr mth "diff.plus" (fg V.green) `V.withStyle` V.bold)
       , (removedMarkAttr, scopeAttr mth "diff.minus" (fg V.red))
       , (ctxMarkAttr, scopeAttr mth "comment" (fg V.brightBlack))

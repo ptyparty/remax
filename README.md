@@ -75,7 +75,9 @@ line that changes after being reviewed comes back as pending by itself.
   the full pane height and doubles as the current-hunk indicator: across
   the current hunk's rows it widens to a half-block `▌` in the highlight
   color, so the hunk's extent reads at a glance. Next to it, a status
-  column (cursor `▌`, `!` flagged, `?` questioned, `·` reviewed) and
+  column (`!` flagged, `?` questioned, `·` reviewed/pending — the
+  cursor's row paints this cell's background yellow instead of hiding
+  the glyph, so the line you're on still shows its own verdict) and
   absolute line numbers — position and review state are always both
   visible. Removed lines have no number, keeping the numbering honestly
   absolute.
