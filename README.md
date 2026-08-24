@@ -1,5 +1,9 @@
 # remax
 
+> [!WARNING]
+> The current state of this repository is AI-generated and has not yet
+> been human reviewed. Read accordingly.
+
 Hunk-by-hunk code review with the **whole file on screen**: edit it
 **in place** with helix-flavored modal keys, and record per-line,
 content-keyed verdicts that survive rebases. Runs in a plain terminal (zellij-friendly).
