@@ -325,6 +325,17 @@ dependency tree**. Languages without a vendored grammar render plain —
 vendoring another is copying its sources under vendor/grammars and adding
 one table entry.
 
+## Push policy
+
+Currently **"PR-less, except where polite."** New features may be pushed
+to main at will, with the shared understanding that:
+
+- **a)** we might decide to remove them,
+- **b)** the workflow is in a high state of flux and experimentation, and
+- **c)** if your new feature will significantly disrupt other users of
+  the tool, experiment with it on a branch, discuss it in person, and
+  possibly open a PR if that makes sense.
+
 ## Development
 
 The repo follows the flipstone house layout: `./scripts/bootstrap` once
