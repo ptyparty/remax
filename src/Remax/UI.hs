@@ -1130,7 +1130,7 @@ statusBar st =
       Nothing -> ": command  q quit "
       Just fv ->
         (if fvStale fv then "· hunks refresh on Esc " else "")
-          <> "X\9166 accept  !/? flag  R unmark  ]/[ hunk  p pending  q quit "
+          <> "X\9166 accept  !/? flag  R unmark  ]/[ hunk  \9251p pending  q quit "
   in
     withDefAttr statusAttr $
       modeChip
@@ -1392,6 +1392,14 @@ handleHelixKey i fv ed ev = do
           unless (T.null (stLastSearch st)) (searchStep (-1) (stLastSearch st))
         V.EvKey (V.KChar '\'') [] -> parkM (stCurF st) (stCurH st)
         V.EvKey (V.KChar 'X') [] -> selectCurrentHunk
+        -- paste with an empty kill slot would be a silent no-op; the
+        -- message also catches fingers trained on the old p toggle
+        V.EvKey (V.KChar 'p') []
+          | T.null (edKill ed) ->
+              setMsg "kill slot is empty (y yanks) — the pending filter is Space p"
+        V.EvKey (V.KChar 'P') []
+          | T.null (edKill ed) ->
+              setMsg "kill slot is empty (y yanks) — the pending filter is Space p"
         V.EvKey (V.KChar ' ') [] ->
           modify (\s -> s {stSpace = True})
         V.EvKey (V.KChar 'E') [] -> do

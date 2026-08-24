@@ -15,6 +15,10 @@ rebase (commit 1/4) and the pending counts, the tray lists hunks by file
 with their verdicts and notes, and removed lines float inline beside
 what replaced them.* Runs in a plain terminal (zellij-friendly).
 
+Prebuilt Linux binaries: every push to main updates the rolling
+[`latest` release](../../releases/tag/latest) — download
+`remax-linux-x86_64`, `chmod +x`, done.
+
 ```sh
 remax                 # review everything uncommitted (working tree vs HEAD)
 remax --base REF      # review the working tree against any ref
