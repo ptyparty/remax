@@ -21,6 +21,7 @@ module Remax.Store
   , loadNotes
   , loadReplies
   , replyToNote
+  , resolveAnswered
   , storeDirectory
   , deleteKeys
   , PunchRow (..)
@@ -258,6 +259,17 @@ replyToNote conn repo key text = do
             "UPDATE line_verdict SET reply = ? WHERE repo = ? AND key = ?"
             (text, repo, key)
       changes conn
+
+-- Close every answered conversation at once: any note carrying an
+-- agent reply clears, note and reply together. Returns how many rows.
+resolveAnswered :: Connection -> Text -> IO Int
+resolveAnswered conn repo = do
+  execute
+    conn
+    "UPDATE line_verdict SET note = NULL, reply = NULL\
+    \ WHERE repo = ? AND reply IS NOT NULL"
+    (Only repo)
+  changes conn
 
 data PunchRow = PunchRow
   { punchKey :: Text

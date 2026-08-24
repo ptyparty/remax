@@ -2232,6 +2232,7 @@ commandTable =
   , ("accept", ArgDir, "mark everything under a directory reviewed")
   , ("note", ArgText, "note popup (:note TEXT for a one-liner)")
   , ("unnote", NoArg, "remove the note from the target lines")
+  , ("resolve", ArgText, "resolve the note here; 'all' sweeps answered ones")
   , ("open", ArgPath, "open a file in the session")
   , ("close", NoArg, "drop the current file")
   , ("files", NoArg, "fuzzy file finder")
@@ -2259,6 +2260,7 @@ cmdCandidates st input =
       ["set"] -> prefixed settingNames
       ["set", "keys"] -> prefixed ["helix", "emacs"]
       ["set", "note-on-flag"] -> prefixed ["0", "1"]
+      ["resolve"] -> prefixed ["all"]
       [cmd] -> case argKindOf cmd of
         Just ArgRef -> prefixed ("branch" : stCmdRefs st)
         Just ArgMode -> prefixed ["head", "unstaged", "untracked"]
@@ -2389,6 +2391,8 @@ runCommand input =
     ["note"] -> openNotePopup
     ("note" : rest) -> noteCmd (T.unwords rest)
     ["unnote"] -> unnoteCmd
+    ["resolve"] -> unnoteCmd
+    ["resolve", "all"] -> resolveAllAnswered
     ["accept", path] -> acceptPath path
     ["set"] -> showSettings
     ["set", key] -> showSetting key
@@ -2674,6 +2678,20 @@ amendHead = do
 
 -- Attach a reviewer note to the selection's lines (or the current hunk),
 -- so a ! or ? carries its reason into `remax list`.
+-- :resolve all — sweep every answered note in the repository: anything
+-- an agent has replied to is considered handled and both sides clear.
+resolveAllAnswered :: EventM Name St ()
+resolveAllAnswered = do
+  st <- get
+  n <- liftIO (resolveAnswered (stConn st) (repoText st))
+  notes <- liftIO (loadNotes (stConn st) (repoText st))
+  replies <- liftIO (loadReplies (stConn st) (repoText st))
+  modify (\s -> s {stNotes = notes, stReplies = replies})
+  setMsg $
+    if n == 0
+      then "no answered notes to resolve"
+      else "resolved " <> tshow n <> " answered line(s)"
+
 -- Acceptance closes the note conversation; the store upsert already
 -- cleared the rows, this keeps the inline display in step.
 resolveNotesInMemory :: [Text] -> EventM Name St ()

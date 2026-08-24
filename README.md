@@ -168,7 +168,8 @@ note popup keeps its modal keys in either keymap.
 | `:amend` | outside a rebase: fold the session's edits into HEAD (pairs with `:base HEAD^`) |
 | `:note TEXT` | attach a one-line note to the lines just marked `!`/`?` (or the selection) |
 | `:note` | open the note popup — a small modal buffer (full editing keys) for richer notes; text auto-wraps at the popup width; `⏎` in its normal mode saves, `Ctrl-c` (any mode) or `Esc` in its normal mode discards, saving empty clears. With the cursor on a noted line, `:note` opens that note for editing |
-| `:unnote` | remove the note from the same target |
+| `:unnote` / `:resolve` | remove the note from the same target |
+| `:resolve all` | sweep every **answered** note in the repository — anything carrying an agent reply clears, note and reply together; unanswered notes stay |
 | `:accept PATH` | mark every hunk under a directory (or in one file) reviewed — the bulk verb for generated code; matching is by path component |
 | `:open PATH` / `:close` | open any repository file in the session / drop it again |
 | `:files` | the fuzzy file finder (also `Ctrl-p`) |
