@@ -60,15 +60,17 @@ cursorPosition tz = (length (tzAbove tz), T.length (tzLeft tz))
 -- Clamps to the buffer, like the library it replaces.
 moveCursor :: (Int, Int) -> TextZipper Text -> TextZipper Text
 moveCursor (row, col) tz =
-  let ls = getText tz
-      lastRow = length ls - 1
-      r = max 0 (min row lastRow)
-      above = reverse (take r ls)
-      (line, below) = case drop r ls of
-        (l : rest) -> (l, rest)
-        [] -> (T.empty, [])
-      c = max 0 (min col (T.length line))
-  in TextZipper above (T.take c line) (T.drop c line) below
+  let
+    ls = getText tz
+    lastRow = length ls - 1
+    r = max 0 (min row lastRow)
+    above = reverse (take r ls)
+    (line, below) = case drop r ls of
+      (l : rest) -> (l, rest)
+      [] -> (T.empty, [])
+    c = max 0 (min col (T.length line))
+  in
+    TextZipper above (T.take c line) (T.drop c line) below
 
 moveLeft :: TextZipper Text -> TextZipper Text
 moveLeft tz =
@@ -84,43 +86,47 @@ moveRight :: TextZipper Text -> TextZipper Text
 moveRight tz =
   case T.uncons (tzRight tz) of
     Nothing -> tz
-    Just (c, rest) -> tz { tzLeft = T.snoc (tzLeft tz) c, tzRight = rest }
+    Just (c, rest) -> tz {tzLeft = T.snoc (tzLeft tz) c, tzRight = rest}
 
 moveUp :: TextZipper Text -> TextZipper Text
 moveUp tz =
   case tzAbove tz of
     [] -> tz
     (prev : rest) ->
-      let col = min (T.length (tzLeft tz)) (T.length prev)
-      in TextZipper
-           rest
-           (T.take col prev)
-           (T.drop col prev)
-           (currentLine tz : tzBelow tz)
+      let
+        col = min (T.length (tzLeft tz)) (T.length prev)
+      in
+        TextZipper
+          rest
+          (T.take col prev)
+          (T.drop col prev)
+          (currentLine tz : tzBelow tz)
 
 moveDown :: TextZipper Text -> TextZipper Text
 moveDown tz =
   case tzBelow tz of
     [] -> tz
     (next : rest) ->
-      let col = min (T.length (tzLeft tz)) (T.length next)
-      in TextZipper
-           (currentLine tz : tzAbove tz)
-           (T.take col next)
-           (T.drop col next)
-           rest
+      let
+        col = min (T.length (tzLeft tz)) (T.length next)
+      in
+        TextZipper
+          (currentLine tz : tzAbove tz)
+          (T.take col next)
+          (T.drop col next)
+          rest
 
 gotoBOL :: TextZipper Text -> TextZipper Text
-gotoBOL tz = tz { tzLeft = T.empty, tzRight = currentLine tz }
+gotoBOL tz = tz {tzLeft = T.empty, tzRight = currentLine tz}
 
 gotoEOL :: TextZipper Text -> TextZipper Text
-gotoEOL tz = tz { tzLeft = currentLine tz, tzRight = T.empty }
+gotoEOL tz = tz {tzLeft = currentLine tz, tzRight = T.empty}
 
 insertChar :: Char -> TextZipper Text -> TextZipper Text
 insertChar ch tz =
   if ch == '\n'
     then breakLine tz
-    else tz { tzLeft = T.snoc (tzLeft tz) ch }
+    else tz {tzLeft = T.snoc (tzLeft tz) ch}
 
 -- Pasted content may span lines; everything else is one line-local
 -- append per segment.
@@ -128,10 +134,10 @@ insertMany :: Text -> TextZipper Text -> TextZipper Text
 insertMany t tz =
   case T.split (== '\n') t of
     [] -> tz
-    [single] -> tz { tzLeft = tzLeft tz <> single }
+    [single] -> tz {tzLeft = tzLeft tz <> single}
     (first : more) ->
       case reverse more of
-        [] -> tz { tzLeft = tzLeft tz <> first }
+        [] -> tz {tzLeft = tzLeft tz <> first}
         (final : revMiddle) ->
           tz
             { tzAbove = revMiddle ++ ((tzLeft tz <> first) : tzAbove tz)
@@ -150,11 +156,11 @@ breakLine tz =
 deleteChar :: TextZipper Text -> TextZipper Text
 deleteChar tz =
   case T.uncons (tzRight tz) of
-    Just (_, rest) -> tz { tzRight = rest }
+    Just (_, rest) -> tz {tzRight = rest}
     Nothing ->
       case tzBelow tz of
         [] -> tz
-        (next : rest) -> tz { tzRight = next, tzBelow = rest }
+        (next : rest) -> tz {tzRight = next, tzBelow = rest}
 
 -- Backspace; at column zero the line joins the one above, cursor at the
 -- junction.
@@ -163,5 +169,5 @@ deletePrevChar tz =
   if T.null (tzLeft tz)
     then case tzAbove tz of
       [] -> tz
-      (prev : rest) -> tz { tzAbove = rest, tzLeft = prev }
-    else tz { tzLeft = T.init (tzLeft tz) }
+      (prev : rest) -> tz {tzAbove = rest, tzLeft = prev}
+    else tz {tzLeft = T.init (tzLeft tz)}

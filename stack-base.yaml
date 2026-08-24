@@ -1,0 +1,6 @@
+packages:
+  - .
+
+flags:
+  remax:
+    ci: true

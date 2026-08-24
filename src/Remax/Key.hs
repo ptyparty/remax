@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- Content keys for changed lines, following `dev review`'s scheme with a
+-- Content keys for changed lines: a content-addressed scheme with a
 -- new scheme tag so the two stores can never cross-contaminate.
 --
 -- A key is the repository, the file, the line exactly as the diff writes
@@ -26,15 +26,19 @@ import qualified Data.Text.Lazy.Encoding as TLE
 -- the first, so reviewing one leaves the other pending.
 lineKeys :: Text -> Text -> [Text] -> [Text]
 lineKeys repo file markedLines =
-  let lineId l =
-        sha256Hex (T.intercalate "\NUL" ["remax/1", repo, file, l])
-      go _ [] = []
-      go seen (l : rest) =
-        let lid = lineId l
-            ordinal = Map.findWithDefault (0 :: Int) lid seen
-            key = sha256Hex (T.concat [lid, "\NUL", T.pack (show ordinal)])
-        in key : go (Map.insert lid (ordinal + 1) seen) rest
-  in go Map.empty markedLines
+  let
+    lineId l =
+      sha256Hex (T.intercalate "\NUL" ["remax/1", repo, file, l])
+    go _ [] = []
+    go seen (l : rest) =
+      let
+        lid = lineId l
+        ordinal = Map.findWithDefault (0 :: Int) lid seen
+        key = sha256Hex (T.concat [lid, "\NUL", T.pack (show ordinal)])
+      in
+        key : go (Map.insert lid (ordinal + 1) seen) rest
+  in
+    go Map.empty markedLines
 
 sha256Hex :: Text -> Text
 sha256Hex =

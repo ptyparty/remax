@@ -25,9 +25,9 @@ import Brick
   , attrName
   , customMain
   , getVtyHandle
-  , halt
   , hBox
   , hLimit
+  , halt
   , lookupViewport
   , padBottom
   , padLeft
@@ -50,9 +50,9 @@ import Brick
   )
 import Brick.BChan (BChan, newBChan, writeBChanNonBlocking)
 import Brick.Types (Context, Size (Fixed, Greedy), Widget (Widget), availWidth, getContext, render)
+import Brick.Util (fg, on)
 import qualified Brick.Widgets.Border as B
 import qualified Brick.Widgets.Center as C
-import Brick.Util (fg, on)
 import Control.Applicative ((<|>))
 import Control.Concurrent
   ( forkIO
@@ -79,11 +79,12 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import qualified Remax.Zipper as Z
+import qualified Data.Text.Read as TR
 import Database.SQLite.Simple (Connection)
 import GHC.Clock (getMonotonicTime)
 import qualified Graphics.Vty as V
 import Graphics.Vty.CrossPlatform (mkVty)
+import qualified Remax.Zipper as Z
 import System.Environment (lookupEnv)
 import qualified System.FSNotify as FS
 import System.FilePath
@@ -106,6 +107,7 @@ import System.Timeout (timeout)
 
 import Remax.Config
 import Remax.DiffModel
+import Remax.Emacs (handleEmacs)
 import Remax.Git
   ( RebaseStatus (..)
   , ReviewMode (..)
@@ -113,10 +115,10 @@ import Remax.Git
   , branchRoot
   , changedFiles
   , gitStateWatchDirs
-  , looksBinary
   , headCommit
   , listFiles
   , listRefs
+  , looksBinary
   , modeLabel
   , rebaseStatus
   , refExists
@@ -151,7 +153,6 @@ data NotePopup = NotePopup
   { npEd :: EdState
   , npKeys :: [Text]
   }
-
 
 data FileView = FileView
   { fvPath :: FilePath
@@ -201,6 +202,7 @@ data St = St
   , stCmdDirs :: [Text]
   , stCmdRefs :: [Text]
   , stPromptCycle :: Maybe (Text, Int) -- Tab cycling: typed base + applied index
+  , stEmacsPrefix :: Maybe Char -- a pending C-c / C-x chord (emacs keymap)
   }
 
 repoText :: St -> Text
@@ -248,14 +250,15 @@ runReview mode root = do
     -- A recursive watch over the whole repository walks every build
     -- artifact directory and dominates startup on real projects.
     watchedRef <- newIORef Set.empty
-    let watchDirOnce dir = do
-          seen <- readIORef watchedRef
-          unless (Set.member dir seen) $ do
-            modifyIORef' watchedRef (Set.insert dir)
-            void
-              ( try (FS.watchDir mgr dir (const True) (dispatchFsEvent chan root))
-                  :: IO (Either IOException FS.StopListening)
-              )
+    let
+      watchDirOnce dir = do
+        seen <- readIORef watchedRef
+        unless (Set.member dir seen) $ do
+          modifyIORef' watchedRef (Set.insert dir)
+          void
+            ( try (FS.watchDir mgr dir (const True) (dispatchFsEvent chan root)) ::
+                IO (Either IOException FS.StopListening)
+            )
     gitDirs <- gitStateWatchDirs root
     forM_ gitDirs watchDirOnce
     -- the verdict store lives outside the repository; watching it makes
@@ -268,75 +271,82 @@ runReview mode root = do
               storeDir
               (const True)
               (\_ -> void (writeBChanNonBlocking chan StoreChanged))
-          )
-          :: IO (Either IOException FS.StopListening)
+          ) ::
+          IO (Either IOException FS.StopListening)
       )
     forM_ files (watchDirOnce . fileDir root . fvPath)
-    let pendingCount =
-          length
-            (filter (runPending verdicts) (concatMap fvRuns files))
-        totalCount = length (concatMap fvRuns files)
-        st0 =
-          St
-            { stFiles = files
-            , stCurF = 0
-            , stCurH = 0
-            , stVerdicts = verdicts
-            , stMsg =
-                if null files
-                  then "change set is empty — watching for changes"
-                  else
-                    tshow pendingCount <> " of " <> tshow totalCount
-                      <> " hunks pending"
-            , stRoot = root
-            , stMode = mode
-            , stConn = conn
-            , stPassId = passId
-            , stCounts = Map.empty
-            , stPunch = []
-            , stTray = True
-            , stLastGit = 0
-            , stGitQueued = False
-            , stChan = chan
-            , stWatch = watchDirOnce
-            , stPrompt = Nothing
-            , stLastSearch = ""
-            , stBorder = fgOnly (scopeAttr theme "ui.linenr" (fg V.brightBlack))
-            , stHls = hls
-            , stOnlyPending = True
-            , stRebase = rebase0
-            , stWritten = Set.empty
-            , stLastMarked = []
-            , stOpened = Set.empty
-            , stPicker = Nothing
-            , stNotePopup = Nothing
-            , stNotes = notes0
-            , stReplies = replies0
-            , stSpace = False
-            , stConfig = cfg
-            , stCmdFiles = []
-            , stCmdDirs = []
-            , stCmdRefs = []
-            , stPromptCycle = Nothing
-            }
-        st1 = case firstUnrespondedOrPending st0 of
-          Just (f, h) -> (park f h st0) { stMsg = stMsg st0 }
-          Nothing -> st0
+    let
+      pendingCount =
+        length
+          (filter (runPending verdicts) (concatMap fvRuns files))
+      totalCount = length (concatMap fvRuns files)
+      st0 =
+        St
+          { stFiles = files
+          , stCurF = 0
+          , stCurH = 0
+          , stVerdicts = verdicts
+          , stMsg =
+              if null files
+                then "change set is empty — watching for changes"
+                else
+                  tshow pendingCount
+                    <> " of "
+                    <> tshow totalCount
+                    <> " hunks pending"
+          , stRoot = root
+          , stMode = mode
+          , stConn = conn
+          , stPassId = passId
+          , stCounts = Map.empty
+          , stPunch = []
+          , stTray = True
+          , stLastGit = 0
+          , stGitQueued = False
+          , stChan = chan
+          , stWatch = watchDirOnce
+          , stPrompt = Nothing
+          , stLastSearch = ""
+          , stBorder = fgOnly (scopeAttr theme "ui.linenr" (fg V.brightBlack))
+          , stHls = hls
+          , stOnlyPending = True
+          , stRebase = rebase0
+          , stWritten = Set.empty
+          , stLastMarked = []
+          , stOpened = Set.empty
+          , stPicker = Nothing
+          , stNotePopup = Nothing
+          , stNotes = notes0
+          , stReplies = replies0
+          , stSpace = False
+          , stConfig = cfg
+          , stCmdFiles = []
+          , stCmdDirs = []
+          , stCmdRefs = []
+          , stPromptCycle = Nothing
+          , stEmacsPrefix = Nothing
+          }
+      st1 = case firstUnrespondedOrPending st0 of
+        Just (f, h) -> (park f h st0) {stMsg = stMsg st0}
+        Nothing -> st0
     -- the first frame paints with plain tokens; this tick colorizes
     -- the file on screen immediately after, off the startup path
     void (writeBChanNonBlocking chan Tick)
     -- terminfo often claims only 256 colors even when the terminal
     -- speaks 24-bit; trust COLORTERM the way helix does, or theme
     -- colors get rounded to the nearest palette entry
-    let buildVty = do
-          colorterm <- lookupEnv "COLORTERM"
-          let cfg = case colorterm of
-                Just v
-                  | v `elem` ["truecolor", "24bit"] ->
-                      V.defaultConfig
-                        { V.configPreferredColorMode = Just V.FullColor }
-                _ -> V.defaultConfig
-          mkVty cfg
+    let
+      buildVty = do
+        colorterm <- lookupEnv "COLORTERM"
+        let
+          vtyCfg = case colorterm of
+            Just v
+              | v `elem` ["truecolor", "24bit"] ->
+                  V.defaultConfig
+                    { V.configPreferredColorMode = Just V.FullColor
+                    }
+            _ -> V.defaultConfig
+        mkVty vtyCfg
     vty <- buildVty
     customMain vty buildVty (Just chan) (app theme) st1
   finishPass conn (stPassId final)
@@ -348,8 +358,10 @@ fileDir root path = normalise (root </> takeDirectory path)
 -- Every (file, hunk) pair in display order.
 allRunPairs :: St -> [(Int, Int)]
 allRunPairs st =
-  let filePairs (fi, fv) = map (\h -> (fi, h)) [0 .. length (fvRuns fv) - 1]
-  in concatMap filePairs (zip [0 ..] (stFiles st))
+  let
+    filePairs (fi, fv) = map (\h -> (fi, h)) [0 .. length (fvRuns fv) - 1]
+  in
+    concatMap filePairs (zip [0 ..] (stFiles st))
 
 runAt :: St -> (Int, Int) -> Maybe Run
 runAt st (f, h) = do
@@ -380,21 +392,26 @@ firstPending st = find (pairPending st) (allRunPairs st)
 
 printSummary :: St -> IO ()
 printSummary st = do
-  let count v = Map.findWithDefault 0 v (stCounts st)
+  let
+    count v = Map.findWithDefault 0 v (stCounts st)
   putStrLn
     ( "This pass: "
-        ++ show (count Reviewed) ++ " reviewed, "
-        ++ show (count Flagged) ++ " flagged, "
-        ++ show (count Questioned) ++ " questioned."
+        ++ show (count Reviewed)
+        ++ " reviewed, "
+        ++ show (count Flagged)
+        ++ " flagged, "
+        ++ show (count Questioned)
+        ++ " questioned."
     )
   forM_ (reverse (stPunch st)) $ \(path, line, v) ->
     putStrLn ("  " ++ T.unpack (verdictText v) ++ ": " ++ path ++ ":" ++ show line)
 
 dispatchFsEvent :: BChan REvent -> FilePath -> FS.Event -> IO ()
 dispatchFsEvent chan root ev = do
-  let rel = makeRelative root (FS.eventPath ev)
-      parts = splitDirectories rel
-      noisy = any (`elem` ["dist-newstyle", ".stack-work", "node_modules"]) parts
+  let
+    rel = makeRelative root (FS.eventPath ev)
+    parts = splitDirectories rel
+    noisy = any (`elem` ["dist-newstyle", ".stack-work", "node_modules"]) parts
   unless noisy $
     if ".git" `elem` parts
       then
@@ -436,13 +453,13 @@ forMaybeBounded f xs = do
     pure slot
   forM handles takeMVar
 
-loadOne
-  :: Config
-  -> [([String], TS.Highlighter)]
-  -> ReviewMode
-  -> FilePath
-  -> FilePath
-  -> IO (Maybe FileView)
+loadOne ::
+  Config ->
+  [([String], TS.Highlighter)] ->
+  ReviewMode ->
+  FilePath ->
+  FilePath ->
+  IO (Maybe FileView)
 loadOne cfg hls mode root path = do
   readable <- try (looksBinary root path) :: IO (Either IOException Bool)
   case readable of
@@ -454,24 +471,26 @@ loadOne cfg hls mode root path = do
       case gotNew of
         Left _ -> pure Nothing
         Right newTxt -> do
-          let newLs = T.lines newTxt
-              fv0 =
-                FileView
-                  { fvPath = path
-                  , fvBase = base
-                  , fvEd = newEdState 0 newLs
-                  , fvRows = []
-                  , fvRuns = []
-                  , fvToks = []
-                  , fvStale = False
-                  , fvHighlighted = False
-                  , fvHl = TS.highlighterFor hls path
-                  }
+          let
+            newLs = T.lines newTxt
+            fv0 =
+              FileView
+                { fvPath = path
+                , fvBase = base
+                , fvEd = newEdState 0 newLs
+                , fvRows = []
+                , fvRuns = []
+                , fvToks = []
+                , fvStale = False
+                , fvHighlighted = False
+                , fvHl = TS.highlighterFor hls path
+                }
           (fv, _) <- rebuildFV (cfgSplit cfg) (T.pack root) fv0
-          let anchor = case fvRuns fv of
-                (r : _) -> runAnchor r
-                [] -> 0
-          pure (Just fv { fvEd = newEdState anchor newLs })
+          let
+            anchor = case fvRuns fv of
+              (r : _) -> runAnchor r
+              [] -> 0
+          pure (Just fv {fvEd = newEdState anchor newLs})
 
 diffBudgetUs :: Int
 diffBudgetUs = 400000
@@ -482,33 +501,37 @@ diffBudgetUs = 400000
 -- and render plain when there is none or the parse blew its budget.
 rebuildFV :: SplitConfig -> Text -> FileView -> IO (FileView, Bool)
 rebuildFV sc repo fv = do
-  let newLs = bufferLines (fvEd fv)
-      plain = pure (plainLines newLs)
+  let
+    newLs = bufferLines (fvEd fv)
+    plain = pure (plainLines newLs)
   toks <-
     case (fvHighlighted fv, fvHl fv) of
       (True, Just hl) -> do
         got <- TS.tsHighlight hl newLs
         case got of
           Just scoped -> do
-            let toSeg (scope, t) = (scopeSeg scope, t)
-                segs = map (map toSeg) scoped
+            let
+              toSeg (scope, t) = (scopeSeg scope, t)
+              segs = map (map toSeg) scoped
             _ <- evaluate (forceTokLines segs `seq` segs)
             pure segs
           Nothing -> plain
       _ -> plain
   (rows3, degraded) <- diffIO (fvBase fv) newLs
-  let (rows, runs) = assemble sc repo (T.pack (fvPath fv)) rows3 toks
+  let
+    (rows, runs) = assemble sc repo (T.pack (fvPath fv)) rows3 toks
   pure
-    ( fv { fvRows = rows, fvRuns = runs, fvToks = toks, fvStale = False }
+    ( fv {fvRows = rows, fvRuns = runs, fvToks = toks, fvStale = False}
     , degraded
     )
 
 diffIO :: [Text] -> [Text] -> IO ([(Char, Maybe Int, Text)], Bool)
 diffIO old new = do
-  let rows = diffRows old new
-      wholeFileFallback =
-        map (\o -> ('-', Nothing, o)) old
-          ++ zipWith (\i l -> ('+', Just i, l)) [0 ..] new
+  let
+    rows = diffRows old new
+    wholeFileFallback =
+      map (\o -> ('-', Nothing, o)) old
+        ++ zipWith (\i l -> ('+', Just i, l)) [0 ..] new
   got <- timeout diffBudgetUs (evaluate (forceRows rows `seq` rows))
   pure $ case got of
     Just r -> (r, False)
@@ -516,19 +539,21 @@ diffIO old new = do
 
 patchLine :: Int -> Text -> FileView -> FileView
 patchLine row newText fv =
-  let lineToks = plainLine newText
-      isPatchedContext r = rMark r == ' ' && rNewRow r == Just row
-      touchedContext = any isPatchedContext (fvRows fv)
-      patchTok (i, tl) = if i == row then lineToks else tl
-      patchRow r =
-        if rNewRow r == Just row
-          then r { rText = newText, rToks = lineToks }
-          else r
-  in fv
-       { fvToks = map patchTok (zip [0 ..] (fvToks fv))
-       , fvRows = map patchRow (fvRows fv)
-       , fvStale = fvStale fv || touchedContext
-       }
+  let
+    lineToks = plainLine newText
+    isPatchedContext r = rMark r == ' ' && rNewRow r == Just row
+    touchedContext = any isPatchedContext (fvRows fv)
+    patchTok (i, tl) = if i == row then lineToks else tl
+    patchRow r =
+      if rNewRow r == Just row
+        then r {rText = newText, rToks = lineToks}
+        else r
+  in
+    fv
+      { fvToks = map patchTok (zip [0 ..] (fvToks fv))
+      , fvRows = map patchRow (fvRows fv)
+      , fvStale = fvStale fv || touchedContext
+      }
 
 -- Verdict helpers -------------------------------------------------------------
 
@@ -542,21 +567,25 @@ runUnvisited m r = any (`Map.notMember` m) (runKeys r)
 -- which is what the counts, the p filter, and navigation care about.
 runPending :: Map.Map Text Verdict -> Run -> Bool
 runPending m r =
-  let accepted k = Map.lookup k m == Just Reviewed
-  in not (all accepted (runKeys r))
+  let
+    accepted k = Map.lookup k m == Just Reviewed
+  in
+    not (all accepted (runKeys r))
 
 runMark :: Map.Map Text Verdict -> Run -> Char
 runMark m r =
-  let verdicts = map (`Map.lookup` m) (runKeys r)
-  in if runUnvisited m r
-       then '\183' -- ·
-       else
-         if any (== Just Flagged) verdicts
-           then '!'
-           else
-             if any (== Just Questioned) verdicts
-               then '?'
-               else '\10003' -- ✓
+  let
+    verdicts = map (`Map.lookup` m) (runKeys r)
+  in
+    if runUnvisited m r
+      then '\183' -- ·
+      else
+        if any (== Just Flagged) verdicts
+          then '!'
+          else
+            if any (== Just Questioned) verdicts
+              then '?'
+              else '\10003' -- ✓
 
 clampH :: [Run] -> Int -> Int
 clampH rs h = max 0 (min h (length rs - 1))
@@ -577,7 +606,8 @@ app theme =
     , appHandleEvent = \ev -> handleEvent ev >> ensureCurrentHighlighted
     , appStartEvent = do
         vty <- getVtyHandle
-        let out = V.outputIface vty
+        let
+          out = V.outputIface vty
         when (V.supportsMode out V.BracketedPaste) $
           liftIO (V.setMode out V.BracketedPaste True)
     , appAttrMap = const (mkAttrMap theme)
@@ -587,24 +617,26 @@ app theme =
 
 draw :: St -> [Widget Name]
 draw st =
-  let body = case currentFileMay st of
-        Just fv -> viewport BodyVP Vertical (renderFile st fv)
-        Nothing -> idleBody
-      panes =
-        if stTray st && not (null (stFiles st))
-          then [tray st, body]
-          else [body]
-      overlays =
-        catMaybes
-          [ fmap notePopupLayer (stNotePopup st)
-          , fmap pickerLayer (stPicker st)
-          , if stSpace st then Just spaceMenu else Nothing
-          ]
-      menuRows = case promptMenu st of
-        Just menu -> [menu]
-        Nothing -> []
-  in overlays
-       ++ [vBox ([headerBar st, hBox panes] ++ menuRows ++ [statusBar st])]
+  let
+    body = case currentFileMay st of
+      Just fv -> viewport BodyVP Vertical (renderFile st fv)
+      Nothing -> idleBody
+    panes =
+      if stTray st && not (null (stFiles st))
+        then [tray st, body]
+        else [body]
+    overlays =
+      catMaybes
+        [ fmap notePopupLayer (stNotePopup st)
+        , fmap pickerLayer (stPicker st)
+        , if stSpace st then Just spaceMenu else Nothing
+        ]
+    menuRows = case promptMenu st of
+      Just menu -> [menu]
+      Nothing -> []
+  in
+    overlays
+      ++ [vBox ([headerBar st, hBox panes] ++ menuRows ++ [statusBar st])]
 
 -- The pending-space infobox, helix style: bottom-right, listing what the
 -- menu offers.
@@ -614,12 +646,13 @@ spaceMenu =
     . B.border
     . hLimit 24
     $ vBox
-        [ withDefAttr statusAttr (padRight Max (txt " space "))
-        , txt " f  file picker"
-        , txt " b  open files"
-        , txt " n  note popup"
-        , txt " e  $EDITOR here"
-        ]
+      [ withDefAttr statusAttr (padRight Max (txt " space "))
+      , txt " f  file picker"
+      , txt " b  open files"
+      , txt " n  note popup"
+      , txt " e  $EDITOR here"
+      , txt " p  pending filter"
+      ]
 
 -- The persistent session's resting state: nothing to review, but the
 -- watcher is live and new work will wake the screen on its own.
@@ -630,55 +663,70 @@ idleBody =
       [ txt " "
       , withAttr doneMarkAttr (txt "  ✓ all clear — nothing to review")
       , txt " "
-      , withAttr hintAttr
+      , withAttr
+          hintAttr
           (txt "  watching for changes · :base REF or :mode switches the view · q quits")
       ]
 
 headerBar :: St -> Widget Name
 headerBar st =
-  let lead = " remax · " <> modeLabel (stMode st) <> " · "
-      rebaseSeg = case stRebase st of
-        Nothing -> txt ""
-        Just rb ->
-          let conflictNote = if rebaseConflicted rb then " · CONFLICT" else ""
-          in withAttr headerRebaseAttr
-               ( txt
-                   ( "  ·  rebasing " <> tshow (rebaseStep rb) <> "/"
-                       <> tshow (rebaseTotal rb) <> ": " <> rebaseSubject rb
-                       <> conflictNote
-                   )
-               )
-  in withDefAttr headerAttr . padRight Max $
-       case currentFileMay st of
-         Nothing -> hBox [txt (lead <> "all clear"), rebaseSeg]
-         Just fv ->
-           let rs = fvRuns fv
-               h = clampH rs (stCurH st)
-               shownH = if null rs then 0 else h + 1
-               pendingPairs = filter (pairPending st) (allRunPairs st)
-               pendingAll = length pendingPairs
-               pendingHere =
-                 length (filter (\(f, _) -> f == stCurF st) pendingPairs)
-               pendingSeg =
-                 if length (stFiles st) > 1
-                   then
-                     "  ·  " <> tshow pendingHere <> " pending here · "
-                       <> tshow pendingAll <> " overall"
-                   else "  ·  " <> tshow pendingAll <> " pending"
-               doneBadge = case safeIdx rs h of
-                 Just r
-                   | not (runPending (stVerdicts st) r) ->
-                       withAttr headerOkAttr (txt "  ✓ done")
-                 _ -> txt " "
-           in hBox
-                [ txt lead
-                , withAttr headerFileAttr (txt (T.pack (fvPath fv)))
-                , txt ("  ·  file " <> tshow (stCurF st + 1) <> "/" <> tshow (length (stFiles st)))
-                , txt ("  ·  hunk " <> tshow shownH <> "/" <> tshow (length rs))
-                , txt pendingSeg
-                , doneBadge
-                , rebaseSeg
-                ]
+  let
+    lead = " remax · " <> modeLabel (stMode st) <> " · "
+    rebaseSeg = case stRebase st of
+      Nothing -> txt ""
+      Just rb ->
+        let
+          conflictNote = if rebaseConflicted rb then " · CONFLICT" else ""
+        in
+          withAttr
+            headerRebaseAttr
+            ( txt
+                ( "  ·  rebasing "
+                    <> tshow (rebaseStep rb)
+                    <> "/"
+                    <> tshow (rebaseTotal rb)
+                    <> ": "
+                    <> rebaseSubject rb
+                    <> conflictNote
+                )
+            )
+  in
+    withDefAttr headerAttr . padRight Max $
+      case currentFileMay st of
+        Nothing -> hBox [txt (lead <> "all clear"), rebaseSeg]
+        Just fv ->
+          let
+            rs = fvRuns fv
+            h = clampH rs (stCurH st)
+            shownH = if null rs then 0 else h + 1
+            pendingPairs = filter (pairPending st) (allRunPairs st)
+            pendingAll = length pendingPairs
+            pendingHere =
+              length (filter (\(f, _) -> f == stCurF st) pendingPairs)
+            pendingSeg =
+              if length (stFiles st) > 1
+                then
+                  "  ·  "
+                    <> tshow pendingHere
+                    <> " pending here · "
+                    <> tshow pendingAll
+                    <> " overall"
+                else "  ·  " <> tshow pendingAll <> " pending"
+            doneBadge = case safeIdx rs h of
+              Just r
+                | not (runPending (stVerdicts st) r) ->
+                    withAttr headerOkAttr (txt "  ✓ done")
+              _ -> txt " "
+          in
+            hBox
+              [ txt lead
+              , withAttr headerFileAttr (txt (T.pack (fvPath fv)))
+              , txt ("  ·  file " <> tshow (stCurF st + 1) <> "/" <> tshow (length (stFiles st)))
+              , txt ("  ·  hunk " <> tshow shownH <> "/" <> tshow (length rs))
+              , txt pendingSeg
+              , doneBadge
+              , rebaseSeg
+              ]
 
 -- What the tray shows: one line per file (with a count of its hidden
 -- hunks), one line per hunk still worth a row. Reviewed hunks collapse
@@ -690,73 +738,85 @@ data TrayEntry
 
 trayEntries :: St -> [TrayEntry]
 trayEntries st =
-  let curF = stCurF st
-      curH = clampH (fvRuns (currentFile st)) (stCurH st)
-      hiddenHunk fi (hi, r) =
-        let mark = runMark (stVerdicts st) r
-            isCurrent = fi == curF && hi == curH
-        in not isCurrent && stOnlyPending st && mark == '\10003'
-      fileGroup (fi, fv) =
-        let numbered = zip [0 ..] (fvRuns fv)
-            (hiddenOnes, shown) = splitHiddenShown fi numbered
-        in TrayFile fi (length hiddenOnes)
-             : map (\(hi, _) -> TrayHunk fi hi) shown
-      splitHiddenShown fi numbered =
-        ( filter (hiddenHunk fi) numbered
-        , filter (not . hiddenHunk fi) numbered
-        )
-  in concatMap fileGroup (zip [0 ..] (stFiles st))
+  let
+    curF = stCurF st
+    curH = clampH (fvRuns (currentFile st)) (stCurH st)
+    hiddenHunk fi (hi, r) =
+      let
+        mark = runMark (stVerdicts st) r
+        isCurrent = fi == curF && hi == curH
+      in
+        not isCurrent && stOnlyPending st && mark == '\10003'
+    fileGroup (fi, fv) =
+      let
+        numbered = zip [0 ..] (fvRuns fv)
+        (hiddenOnes, shown) = splitHiddenShown fi numbered
+      in
+        TrayFile fi (length hiddenOnes)
+          : map (\(hi, _) -> TrayHunk fi hi) shown
+    splitHiddenShown fi numbered =
+      ( filter (hiddenHunk fi) numbered
+      , filter (not . hiddenHunk fi) numbered
+      )
+  in
+    concatMap fileGroup (zip [0 ..] (stFiles st))
 
 trayWidth :: Int
 trayWidth = 26
 
 tray :: St -> Widget Name
 tray st =
-  let entryWidget entry = case entry of
-        TrayFile fi hidden ->
-          let name =
-                shortPath
-                  (trayWidth - 2 - (if hidden > 0 then 4 else 0))
-                  (T.pack (fvPath (stFiles st !! fi)))
-              suffix =
-                if hidden > 0
-                  then withAttr doneMarkAttr (txt (" \183" <> tshow hidden <> "\10003"))
-                  else txt ""
-          in padRight
-               Max
-               ( withAttr
-                   (if fi == stCurF st then trayFileCurAttr else trayFileAttr)
-                   (txt (padT name))
-                   <+> suffix
-               )
-        TrayHunk fi hi ->
-          let fv = stFiles st !! fi
-              r = fvRuns fv !! hi
-              current =
-                fi == stCurF st
-                  && hi == clampH (fvRuns (currentFile st)) (stCurH st)
-              mark = runMark (stVerdicts st) r
-              noteMark =
-                if any (`Map.member` stNotes st) (runKeys r)
-                  then withAttr hintAttr (txt " \8801")
-                  else txt ""
-              markAttr = case mark of
-                '!' -> flagMarkAttr
-                '?' -> questionMarkAttr
-                '\10003' -> doneMarkAttr
-                _ -> pendingMarkAttr
-              line =
-                hBox
-                  [ txt "  "
-                  , withAttr markAttr (str [mark])
-                  , txt (" :" <> tshow (runAnchor r + 1))
-                  , noteMark
-                  ]
-              w = padRight Max line
-          in if current then withDefAttr selAttr w else w
-  in hLimit trayWidth $
-       padRight (Pad 1) $
-         viewport TrayVP Vertical (vBox (map entryWidget (trayEntries st)))
+  let
+    entryWidget entry = case entry of
+      TrayFile fi hidden ->
+        let
+          name =
+            shortPath
+              (trayWidth - 2 - (if hidden > 0 then 4 else 0))
+              (T.pack (fvPath (stFiles st !! fi)))
+          suffix =
+            if hidden > 0
+              then withAttr doneMarkAttr (txt (" \183" <> tshow hidden <> "\10003"))
+              else txt ""
+        in
+          padRight
+            Max
+            ( withAttr
+                (if fi == stCurF st then trayFileCurAttr else trayFileAttr)
+                (txt (padT name))
+                <+> suffix
+            )
+      TrayHunk fi hi ->
+        let
+          fv = stFiles st !! fi
+          r = fvRuns fv !! hi
+          current =
+            fi == stCurF st
+              && hi == clampH (fvRuns (currentFile st)) (stCurH st)
+          mark = runMark (stVerdicts st) r
+          noteMark =
+            if any (`Map.member` stNotes st) (runKeys r)
+              then withAttr hintAttr (txt " \8801")
+              else txt ""
+          markAttr = case mark of
+            '!' -> flagMarkAttr
+            '?' -> questionMarkAttr
+            '\10003' -> doneMarkAttr
+            _ -> pendingMarkAttr
+          line =
+            hBox
+              [ txt "  "
+              , withAttr markAttr (str [mark])
+              , txt (" :" <> tshow (runAnchor r + 1))
+              , noteMark
+              ]
+          w = padRight Max line
+        in
+          if current then withDefAttr selAttr w else w
+  in
+    hLimit trayWidth $
+      padRight (Pad 1) $
+        viewport TrayVP Vertical (vBox (map entryWidget (trayEntries st)))
 
 -- Long paths compress like s/R/Quote.hs: every directory shrinks to its
 -- first character, the file name stays whole, and if even that is too
@@ -764,17 +824,19 @@ tray st =
 -- always survives.
 shortPath :: Int -> Text -> Text
 shortPath w path =
-  let parts = T.splitOn "/" path
-      squeezed = case reverse parts of
-        (file : dirs) ->
-          T.intercalate "/" (reverse (file : map (T.take 1) dirs))
-        [] -> path
-  in if T.length path <= w
-       then path
-       else
-         if T.length squeezed <= w
-           then squeezed
-           else "\8230" <> T.takeEnd (w - 1) squeezed
+  let
+    parts = T.splitOn "/" path
+    squeezed = case reverse parts of
+      (file : dirs) ->
+        T.intercalate "/" (reverse (file : map (T.take 1) dirs))
+      [] -> path
+  in
+    if T.length path <= w
+      then path
+      else
+        if T.length squeezed <= w
+          then squeezed
+          else "\8230" <> T.takeEnd (w - 1) squeezed
 
 windowRows :: Int
 windowRows = 300
@@ -786,184 +848,200 @@ windowRows = 300
 -- entry per row, [] where nothing renders; True marks reply lines.
 shownNoteLines :: St -> [RowR] -> [[(Bool, Text)]]
 shownNoteLines st rows =
-  let annOf r = do
-        k <- rKey r
-        let pair = (Map.lookup k (stNotes st), Map.lookup k (stReplies st))
-        case pair of
-          (Nothing, Nothing) -> Nothing
-          _ -> Just pair
-      anns = map annOf rows
-      nexts = drop 1 anns ++ [Nothing]
-      pick (ma, mnext) = case ma of
-        Just (mn, mr)
-          | mnext /= Just (mn, mr) ->
-              maybe [] (map (\t -> (False, t)) . T.lines) mn
-                ++ maybe [] (map (\t -> (True, t)) . T.lines) mr
-        _ -> []
-  in map pick (zip anns nexts)
+  let
+    annOf r = do
+      k <- rKey r
+      let
+        pair = (Map.lookup k (stNotes st), Map.lookup k (stReplies st))
+      case pair of
+        (Nothing, Nothing) -> Nothing
+        _ -> Just pair
+    anns = map annOf rows
+    nexts = drop 1 anns ++ [Nothing]
+    pick (ma, mnext) = case ma of
+      Just (mn, mr)
+        | mnext /= Just (mn, mr) ->
+            maybe [] (map (\t -> (False, t)) . T.lines) mn
+              ++ maybe [] (map (\t -> (True, t)) . T.lines) mr
+      _ -> []
+  in
+    map pick (zip anns nexts)
 
 renderFile :: St -> FileView -> Widget Name
 renderFile st fv =
-  let rows = fvRows fv
-      ed = fvEd fv
-      curH = clampH (fvRuns fv) (stCurH st)
-      (curRow, curCol) = cursorRC ed
-      lineSel = selectionRows ed
-      charSel = charSelection ed
-      -- the column span of the char selection on one display row: start
-      -- col, and Nothing for "through end of line"
-      rowSpan r = do
-        ((lr, lc), (hr, hc)) <- charSel
-        nr <- rNewRow r
-        if nr < lr || nr > hr
-          then Nothing
-          else
-            Just
-              ( if nr == lr then lc else 0
-              , if nr == hr then Just hc else Nothing
-              )
-      cursorOut =
-        fromMaybe 0 (findIndex (\r -> rNewRow r == Just curRow) rows)
-      lo = max 0 (cursorOut - windowRows)
-      hi = min (length rows) (cursorOut + windowRows)
-      -- the buffer row each removed line now sits before, so a line-wise
-      -- selection can honestly include the deletions it would verdict
-      points =
-        drop 1
-          ( scanr
-              (\row acc -> fromMaybe acc (rNewRow row))
-              (length (bufferLines ed))
-              rows
-          )
-      noteRowsList = shownNoteLines st rows
-      rowsWithPoints = zip3 rows points noteRowsList
-      numW = length (show (max 1 (length (bufferLines ed))))
-      -- padding rows carry the border too, so the tray/body divider runs
-      -- unbroken through regions the render window skips
-      pad k =
-        if k <= 0
-          then txt T.empty
-          else raw (V.charFill (stBorder st) '\9614' (1 :: Int) k)
-      lineWidget (r, point, shownNotes) =
-        let isCurRun = case rRunIx r of
-              Just runIx -> runIx == curH
-              Nothing -> False
-            verdict = rKey r >>= (`Map.lookup` stVerdicts st)
-            isCursor = rNewRow r == Just curRow
-            inSel = case lineSel of
-              Nothing -> False
-              Just (a, b) -> case rNewRow r of
-                Just nr -> nr >= a && nr <= b
-                -- a removed line counts when its resting point does,
-                -- matching how verdicts scope it
-                Nothing -> point >= a && point <= b
-            -- the first gutter column doubles as the border between tray
-            -- and body: drawn on every row, in the highlight color across
-            -- the current hunk's rows; the second column carries the
-            -- line's status, so neither ever hides the other
-            curBar =
-              if isCurRun
-                then withAttr curRunAttr (str "\9612") -- wide: ▌
-                else withAttr borderAttr (str "\9614") -- thin: ▎
-            statusCol =
-              if isCursor
-                then withAttr cursorMarkAttr (str "\9612")
-                else case verdict of
-                  Just Flagged -> withAttr flagMarkAttr (str "!")
-                  Just Questioned -> withAttr questionMarkAttr (str "?")
-                  Just Reviewed -> withAttr doneMarkAttr (str "\183")
-                  Nothing ->
-                    case rKey r of
-                      Just _ -> withAttr pendingMarkAttr (str "\183")
-                      Nothing -> str " "
-            numCol = case rNewRow r of
-              Just nr ->
-                let shown = show (nr + 1)
-                    padded = replicate (numW - length shown) ' ' ++ shown
-                    numAttr =
-                      if isCursor
-                        then lineNrCurAttr
-                        else
-                          if verdict == Just Reviewed
-                            then lineNrDoneAttr
-                            else lineNrAttr
-                in withAttr numAttr (str (padded ++ " "))
-              Nothing -> withAttr lineNrAttr (str (replicate numW ' ' ++ " "))
-            markW = withAttr (markerAttrFor (rMark r)) (str [rMark r, ' '])
-            -- content shifted hOff columns left, for reading long lines:
-            -- the view follows the cursor horizontally while the gutter
-            -- stays pinned
-            contentFor hOff =
-              if rMark r == '-'
-                then withAttr removedTextAttr (txt (padT (T.drop hOff (rText r))))
-                else
-                  let sliced = snd (splitAtCol hOff (effRuns r))
-                  in case rowSpan r of
-                       Just (s, mEnd)
-                         | fromMaybe maxBound mEnd >= hOff ->
-                             selTokensWidget
-                               sliced
-                               (max 0 (s - hOff))
-                               (fmap (subtract hOff) mEnd)
-                       _ ->
-                         case nonEmptySegs sliced of
-                           [] -> txt " "
-                           filled ->
-                             hBox (map (\(a, t) -> withAttr a (txt t)) filled)
-            -- reviewed lines keep their syntax colors but pick up a dim
-            -- style, so "already answered for" stays visible without
-            -- flattening the code to gray; under a selection the dim
-            -- variant also carries the selection background
-            buildLine hOff =
-              let body0 = markW <+> contentFor hOff
-                  body1 = case verdict of
-                    Just Reviewed ->
-                      withDefAttr
-                        (if inSel then selDimAttr else reviewedDimAttr)
-                        body0
-                    _ -> body0
-                  lineW0 = curBar <+> statusCol <+> numCol <+> body1
-                  lineW = if inSel then withDefAttr selAttr lineW0 else lineW0
-              in if isCursor
-                   then
-                     showCursor
-                       TheCursor
-                       (Location (numW + 5 + curCol - hOff, 0))
-                       lineW
-                   else lineW
-            lineScrolled =
-              Widget Greedy Fixed $ do
-                ctx <- getContext
-                render (buildLine (hScrollFor ctx numW curCol))
-            -- the reviewer's note renders inline as virtual rows under
-            -- the line it annotates — visible where the feedback lives
-            noteRowW (isReply, n) =
-              let glyph = if isReply then "\8618 " else "\9492 \8801 "
-                  noteAttr = if isReply then questionMarkAttr else hintAttr
-              in curBar
-                   <+> withAttr
-                         noteAttr
-                         (txt (T.replicate (numW + 4) " " <> glyph <> padT n))
-        in case shownNotes of
-             [] -> lineScrolled
-             notes -> vBox (lineScrolled : map noteRowW notes)
-      -- keep a margin of context visible around the cursor, so the view
-      -- scrolls before the cursor reaches the top or bottom edge; virtual
-      -- note rows above the cursor shift where it lands in the rendering
-      notesAbove =
-        sum (map length (take (cursorOut - lo) (drop lo noteRowsList)))
-      cursorRender = cursorOut + notesAbove
-      scrollOff = cfgScrolloff (stConfig st)
-      marginTop = max 0 (cursorRender - scrollOff)
-      marginHeight = cursorRender + scrollOff - marginTop + 1
-  in visibleRegion (Location (0, marginTop)) (1, marginHeight) $
-       vBox
-         [ pad lo
-         , vBox (map lineWidget (take (hi - lo) (drop lo rowsWithPoints)))
-           -- always leave border tail below the file so the divider spans
-           -- the pane even when the content is shorter than the screen
-         , pad (max (length rows - hi) 60)
-         ]
+  let
+    rows = fvRows fv
+    ed = fvEd fv
+    curH = clampH (fvRuns fv) (stCurH st)
+    (curRow, curCol) = cursorRC ed
+    lineSel = selectionRows ed
+    charSel = charSelection ed
+    -- the column span of the char selection on one display row: start
+    -- col, and Nothing for "through end of line"
+    rowSpan r = do
+      ((lr, lc), (hr, hc)) <- charSel
+      nr <- rNewRow r
+      if nr < lr || nr > hr
+        then Nothing
+        else
+          Just
+            ( if nr == lr then lc else 0
+            , if nr == hr then Just hc else Nothing
+            )
+    cursorOut =
+      fromMaybe 0 (findIndex (\r -> rNewRow r == Just curRow) rows)
+    lo = max 0 (cursorOut - windowRows)
+    hi = min (length rows) (cursorOut + windowRows)
+    -- the buffer row each removed line now sits before, so a line-wise
+    -- selection can honestly include the deletions it would verdict
+    points =
+      drop
+        1
+        ( scanr
+            (\row acc -> fromMaybe acc (rNewRow row))
+            (length (bufferLines ed))
+            rows
+        )
+    noteRowsList = shownNoteLines st rows
+    rowsWithPoints = zip3 rows points noteRowsList
+    numW = length (show (max 1 (length (bufferLines ed))))
+    -- padding rows carry the border too, so the tray/body divider runs
+    -- unbroken through regions the render window skips
+    pad k =
+      if k <= 0
+        then txt T.empty
+        else raw (V.charFill (stBorder st) '\9614' (1 :: Int) k)
+    lineWidget (r, point, shownNotes) =
+      let
+        isCurRun = case rRunIx r of
+          Just runIx -> runIx == curH
+          Nothing -> False
+        verdict = rKey r >>= (`Map.lookup` stVerdicts st)
+        isCursor = rNewRow r == Just curRow
+        inSel = case lineSel of
+          Nothing -> False
+          Just (a, b) -> case rNewRow r of
+            Just nr -> nr >= a && nr <= b
+            -- a removed line counts when its resting point does,
+            -- matching how verdicts scope it
+            Nothing -> point >= a && point <= b
+        -- the first gutter column doubles as the border between tray
+        -- and body: drawn on every row, in the highlight color across
+        -- the current hunk's rows; the second column carries the
+        -- line's status, so neither ever hides the other
+        curBar =
+          if isCurRun
+            then withAttr curRunAttr (str "\9612") -- wide: ▌
+            else withAttr borderAttr (str "\9614") -- thin: ▎
+        statusCol =
+          if isCursor
+            then withAttr cursorMarkAttr (str "\9612")
+            else case verdict of
+              Just Flagged -> withAttr flagMarkAttr (str "!")
+              Just Questioned -> withAttr questionMarkAttr (str "?")
+              Just Reviewed -> withAttr doneMarkAttr (str "\183")
+              Nothing ->
+                case rKey r of
+                  Just _ -> withAttr pendingMarkAttr (str "\183")
+                  Nothing -> str " "
+        numCol = case rNewRow r of
+          Just nr ->
+            let
+              shown = show (nr + 1)
+              padded = replicate (numW - length shown) ' ' ++ shown
+              numAttr =
+                if isCursor
+                  then lineNrCurAttr
+                  else
+                    if verdict == Just Reviewed
+                      then lineNrDoneAttr
+                      else lineNrAttr
+            in
+              withAttr numAttr (str (padded ++ " "))
+          Nothing -> withAttr lineNrAttr (str (replicate numW ' ' ++ " "))
+        markW = withAttr (markerAttrFor (rMark r)) (str [rMark r, ' '])
+        -- content shifted hOff columns left, for reading long lines:
+        -- the view follows the cursor horizontally while the gutter
+        -- stays pinned
+        contentFor hOff =
+          if rMark r == '-'
+            then withAttr removedTextAttr (txt (padT (T.drop hOff (rText r))))
+            else
+              let
+                sliced = snd (splitAtCol hOff (effRuns r))
+              in
+                case rowSpan r of
+                  Just (s, mEnd)
+                    | fromMaybe maxBound mEnd >= hOff ->
+                        selTokensWidget
+                          sliced
+                          (max 0 (s - hOff))
+                          (fmap (subtract hOff) mEnd)
+                  _ ->
+                    case nonEmptySegs sliced of
+                      [] -> txt " "
+                      filled ->
+                        hBox (map (\(a, t) -> withAttr a (txt t)) filled)
+        -- reviewed lines keep their syntax colors but pick up a dim
+        -- style, so "already answered for" stays visible without
+        -- flattening the code to gray; under a selection the dim
+        -- variant also carries the selection background
+        buildLine hOff =
+          let
+            body0 = markW <+> contentFor hOff
+            body1 = case verdict of
+              Just Reviewed ->
+                withDefAttr
+                  (if inSel then selDimAttr else reviewedDimAttr)
+                  body0
+              _ -> body0
+            lineW0 = curBar <+> statusCol <+> numCol <+> body1
+            lineW = if inSel then withDefAttr selAttr lineW0 else lineW0
+          in
+            if isCursor
+              then
+                showCursor
+                  TheCursor
+                  (Location (numW + 5 + curCol - hOff, 0))
+                  lineW
+              else lineW
+        lineScrolled =
+          Widget Greedy Fixed $ do
+            ctx <- getContext
+            render (buildLine (hScrollFor ctx numW curCol))
+        -- the reviewer's note renders inline as virtual rows under
+        -- the line it annotates — visible where the feedback lives
+        noteRowW (isReply, n) =
+          let
+            glyph = if isReply then "\8618 " else "\9492 \8801 "
+            noteAttr = if isReply then questionMarkAttr else hintAttr
+          in
+            curBar
+              <+> withAttr
+                noteAttr
+                (txt (T.replicate (numW + 4) " " <> glyph <> padT n))
+      in
+        case shownNotes of
+          [] -> lineScrolled
+          notes -> vBox (lineScrolled : map noteRowW notes)
+    -- keep a margin of context visible around the cursor, so the view
+    -- scrolls before the cursor reaches the top or bottom edge; virtual
+    -- note rows above the cursor shift where it lands in the rendering
+    notesAbove =
+      sum (map length (take (cursorOut - lo) (drop lo noteRowsList)))
+    cursorRender = cursorOut + notesAbove
+    scrollOff = cfgScrolloff (stConfig st)
+    marginTop = max 0 (cursorRender - scrollOff)
+    marginHeight = cursorRender + scrollOff - marginTop + 1
+  in
+    visibleRegion (Location (0, marginTop)) (1, marginHeight) $
+      vBox
+        [ pad lo
+        , vBox (map lineWidget (take (hi - lo) (drop lo rowsWithPoints)))
+        , -- always leave border tail below the file so the divider spans
+          -- the pane even when the content is shorter than the screen
+          pad (max (length rows - hi) 60)
+        ]
 
 -- How far the view is shifted right: zero until the cursor closes in on
 -- the pane's right edge, then just enough to keep a small margin ahead
@@ -971,18 +1049,14 @@ renderFile st fv =
 -- line shifts in step.
 hScrollFor :: Context Name -> Int -> Int -> Int
 hScrollFor ctx numW curCol =
-  let contentWidth = max 1 (availWidth ctx - (numW + 5))
-      margin = 8
-  in max 0 (curCol - (contentWidth - margin))
+  let
+    contentWidth = max 1 (availWidth ctx - (numW + 5))
+    margin = 8
+  in
+    max 0 (curCol - (contentWidth - margin))
 
 nonEmptySegs :: [Seg] -> [Seg]
 nonEmptySegs = filter (not . T.null . snd)
-
-tokensWidget :: Text -> [Seg] -> Widget Name
-tokensWidget whole segs =
-  case nonEmptySegs segs of
-    [] -> txt (padT whole)
-    filled -> hBox (map (\(a, s) -> withAttr a (txt s)) filled)
 
 -- Token runs with the char selection's columns highlighted.
 effRuns :: RowR -> [Seg]
@@ -993,28 +1067,34 @@ effRuns r =
 
 selTokensWidget :: [Seg] -> Int -> Maybe Int -> Widget Name
 selTokensWidget segs s mEnd =
-  let (before, rest) = splitAtCol s segs
-      (mid, after) = case mEnd of
-        Nothing -> (rest, [])
-        Just e -> splitAtCol (e + 1 - s) rest
-      seg xs = hBox (map (\(a, t) -> withAttr a (txt t)) (nonEmptySegs xs))
-      midW = case nonEmptySegs mid of
-        [] -> txt " " -- keep the selection visible across empty stretches
-        ms -> seg ms
-  in seg before <+> withDefAttr selAttr midW <+> seg after
+  let
+    (before, rest) = splitAtCol s segs
+    (mid, after) = case mEnd of
+      Nothing -> (rest, [])
+      Just e -> splitAtCol (e + 1 - s) rest
+    seg xs = hBox (map (\(a, t) -> withAttr a (txt t)) (nonEmptySegs xs))
+    midW = case nonEmptySegs mid of
+      [] -> txt " " -- keep the selection visible across empty stretches
+      ms -> seg ms
+  in
+    seg before <+> withDefAttr selAttr midW <+> seg after
 
 splitAtCol :: Int -> [Seg] -> ([Seg], [Seg])
 splitAtCol =
-  let go k xs =
-        case xs of
-          [] -> ([], [])
-          ((a, t) : rest)
-            | k <= 0 -> ([], xs)
-            | T.length t <= k ->
-                let (taken, left) = go (k - T.length t) rest
-                in ((a, t) : taken, left)
-            | otherwise -> ([(a, T.take k t)], (a, T.drop k t) : rest)
-  in go
+  let
+    go k xs =
+      case xs of
+        [] -> ([], [])
+        ((a, t) : rest)
+          | k <= 0 -> ([], xs)
+          | T.length t <= k ->
+              let
+                (taken, left) = go (k - T.length t) rest
+              in
+                ((a, t) : taken, left)
+          | otherwise -> ([(a, T.take k t)], (a, T.drop k t) : rest)
+  in
+    go
 
 markerAttrFor :: Char -> AttrName
 markerAttrFor mark =
@@ -1025,30 +1105,37 @@ markerAttrFor mark =
 
 statusBar :: St -> Widget Name
 statusBar st =
-  let middle = case stPrompt st of
-        Just (SearchPrompt input) -> txt ("/" <> input <> "\9612")
-        Just (CmdPrompt input) -> txt (":" <> input <> "\9612")
-        Nothing -> withAttr msgAttr (txt (padT (stMsg st)))
-      modeChip =
-        if stSpace st
-          then withAttr norAttr (txt " SPC\8230 ")
-          else case currentFileMay st of
-            Nothing -> withAttr norAttr (txt " NOR ")
-            Just fv -> case edMode (fvEd fv) of
-              Insert -> withAttr insAttr (txt " INS ")
-              Normal -> case pendingLabel (fvEd fv) of
-                Just p -> withAttr norAttr (txt (" " <> p <> "\8230  "))
+  let
+    middle = case stPrompt st of
+      Just (SearchPrompt input) -> txt ("/" <> input <> "\9612")
+      Just (CmdPrompt input) -> txt (":" <> input <> "\9612")
+      Nothing -> withAttr msgAttr (txt (padT (stMsg st)))
+    modeChip =
+      if stSpace st
+        then withAttr norAttr (txt " SPC\8230 ")
+        else case stEmacsPrefix st of
+          Just pfx -> withAttr norAttr (txt (" C-" <> T.singleton pfx <> "\8230 "))
+          Nothing ->
+            if cfgKeys (stConfig st) == KeysEmacs
+              then withAttr norAttr (txt " EMX ")
+              else case currentFileMay st of
                 Nothing -> withAttr norAttr (txt " NOR ")
-      hint = case currentFileMay st of
-        Nothing -> ": command  q quit "
-        Just fv ->
-          (if fvStale fv then "· hunks refresh on Esc " else "")
-            <> "X\9166 accept  !/? flag  R unmark  ]/[ hunk  p pending  q quit "
-  in withDefAttr statusAttr $
-       modeChip
-         <+> txt " "
-         <+> middle
-         <+> padLeft Max (withAttr hintAttr (txt hint))
+                Just fv -> case edMode (fvEd fv) of
+                  Insert -> withAttr insAttr (txt " INS ")
+                  Normal -> case pendingLabel (fvEd fv) of
+                    Just p -> withAttr norAttr (txt (" " <> p <> "\8230  "))
+                    Nothing -> withAttr norAttr (txt " NOR ")
+    hint = case currentFileMay st of
+      Nothing -> ": command  q quit "
+      Just fv ->
+        (if fvStale fv then "· hunks refresh on Esc " else "")
+          <> "X\9166 accept  !/? flag  R unmark  ]/[ hunk  p pending  q quit "
+  in
+    withDefAttr statusAttr $
+      modeChip
+        <+> txt " "
+        <+> middle
+        <+> padLeft Max (withAttr hintAttr (txt hint))
 
 padT :: Text -> Text
 padT t = if T.null t then " " else t
@@ -1064,7 +1151,7 @@ handleEvent brickEvent =
       st <- get
       notes <- liftIO (loadNotes (stConn st) (repoText st))
       replies <- liftIO (loadReplies (stConn st) (repoText st))
-      modify (\s -> s { stNotes = notes, stReplies = replies })
+      modify (\s -> s {stNotes = notes, stReplies = replies})
     AppEvent Tick -> scrollHunkIntoView
     VtyEvent ev -> do
       st <- get
@@ -1075,23 +1162,44 @@ handleEvent brickEvent =
         _ ->
           if stSpace st
             then handleSpaceKey ev
-            else
-              if null (stFiles st)
-                then handleIdleKey ev
-                else handleModalKey ev
+            else case stEmacsPrefix st of
+              Just pfx -> do
+                modify (\s -> s {stEmacsPrefix = Nothing})
+                if null (stFiles st)
+                  then handleIdlePrefixed pfx ev
+                  else handleEmacsPrefixed pfx ev
+              Nothing ->
+                if null (stFiles st)
+                  then handleIdleKey ev
+                  else handleModalKey ev
     _ -> pure ()
 
 -- The helix-style space menu: Space, then one key; anything unlisted
 -- just cancels. The menu itself renders as an infobox while pending.
 handleSpaceKey :: V.Event -> EventM Name St ()
 handleSpaceKey ev = do
-  modify (\s -> s { stSpace = False })
+  modify (\s -> s {stSpace = False})
   case ev of
     V.EvKey (V.KChar 'f') [] -> openPicker
     V.EvKey (V.KChar 'b') [] -> openBufferPicker
     V.EvKey (V.KChar 'n') [] -> openNotePopup
     V.EvKey (V.KChar 'e') [] -> editCurrent
+    V.EvKey (V.KChar 'p') [] -> togglePendingOnly
     _ -> pure ()
+
+togglePendingOnly :: EventM Name St ()
+togglePendingOnly =
+  modify $ \s ->
+    let
+      now = not (stOnlyPending s)
+    in
+      s
+        { stOnlyPending = now
+        , stMsg =
+            if now
+              then "pending hunks only"
+              else "showing all hunks"
+        }
 
 -- With nothing on screen the only meaningful keys are quitting and the
 -- command line (to switch what the session is looking at).
@@ -1101,60 +1209,147 @@ handleIdleKey ev =
     V.EvKey (V.KChar 'q') [] -> halt
     V.EvKey (V.KChar ':') [] -> openCmdPrompt
     V.EvKey (V.KChar 'p') [V.MCtrl] -> openPicker
-    V.EvKey (V.KChar ' ') [] -> modify (\s -> s { stSpace = True })
+    V.EvKey (V.KChar ' ') [] -> modify (\s -> s {stSpace = True})
+    V.EvKey (V.KChar 'x') [V.MMeta] -> openCmdPrompt
+    V.EvKey (V.KChar 'x') [V.MCtrl] ->
+      modify (\s -> s {stEmacsPrefix = Just 'x'})
+    _ -> pure ()
+
+-- With no files on screen, only the session chords mean anything.
+handleIdlePrefixed :: Char -> V.Event -> EventM Name St ()
+handleIdlePrefixed pfx ev =
+  case (pfx, ev) of
+    ('x', V.EvKey (V.KChar 'c') [V.MCtrl]) -> halt
     _ -> pure ()
 
 handlePromptKey :: V.Event -> Prompt -> EventM Name St ()
 handlePromptKey ev prompt =
-  let input = case prompt of
-        SearchPrompt t -> t
-        CmdPrompt t -> t
-      rewrap t = case prompt of
-        SearchPrompt _ -> SearchPrompt t
-        CmdPrompt _ -> CmdPrompt t
-      isCmd = case prompt of
-        CmdPrompt _ -> True
-        SearchPrompt _ -> False
-  in case ev of
-       V.EvKey V.KEsc [] ->
-         modify (\s -> s { stPrompt = Nothing, stPromptCycle = Nothing })
-       V.EvKey V.KEnter [] -> do
-         modify (\s -> s { stPrompt = Nothing, stPromptCycle = Nothing })
-         case prompt of
-           SearchPrompt t -> do
-             modify (\s -> s { stLastSearch = t })
-             unless (T.null t) (searchStep 1 t)
-           CmdPrompt t -> runCommand t
-       V.EvKey (V.KChar '\t') [] | isCmd -> promptComplete 1 input
-       V.EvKey V.KBackTab [] | isCmd -> promptComplete (-1) input
-       V.EvKey V.KBS [] ->
-         modify
-           (\s ->
+  let
+    input = case prompt of
+      SearchPrompt t -> t
+      CmdPrompt t -> t
+    rewrap t = case prompt of
+      SearchPrompt _ -> SearchPrompt t
+      CmdPrompt _ -> CmdPrompt t
+    isCmd = case prompt of
+      CmdPrompt _ -> True
+      SearchPrompt _ -> False
+  in
+    case ev of
+      V.EvKey V.KEsc [] ->
+        modify (\s -> s {stPrompt = Nothing, stPromptCycle = Nothing})
+      V.EvKey V.KEnter [] -> do
+        modify (\s -> s {stPrompt = Nothing, stPromptCycle = Nothing})
+        case prompt of
+          SearchPrompt t -> do
+            modify (\s -> s {stLastSearch = t})
+            unless (T.null t) (searchStep 1 t)
+          CmdPrompt t -> runCommand t
+      V.EvKey (V.KChar '\t') [] | isCmd -> promptComplete 1 input
+      V.EvKey V.KBackTab [] | isCmd -> promptComplete (-1) input
+      V.EvKey V.KBS [] ->
+        modify
+          ( \s ->
               s
                 { stPrompt = Just (rewrap (T.dropEnd 1 input))
                 , stPromptCycle = Nothing
-                })
-       V.EvKey (V.KChar c) [] ->
-         modify
-           (\s ->
+                }
+          )
+      V.EvKey (V.KChar c) [] ->
+        modify
+          ( \s ->
               s
                 { stPrompt = Just (rewrap (T.snoc input c))
                 , stPromptCycle = Nothing
-                })
-       _ -> pure ()
+                }
+          )
+      _ -> pure ()
 
 handleModalKey :: V.Event -> EventM Name St ()
 handleModalKey ev = do
   st <- get
-  let i = stCurF st
-      fv = stFiles st !! i
-      ed = fvEd fv
+  let
+    i = stCurF st
+    fv = stFiles st !! i
+    ed = fvEd fv
+  if cfgKeys (stConfig st) == KeysEmacs
+    then handleEmacsKey i ed ev
+    else handleHelixKey i fv ed ev
+
+-- Emacs keymap: editing chords go to Remax.Emacs; M-x and C-s open the
+-- prompts; C-c prefixes the review verbs (same letters as the helix
+-- keys), C-x the session chords (C-x C-c quits, C-x C-s saves).
+handleEmacsKey :: Int -> EdState -> V.Event -> EventM Name St ()
+handleEmacsKey i ed ev = do
+  st <- get
+  case stEmacsPrefix st of
+    Just pfx -> do
+      modify (\s -> s {stEmacsPrefix = Nothing})
+      handleEmacsPrefixed pfx ev
+    Nothing ->
+      case ev of
+        V.EvKey (V.KChar 'x') [V.MMeta] -> openCmdPrompt
+        V.EvKey (V.KChar 's') [V.MCtrl] ->
+          modify (\s -> s {stPrompt = Just (SearchPrompt "")})
+        V.EvKey (V.KChar 'c') [V.MCtrl] ->
+          modify (\s -> s {stEmacsPrefix = Just 'c'})
+        V.EvKey (V.KChar 'x') [V.MCtrl] ->
+          modify (\s -> s {stEmacsPrefix = Just 'x'})
+        _ ->
+          case handleEmacs ev ed of
+            Just edNext ->
+              if bufferLines edNext /= bufferLines ed
+                then do
+                  rebuildWith i edNext
+                  applyToDisk i
+                else setEd i edNext
+            Nothing -> pure ()
+
+handleEmacsPrefixed :: Char -> V.Event -> EventM Name St ()
+handleEmacsPrefixed pfx ev = do
+  st <- get
+  case pfx of
+    'x' ->
+      case ev of
+        V.EvKey (V.KChar 'c') [V.MCtrl] -> halt
+        V.EvKey (V.KChar 's') [V.MCtrl] -> applyToDisk (stCurF st)
+        _ -> pure ()
+    _ ->
+      case ev of
+        V.EvKey V.KEnter [] -> acceptSelection
+        V.EvKey (V.KChar '!') [] -> markThenNote Flagged
+        V.EvKey (V.KChar '?') [] -> markThenNote Questioned
+        V.EvKey (V.KChar 'r') [] -> clearVerdictBySelection
+        V.EvKey (V.KChar 'R') [] -> clearVerdictBySelection
+        V.EvKey (V.KChar ']') [] -> switchRun 1
+        V.EvKey (V.KChar '[') [] -> switchRun (-1)
+        V.EvKey (V.KChar 'x') [] -> selectCurrentHunk
+        V.EvKey (V.KChar 'p') [] -> togglePendingOnly
+        V.EvKey (V.KChar '\'') [] -> parkM (stCurF st) (stCurH st)
+        V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
+        V.EvKey (V.KChar 'n') [] ->
+          unless (T.null (stLastSearch st)) (searchStep 1 (stLastSearch st))
+        V.EvKey (V.KChar 'N') [] ->
+          unless (T.null (stLastSearch st)) (searchStep (-1) (stLastSearch st))
+        V.EvKey (V.KChar 'f') [] -> openPicker
+        V.EvKey (V.KChar 'b') [] -> openBufferPicker
+        V.EvKey (V.KChar 'e') [] -> editCurrent
+        V.EvKey (V.KChar ')') [] -> switchFile 1
+        V.EvKey (V.KChar '(') [] -> switchFile (-1)
+        V.EvKey (V.KChar '\t') [] ->
+          modify (\s -> s {stTray = not (stTray s)})
+        _ -> pure ()
+
+handleHelixKey :: Int -> FileView -> EdState -> V.Event -> EventM Name St ()
+handleHelixKey i fv ed ev = do
+  st <- get
   case edMode ed of
     Insert ->
       case handleInsert ev ed of
         InsertHandled edNext -> do
-          let oldLs = bufferLines ed
-              newLs = bufferLines edNext
+          let
+            oldLs = bufferLines ed
+            newLs = bufferLines edNext
           if newLs == oldLs
             then setEd i edNext
             else
@@ -1177,25 +1372,15 @@ handleModalKey ev = do
       case ev of
         V.EvKey (V.KChar 'q') [] -> halt
         V.EvKey (V.KChar '\t') [] ->
-          modify (\s -> s { stTray = not (stTray s) })
+          modify (\s -> s {stTray = not (stTray s)})
         V.EvKey V.KEnter [] -> acceptSelection
         V.EvKey (V.KChar '!') [] -> markThenNote Flagged
         V.EvKey (V.KChar '?') [] -> markThenNote Questioned
         V.EvKey (V.KChar 'R') [] -> clearVerdictBySelection
-        V.EvKey (V.KChar 'p') [] ->
-          modify $ \s ->
-            let now = not (stOnlyPending s)
-            in s
-                 { stOnlyPending = now
-                 , stMsg =
-                     if now
-                       then "pending hunks only"
-                       else "showing all hunks"
-                 }
         V.EvKey (V.KChar ']') [] -> switchRun 1
         V.EvKey (V.KChar '[') [] -> switchRun (-1)
         V.EvKey (V.KChar '/') [] ->
-          modify (\s -> s { stPrompt = Just (SearchPrompt "") })
+          modify (\s -> s {stPrompt = Just (SearchPrompt "")})
         V.EvKey (V.KChar ':') [] -> openCmdPrompt
         V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
         V.EvKey (V.KChar 'n') [] ->
@@ -1205,9 +1390,10 @@ handleModalKey ev = do
         V.EvKey (V.KChar '\'') [] -> parkM (stCurF st) (stCurH st)
         V.EvKey (V.KChar 'X') [] -> selectCurrentHunk
         V.EvKey (V.KChar ' ') [] ->
-          modify (\s -> s { stSpace = True })
+          modify (\s -> s {stSpace = True})
         V.EvKey (V.KChar 'E') [] -> do
-          let (row, _) = cursorRC ed
+          let
+            (row, _) = cursorRC ed
           launchEditor (stRoot st </> fvPath fv) (row + 1)
         V.EvKey (V.KChar ')') [] -> switchFile 1
         V.EvKey (V.KChar '(') [] -> switchFile (-1)
@@ -1234,14 +1420,15 @@ deferToModal i ed ev =
 ensureCurrentHighlighted :: EventM Name St ()
 ensureCurrentHighlighted = do
   st <- get
-  let i = stCurF st
+  let
+    i = stCurF st
   case safeIdx (stFiles st) i of
     Nothing -> pure ()
     Just fv ->
       unless (fvHighlighted fv) $ do
         (colored, _) <-
           liftIO
-            (rebuildFV (cfgSplit (stConfig st)) (repoText st) fv { fvHighlighted = True })
+            (rebuildFV (cfgSplit (stConfig st)) (repoText st) fv {fvHighlighted = True})
         modify (updateFile i (const colored))
 
 currentLineOf :: EdState -> Text
@@ -1249,7 +1436,7 @@ currentLineOf ed =
   fromMaybe "" (safeIdx (bufferLines ed) (fst (cursorRC ed)))
 
 withEd :: EdState -> FileView -> FileView
-withEd ed fv = fv { fvEd = ed }
+withEd ed fv = fv {fvEd = ed}
 
 -- Which run in the rebuilt list is "the same hunk" as before: the one
 -- sharing the most content keys, ties and misses settled by anchor
@@ -1261,85 +1448,96 @@ matchRun mOld runs =
     (_, []) -> 0
     (Nothing, _) -> 0
     (Just old, _) ->
-      let keySet = Set.fromList (runKeys old)
-          score (ix, r) =
-            ( length (filter (`Set.member` keySet) (runKeys r))
-            , negate (abs (runAnchor r - runAnchor old))
-            , ix
-            )
-          scored = map score (zip [0 :: Int ..] runs)
-          (bestScore, _, bestIx) =
-            maximumBy (comparing (\(sc, prox, _) -> (sc, prox))) scored
-          (_, _, nearIx) =
-            maximumBy (comparing (\(_, prox, _) -> prox)) scored
-      in if bestScore > 0 then bestIx else nearIx
+      let
+        keySet = Set.fromList (runKeys old)
+        score (ix, r) =
+          ( length (filter (`Set.member` keySet) (runKeys r))
+          , negate (abs (runAnchor r - runAnchor old))
+          , ix
+          )
+        scored = map score (zip [0 :: Int ..] runs)
+        (bestScore, _, bestIx) =
+          maximumBy (comparing (\(sc, prox, _) -> (sc, prox))) scored
+        (_, _, nearIx) =
+          maximumBy (comparing (\(_, prox, _) -> prox)) scored
+      in
+        if bestScore > 0 then bestIx else nearIx
 
 currentRunOf :: St -> Int -> Maybe Run
 currentRunOf st i = do
   fv <- safeIdx (stFiles st) i
-  let rs = fvRuns fv
+  let
+    rs = fvRuns fv
   safeIdx rs (clampH rs (stCurH st))
 
 rebuildWith :: Int -> EdState -> EventM Name St ()
 rebuildWith i ed = do
   st <- get
-  let fv = (stFiles st !! i) { fvEd = ed }
-      oldCur =
-        if i == stCurF st then currentRunOf st i else Nothing
+  let
+    fv = (stFiles st !! i) {fvEd = ed}
+    oldCur =
+      if i == stCurF st then currentRunOf st i else Nothing
   (rebuilt, degraded) <- liftIO (rebuildFV (cfgSplit (stConfig st)) (repoText st) fv)
   modify (updateFile i (const rebuilt))
   when (i == stCurF st) $
-    modify (\s -> s { stCurH = matchRun oldCur (fvRuns rebuilt) })
+    modify (\s -> s {stCurH = matchRun oldCur (fvRuns rebuilt)})
   when degraded $
-    modify (\s -> s { stMsg = "diff too large — file shown as one hunk" })
+    modify (\s -> s {stMsg = "diff too large — file shown as one hunk"})
 
 setEd :: Int -> EdState -> EventM Name St ()
 setEd i ed = modify (updateFile i (withEd ed))
 
 updateFile :: Int -> (FileView -> FileView) -> St -> St
 updateFile i f st =
-  let patch (j, fv) = if j == i then f fv else fv
-  in st { stFiles = map patch (zip [0 ..] (stFiles st)) }
+  let
+    patch (j, fv) = if j == i then f fv else fv
+  in
+    st {stFiles = map patch (zip [0 ..] (stFiles st))}
 
 park :: Int -> Int -> St -> St
 park f h st =
   case safeIdx (stFiles st) f of
     Nothing -> st
     Just fv ->
-      let rs = fvRuns fv
-          clamped = clampH rs h
-          parked = st { stCurF = f, stCurH = clamped, stMsg = " " }
-          -- land on the first line still needing attention, not merely
-          -- the top of the hunk
-          target r =
-            fromMaybe (runAnchor r) (firstUnacceptedRow st fv clamped)
-          moveTo r v =
-            v { fvEd =
-                  (fvEd v)
-                    { edZipper = Z.moveCursor (target r, 0) (edZipper (fvEd v))
-                    , edSelAnchor = Nothing
-                    }
-              }
-      in case safeIdx rs clamped of
-           Nothing -> parked
-           Just r -> updateFile f (moveTo r) parked
+      let
+        rs = fvRuns fv
+        clamped = clampH rs h
+        parked = st {stCurF = f, stCurH = clamped, stMsg = " "}
+        -- land on the first line still needing attention, not merely
+        -- the top of the hunk
+        target r =
+          fromMaybe (runAnchor r) (firstUnacceptedRow st fv clamped)
+        moveTo r v =
+          v
+            { fvEd =
+                (fvEd v)
+                  { edZipper = Z.moveCursor (target r, 0) (edZipper (fvEd v))
+                  , edSelAnchor = Nothing
+                  }
+            }
+      in
+        case safeIdx rs clamped of
+          Nothing -> parked
+          Just r -> updateFile f (moveTo r) parked
 
 -- The buffer row of the first line in a run whose verdict is not
 -- Reviewed (removed lines borrow the row they rest before).
 firstUnacceptedRow :: St -> FileView -> Int -> Maybe Int
 firstUnacceptedRow st fv h =
-  let rows = fvRows fv
-      bufferLen = length (bufferLines (fvEd fv))
-      points =
-        drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
-      unaccepted (row, point) = do
-        k <- rKey row
-        if rRunIx row == Just h && Map.lookup k (stVerdicts st) /= Just Reviewed
-          then Just (fromMaybe point (rNewRow row))
-          else Nothing
-  in case mapMaybe unaccepted (zip rows points) of
-       (r : _) -> Just r
-       [] -> Nothing
+  let
+    rows = fvRows fv
+    bufferLen = length (bufferLines (fvEd fv))
+    points =
+      drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
+    unaccepted (row, point) = do
+      k <- rKey row
+      if rRunIx row == Just h && Map.lookup k (stVerdicts st) /= Just Reviewed
+        then Just (fromMaybe point (rNewRow row))
+        else Nothing
+  in
+    case mapMaybe unaccepted (zip rows points) of
+      (r : _) -> Just r
+      [] -> Nothing
 
 -- park, then ask the viewport to frame the whole hunk.
 parkM :: Int -> Int -> EventM Name St ()
@@ -1361,23 +1559,25 @@ scrollHunkIntoViewOf :: FileView -> EventM Name St ()
 scrollHunkIntoViewOf fv = do
   st <- get
   mvp <- lookupViewport BodyVP
-  let rs = fvRuns fv
-      h = clampH rs (stCurH st)
-      inCurrentRun (_, row) = rRunIx row == Just h
-      runRows = map fst (filter inCurrentRun (zip [0 :: Int ..] (fvRows fv)))
+  let
+    rs = fvRuns fv
+    h = clampH rs (stCurH st)
+    inCurrentRun (_, row) = rRunIx row == Just h
+    runRows = map fst (filter inCurrentRun (zip [0 :: Int ..] (fvRows fv)))
   case (mvp, runRows) of
     (Just vp, (start : _)) -> do
-      let len = length runRows
-          vpH = snd (_vpSize vp)
-          -- best-effort correction for virtual note rows rendered above
-          -- the hunk (exact when the render window covers them)
-          renderStart =
-            start
-              + sum (map length (take start (shownNoteLines st (fvRows fv))))
-          top =
-            if len + 4 >= vpH
-              then max 0 (renderStart - 2)
-              else max 0 (renderStart - ((vpH - len) `div` 2))
+      let
+        len = length runRows
+        vpH = snd (_vpSize vp)
+        -- best-effort correction for virtual note rows rendered above
+        -- the hunk (exact when the render window covers them)
+        renderStart =
+          start
+            + sum (map length (take start (shownNoteLines st (fvRows fv))))
+        top =
+          if len + 4 >= vpH
+            then max 0 (renderStart - 2)
+            else max 0 (renderStart - ((vpH - len) `div` 2))
       setTop (viewportScroll BodyVP) top
     _ -> pure ()
   -- follow in the tray too — an explicit scroll on hunk jumps only, so
@@ -1386,10 +1586,11 @@ scrollHunkIntoViewOf fv = do
   case mtvp of
     Nothing -> pure ()
     Just tvp -> do
-      let isCur entry = case entry of
-            TrayHunk f hh -> f == stCurF st && hh == h
-            _ -> False
-          idx = fromMaybe 0 (findIndex isCur (trayEntries st))
+      let
+        isCur entry = case entry of
+          TrayHunk f hh -> f == stCurF st && hh == h
+          _ -> False
+        idx = fromMaybe 0 (findIndex isCur (trayEntries st))
       setTop (viewportScroll TrayVP) (max 0 (idx - (snd (_vpSize tvp) `div` 2)))
 
 -- Walk hunks in (file, hunk) order, wrapping; with pending-only mode on,
@@ -1397,25 +1598,27 @@ scrollHunkIntoViewOf fv = do
 switchRun :: Int -> EventM Name St ()
 switchRun d = do
   st <- get
-  let eligible pair = not (stOnlyPending st) || pairPending st pair
-      pairs = filter eligible (allRunPairs st)
-      here =
-        ( stCurF st
-        , clampH (fvRuns (currentFile st)) (stCurH st)
-        )
+  let
+    eligible pair = not (stOnlyPending st) || pairPending st pair
+    pairs = filter eligible (allRunPairs st)
+    here =
+      ( stCurF st
+      , clampH (fvRuns (currentFile st)) (stCurH st)
+      )
   case pairs of
-    [] -> modify (\s -> s { stMsg = "no pending hunks left" })
+    [] -> modify (\s -> s {stMsg = "no pending hunks left"})
     _ -> do
-      let after = filter (> here) pairs
-          before = filter (< here) pairs
-          target =
-            if d > 0
-              then case after of
-                (p : _) -> p
-                [] -> head pairs
-              else case reverse before of
-                (p : _) -> p
-                [] -> last pairs
+      let
+        after = filter (> here) pairs
+        before = filter (< here) pairs
+        target =
+          if d > 0
+            then case after ++ pairs of
+              (p : _) -> p
+              [] -> here
+            else case reverse before ++ reverse pairs of
+              (p : _) -> p
+              [] -> here
       parkM (fst target) (snd target)
 
 -- '*': prime the search with the selected text (single-line selections)
@@ -1423,32 +1626,39 @@ switchRun d = do
 searchWordUnderCursor :: EventM Name St ()
 searchWordUnderCursor = do
   st <- get
-  let ed = fvEd (currentFile st)
-      ls = bufferLines ed
-      lineAt r = fromMaybe "" (safeIdx ls r)
-      selectionNeedle = do
-        ((lr, lc), (hr, hc)) <- charSelection ed
-        if (lr, lc) == (hr, hc) || lr /= hr
-          then Nothing
-          else
-            let l = lineAt lr
-            in Just (T.take (hc + 1 - lc) (T.drop lc l))
-      isIdent ch = isAlphaNum ch || ch == '_' || ch == '\''
-      wordNeedle =
-        let (row, col) = cursorRC ed
-            l = lineAt row
-        in if col < T.length l && isIdent (T.index l col)
-             then
-               let start =
-                     T.length (T.dropWhileEnd isIdent (T.take col l))
-                   len =
-                     T.length (T.takeWhile isIdent (T.drop start l))
-               in Just (T.take len (T.drop start l))
-             else Nothing
+  let
+    ed = fvEd (currentFile st)
+    ls = bufferLines ed
+    lineAt r = fromMaybe "" (safeIdx ls r)
+    selectionNeedle = do
+      ((lr, lc), (hr, hc)) <- charSelection ed
+      if (lr, lc) == (hr, hc) || lr /= hr
+        then Nothing
+        else
+          let
+            l = lineAt lr
+          in
+            Just (T.take (hc + 1 - lc) (T.drop lc l))
+    isIdent ch = isAlphaNum ch || ch == '_' || ch == '\''
+    wordNeedle =
+      let
+        (row, col) = cursorRC ed
+        l = lineAt row
+      in
+        if col < T.length l && isIdent (T.index l col)
+          then
+            let
+              start =
+                T.length (T.dropWhileEnd isIdent (T.take col l))
+              len =
+                T.length (T.takeWhile isIdent (T.drop start l))
+            in
+              Just (T.take len (T.drop start l))
+          else Nothing
   case selectionNeedle <|> wordNeedle of
-    Nothing -> modify (\s -> s { stMsg = "no word under cursor" })
+    Nothing -> modify (\s -> s {stMsg = "no word under cursor"})
     Just needle -> do
-      modify (\s -> s { stLastSearch = needle })
+      modify (\s -> s {stLastSearch = needle})
       searchStep 1 needle
 
 -- Literal search over the current file's buffer, helix-shaped: the match
@@ -1456,34 +1666,36 @@ searchWordUnderCursor = do
 searchStep :: Int -> Text -> EventM Name St ()
 searchStep dir needle = do
   st <- get
-  let i = stCurF st
-      fv = stFiles st !! i
-      ed = fvEd fv
-      pos = cursorRC ed
-      matchesInLine (r, l) =
-        map (\(pre, _) -> (r, T.length pre)) (T.breakOnAll needle l)
-      matches = concatMap matchesInLine (zip [0 ..] (bufferLines ed))
+  let
+    i = stCurF st
+    fv = stFiles st !! i
+    ed = fvEd fv
+    pos = cursorRC ed
+    matchesInLine (r, l) =
+      map (\(pre, _) -> (r, T.length pre)) (T.breakOnAll needle l)
+    matches = concatMap matchesInLine (zip [0 ..] (bufferLines ed))
   case matches of
-    [] -> modify (\s -> s { stMsg = "no match: " <> needle })
+    [] -> modify (\s -> s {stMsg = "no match: " <> needle})
     _ -> do
-      let after = filter (> pos) matches
-          before = filter (< pos) matches
-          (mr, mc) =
-            if dir > 0
-              then case after of
-                (m : _) -> m
-                [] -> head matches
-              else case reverse before of
-                (m : _) -> m
-                [] -> last matches
-          moved =
-            ed
-              { edZipper = Z.moveCursor (mr, mc + T.length needle - 1) (edZipper ed)
-              , edSelAnchor = Just (mr, mc)
-              , edSelKind = CharSel
-              }
+      let
+        after = filter (> pos) matches
+        before = filter (< pos) matches
+        (mr, mc) =
+          if dir > 0
+            then case after ++ matches of
+              (m : _) -> m
+              [] -> pos
+            else case reverse before ++ reverse matches of
+              (m : _) -> m
+              [] -> pos
+        moved =
+          ed
+            { edZipper = Z.moveCursor (mr, mc + T.length needle - 1) (edZipper ed)
+            , edSelAnchor = Just (mr, mc)
+            , edSelKind = CharSel
+            }
       setEd i moved
-      modify (\s -> s { stMsg = " " })
+      modify (\s -> s {stMsg = " "})
 
 -- The buffer rows a selection covers, if one is active. A collapsed
 -- char selection (just the cursor cell) does not count as "selected
@@ -1504,33 +1716,37 @@ activeSelectionRows ed =
 -- borrows that row's position.
 selectedChanges :: FileView -> Int -> Int -> [(Text, Text, Int)]
 selectedChanges fv lo hi =
-  let rows = fvRows fv
-      bufferLen = length (bufferLines (fvEd fv))
-      points =
-        drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
-      inSpan row point = case rNewRow row of
-        Just nr -> nr >= lo && nr <= hi
-        Nothing -> point >= lo && point <= hi
-      pick (row, point) = do
-        k <- rKey row
-        if inSpan row point
-          then Just (k, T.cons (rMark row) (rText row), fromMaybe point (rNewRow row) + 1)
-          else Nothing
-  in mapMaybe pick (zip rows points)
+  let
+    rows = fvRows fv
+    bufferLen = length (bufferLines (fvEd fv))
+    points =
+      drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
+    inSpan row point = case rNewRow row of
+      Just nr -> nr >= lo && nr <= hi
+      Nothing -> point >= lo && point <= hi
+    pick (row, point) = do
+      k <- rKey row
+      if inSpan row point
+        then Just (k, T.cons (rMark row) (rText row), fromMaybe point (rNewRow row) + 1)
+        else Nothing
+  in
+    mapMaybe pick (zip rows points)
 
 -- Every changed line of one run, same shape as selectedChanges.
 runChanges :: FileView -> Int -> [(Text, Text, Int)]
 runChanges fv h =
-  let rows = fvRows fv
-      bufferLen = length (bufferLines (fvEd fv))
-      points =
-        drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
-      pick (row, point) = do
-        k <- rKey row
-        if rRunIx row == Just h
-          then Just (k, T.cons (rMark row) (rText row), fromMaybe point (rNewRow row) + 1)
-          else Nothing
-  in mapMaybe pick (zip rows points)
+  let
+    rows = fvRows fv
+    bufferLen = length (bufferLines (fvEd fv))
+    points =
+      drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
+    pick (row, point) = do
+      k <- rKey row
+      if rRunIx row == Just h
+        then Just (k, T.cons (rMark row) (rText row), fromMaybe point (rNewRow row) + 1)
+        else Nothing
+  in
+    mapMaybe pick (zip rows points)
 
 -- The current hunk as a line-wise selection — the review-unit motion.
 -- Every verb then composes with it: X r reviews it, X d deletes it,
@@ -1538,31 +1754,34 @@ runChanges fv h =
 selectCurrentHunk :: EventM Name St ()
 selectCurrentHunk = do
   st <- get
-  let fv = currentFile st
-      inCurrentRun row =
-        rRunIx row == Just (clampH (fvRuns fv) (stCurH st))
-      hunkRows = mapMaybe rNewRow (filter inCurrentRun (fvRows fv))
+  let
+    fv = currentFile st
+    inCurrentRun row =
+      rRunIx row == Just (clampH (fvRuns fv) (stCurH st))
+    hunkRows = mapMaybe rNewRow (filter inCurrentRun (fvRows fv))
   case (hunkRows, currentRunOf st (stCurF st)) of
     ((first : _), _) -> do
-      let lastRow = last hunkRows
-          ed = fvEd fv
-          selected =
-            ed
-              { edZipper = Z.moveCursor (lastRow, 0) (edZipper ed)
-              , edSelAnchor = Just (first, 0)
-              , edSelKind = LineSel
-              }
+      let
+        lastRow = last hunkRows
+        ed = fvEd fv
+        selected =
+          ed
+            { edZipper = Z.moveCursor (lastRow, 0) (edZipper ed)
+            , edSelAnchor = Just (first, 0)
+            , edSelKind = LineSel
+            }
       setEd (stCurF st) selected
     ([], Just r) -> do
       -- a delete-only hunk has no buffer rows of its own; select the
       -- anchor line the deletion sits at
-      let ed = fvEd fv
-          selected =
-            ed
-              { edZipper = Z.moveCursor (runAnchor r, 0) (edZipper ed)
-              , edSelAnchor = Just (runAnchor r, 0)
-              , edSelKind = LineSel
-              }
+      let
+        ed = fvEd fv
+        selected =
+          ed
+            { edZipper = Z.moveCursor (runAnchor r, 0) (edZipper ed)
+            , edSelAnchor = Just (runAnchor r, 0)
+            , edSelKind = LineSel
+            }
       setEd (stCurF st) selected
     _ -> pure ()
 
@@ -1576,7 +1795,7 @@ acceptSelection = do
     Just _ -> void (applyVerdictLines Reviewed)
     Nothing ->
       modify
-        (\s -> s { stMsg = "select what you're accepting — X selects the hunk" })
+        (\s -> s {stMsg = "select what you're accepting — X selects the hunk"})
 
 -- Selection-first, like every other verb: an active selection scopes the
 -- verdict to those lines; no selection means the whole current hunk.
@@ -1621,14 +1840,16 @@ verdictCommitContext = do
 applyVerdictHunk :: Verdict -> EventM Name St Bool
 applyVerdictHunk v = do
   st <- get
-  let fv = currentFile st
-      rs = fvRuns fv
-      path = T.pack (fvPath fv)
+  let
+    fv = currentFile st
+    rs = fvRuns fv
+    path = T.pack (fvPath fv)
   case safeIdx rs (clampH rs (stCurH st)) of
     Nothing -> pure False
     Just r -> do
-      let storeRow (k, l, n) = (k, path, l, n)
-          rows = map storeRow (runChanges fv (clampH rs (stCurH st)))
+      let
+        storeRow (k, l, n) = (k, path, l, n)
+        rows = map storeRow (runChanges fv (clampH rs (stCurH st)))
       mCommit <- verdictCommitContext
       liftIO (recordVerdicts (stConn st) (repoText st) (stPassId st) v mCommit rows)
       modify $ \s ->
@@ -1652,20 +1873,25 @@ applyVerdictHunk v = do
 applyVerdictLines :: Verdict -> EventM Name St Bool
 applyVerdictLines v = do
   st <- get
-  let fv = currentFile st
-      path = T.pack (fvPath fv)
-      (lo, hi) = verdictLineSpan (fvEd fv)
-      picks = selectedChanges fv lo hi
-      storeRow (k, l, n) = (k, path, l, n)
+  let
+    fv = currentFile st
+    path = T.pack (fvPath fv)
+    (lo, hi) = verdictLineSpan (fvEd fv)
+    picks = selectedChanges fv lo hi
+    storeRow (k, l, n) = (k, path, l, n)
   if null picks
     then do
-      modify (\s -> s { stMsg = "no changed lines here" })
+      modify (\s -> s {stMsg = "no changed lines here"})
       pure False
     else do
       mCommit <- verdictCommitContext
       liftIO
         ( recordVerdicts
-            (stConn st) (repoText st) (stPassId st) v mCommit
+            (stConn st)
+            (repoText st)
+            (stPassId st)
+            v
+            mCommit
             (map storeRow picks)
         )
       modify $ \s ->
@@ -1683,24 +1909,27 @@ applyVerdictLines v = do
       -- pending hunk, a partial mark steps to the line after the
       -- selection so line-by-line review flows
       settled <- get
-      let fvSettled = currentFile settled
-          rs = fvRuns fvSettled
-          hunkDone =
-            case safeIdx rs (clampH rs (stCurH settled)) of
-              Just r -> not (runUnvisited (stVerdicts settled) r)
-              Nothing -> True
+      let
+        fvSettled = currentFile settled
+        rs = fvRuns fvSettled
+        hunkDone =
+          case safeIdx rs (clampH rs (stCurH settled)) of
+            Just r -> not (runUnvisited (stVerdicts settled) r)
+            Nothing -> True
       if hunkDone
         then do
           modify
-            (\s -> s { stCounts = Map.insertWith (+) v 1 (stCounts s) })
+            (\s -> s {stCounts = Map.insertWith (+) v 1 (stCounts s)})
           setEd (stCurF settled) (collapseSelection (fvEd fvSettled))
           advanceToPending
         else do
-          let ed = fvEd fvSettled
-              nextRow = min (hi + 1) (length (bufferLines ed) - 1)
-              stepped =
-                (collapseSelection ed)
-                  { edZipper = Z.moveCursor (nextRow, 0) (edZipper ed) }
+          let
+            ed = fvEd fvSettled
+            nextRow = min (hi + 1) (length (bufferLines ed) - 1)
+            stepped =
+              (collapseSelection ed)
+                { edZipper = Z.moveCursor (nextRow, 0) (edZipper ed)
+                }
           setEd (stCurF settled) stepped
       pure True
 
@@ -1711,33 +1940,37 @@ verdictLineSpan ed =
   case activeSelectionRows ed of
     Just rowSpan -> rowSpan
     Nothing ->
-      let row = fst (cursorRC ed)
-      in (row, row)
-
+      let
+        row = fst (cursorRC ed)
+      in
+        (row, row)
 
 data VerdictScope = VerdictHunk | VerdictLines
 
 collapseSelection :: EdState -> EdState
-collapseSelection ed = ed { edSelAnchor = Nothing, edExtend = False }
+collapseSelection ed = ed {edSelAnchor = Nothing, edExtend = False}
 
 -- Take the verdicts back off the hunk or the selected lines, so an
 -- erroneous mark can be undone.
 clearVerdict :: VerdictScope -> EventM Name St ()
 clearVerdict scope = do
   st <- get
-  let fv = currentFile st
-      rs = fvRuns fv
-      keys = case scope of
-        VerdictLines ->
-          let (lo, hi) = verdictLineSpan (fvEd fv)
-          in map (\(k, _, _) -> k) (selectedChanges fv lo hi)
-        VerdictHunk ->
-          case safeIdx rs (clampH rs (stCurH st)) of
-            Just r -> runKeys r
-            Nothing -> []
-      marked = filter (`Map.member` stVerdicts st) keys
+  let
+    fv = currentFile st
+    rs = fvRuns fv
+    keys = case scope of
+      VerdictLines ->
+        let
+          (lo, hi) = verdictLineSpan (fvEd fv)
+        in
+          map (\(k, _, _) -> k) (selectedChanges fv lo hi)
+      VerdictHunk ->
+        case safeIdx rs (clampH rs (stCurH st)) of
+          Just r -> runKeys r
+          Nothing -> []
+    marked = filter (`Map.member` stVerdicts st) keys
   if null marked
-    then modify (\s -> s { stMsg = "nothing marked here" })
+    then modify (\s -> s {stMsg = "nothing marked here"})
     else do
       liftIO (deleteKeys (stConn st) (repoText st) marked)
       modify $ \s ->
@@ -1750,30 +1983,35 @@ clearVerdict scope = do
 advanceToPending :: EventM Name St ()
 advanceToPending = do
   st <- get
-  let here =
-        ( stCurF st
-        , clampH (fvRuns (currentFile st)) (stCurH st)
-        )
-      -- scan starts just after the current hunk and wraps all the way;
-      -- hunks nothing has been said about come first, and the flagged/
-      -- questioned ones only get circled back to once those run out
-      wrapped = let (upToHere, afterHere) = break (> here) (allRunPairs st)
-                in afterHere ++ upToHere
-      unvisited = filter (pairUnvisited st) wrapped
-      pending = filter (pairPending st) wrapped
+  let
+    here =
+      ( stCurF st
+      , clampH (fvRuns (currentFile st)) (stCurH st)
+      )
+    -- scan starts just after the current hunk and wraps all the way;
+    -- hunks nothing has been said about come first, and the flagged/
+    -- questioned ones only get circled back to once those run out
+    wrapped =
+      let
+        (upToHere, afterHere) = break (> here) (allRunPairs st)
+      in
+        afterHere ++ upToHere
+    unvisited = filter (pairUnvisited st) wrapped
+    pending = filter (pairPending st) wrapped
   case unvisited ++ pending of
     ((f, h) : _) -> parkM f h
-    [] -> modify (\s -> s { stMsg = "All hunks have verdicts — q to quit." })
+    [] -> modify (\s -> s {stMsg = "All hunks have verdicts — q to quit."})
 
 applyToDisk :: Int -> EventM Name St ()
 applyToDisk i = do
   st <- get
-  let fv = stFiles st !! i
+  let
+    fv = stFiles st !! i
   when (edTouched (fvEd fv)) $ do
     got <-
       liftIO
-        ( try (TIO.writeFile (stRoot st </> fvPath fv) (T.unlines (bufferLines (fvEd fv))))
-            :: IO (Either IOException ())
+        ( try (TIO.writeFile (stRoot st </> fvPath fv) (T.unlines (bufferLines (fvEd fv)))) ::
+            IO (Either IOException ())
         )
     modify $ \s ->
       s
@@ -1799,36 +2037,41 @@ reloadFromDisk rel = do
       case got of
         Left _ -> refreshGit
         Right diskTxt -> do
-          let diskLs = T.lines diskTxt
+          let
+            diskLs = T.lines diskTxt
           if diskLs == bufferLines (fvEd fv)
             then pure ()
             else
               if edMode (fvEd fv) == Insert
                 then
                   modify
-                    (\s -> s { stMsg = "\9888 " <> T.pack rel <> " changed on disk; Esc applies your edit over it" })
+                    (\s -> s {stMsg = "\9888 " <> T.pack rel <> " changed on disk; Esc applies your edit over it"})
                 else do
-                  let oldLs = bufferLines (fvEd fv)
-                      (row, col) = cursorRC (fvEd fv)
+                  let
+                    oldLs = bufferLines (fvEd fv)
+                    (row, col) = cursorRC (fvEd fv)
                   -- remember which screen row the cursor sat on, so the
                   -- view doesn't jump when lines shift above it
                   mvp <- lookupViewport BodyVP
-                  let oldOut = cursorDisplayRow (fvRows fv) row
-                      screenOff = case mvp of
-                        Just vp -> max 0 (oldOut - _vpTop vp)
-                        Nothing -> 0
+                  let
+                    oldOut = cursorDisplayRow (fvRows fv) row
+                    screenOff = case mvp of
+                      Just vp -> max 0 (oldOut - _vpTop vp)
+                      Nothing -> 0
                   newRow <- liftIO (mapRowThroughEdit oldLs diskLs row)
-                  let newCol =
-                        min col (T.length (fromMaybe "" (safeIdx diskLs newRow)))
-                      fresh = newEdState newRow diskLs
-                      placed =
-                        fresh { edZipper = Z.moveCursor (newRow, newCol) (edZipper fresh) }
+                  let
+                    newCol =
+                      min col (T.length (fromMaybe "" (safeIdx diskLs newRow)))
+                    fresh = newEdState newRow diskLs
+                    placed =
+                      fresh {edZipper = Z.moveCursor (newRow, newCol) (edZipper fresh)}
                   rebuildWith i placed
                   reloaded <- get
-                  let newOut =
-                        cursorDisplayRow (fvRows (stFiles reloaded !! i)) newRow
+                  let
+                    newOut =
+                      cursorDisplayRow (fvRows (stFiles reloaded !! i)) newRow
                   setTop (viewportScroll BodyVP) (max 0 (newOut - screenOff))
-                  modify (\s -> s { stMsg = "\8635 reloaded " <> T.pack rel })
+                  modify (\s -> s {stMsg = "\8635 reloaded " <> T.pack rel})
 
 cursorDisplayRow :: [RowR] -> Int -> Int
 cursorDisplayRow rows row =
@@ -1842,22 +2085,23 @@ cursorDisplayRow rows row =
 mapRowThroughEdit :: [Text] -> [Text] -> Int -> IO Int
 mapRowThroughEdit oldLs newLs target = do
   (rows, _) <- diffIO oldLs newLs
-  let clamp r = max 0 (min r (length newLs - 1))
-      bufferRowOf (_, mnr, _) = mnr
-      nextSurviving rest lastNew =
-        case mapMaybe bufferRowOf rest of
-          (nr : _) -> nr
-          [] -> fromMaybe (max 0 (length newLs - 1)) lastNew
-      go _ lastNew [] = fromMaybe 0 lastNew
-      go o lastNew ((m, mnr, _) : rest) =
-        case m of
-          '+' -> go o (mnr <|> lastNew) rest
-          _ ->
-            if o == target
-              then case mnr of
-                Just nr -> nr
-                Nothing -> nextSurviving rest lastNew
-              else go (o + 1) (mnr <|> lastNew) rest
+  let
+    clamp r = max 0 (min r (length newLs - 1))
+    bufferRowOf (_, mnr, _) = mnr
+    nextSurviving rest lastNew =
+      case mapMaybe bufferRowOf rest of
+        (nr : _) -> nr
+        [] -> fromMaybe (max 0 (length newLs - 1)) lastNew
+    go _ lastNew [] = fromMaybe 0 lastNew
+    go o lastNew ((m, mnr, _) : rest) =
+      case m of
+        '+' -> go o (mnr <|> lastNew) rest
+        _ ->
+          if o == target
+            then case mnr of
+              Just nr -> nr
+              Nothing -> nextSurviving rest lastNew
+            else go (o + 1) (mnr <|> lastNew) rest
   pure (clamp (go (0 :: Int) Nothing rows))
 
 -- Something moved in .git: re-list the change set, refresh bases that
@@ -1871,16 +2115,17 @@ refreshGit = do
   now <- liftIO getMonotonicTime
   if now - stLastGit st <= 0.5
     then unless (stGitQueued st) $ do
-      modify (\s -> s { stGitQueued = True })
+      modify (\s -> s {stGitQueued = True})
       void . liftIO . forkIO $ do
         threadDelay 700000
         void (writeBChanNonBlocking (stChan st) GitStateChanged)
     else do
-      modify (\s -> s { stLastGit = now, stGitQueued = False })
+      modify (\s -> s {stLastGit = now, stGitQueued = False})
       rebaseNow <- liftIO (rebaseStatus (stRoot st))
-      modify (\s -> s { stRebase = rebaseNow })
+      modify (\s -> s {stRebase = rebaseNow})
       stEff <- get
-      let mode = effectiveMode stEff
+      let
+        mode = effectiveMode stEff
       ignores <- liftIO (loadIgnores (stRoot stEff))
       names <-
         liftIO
@@ -1888,43 +2133,51 @@ refreshGit = do
               (filter (not . ignoredPath ignores))
               (changedFiles mode (stRoot stEff))
           )
-      let existing =
-            Map.fromList (map (\fv -> (fvPath fv, fv)) (stFiles stEff))
-      let refreshOne name =
-            case Map.lookup name existing of
-              Nothing -> loadOne (stConfig stEff) (stHls stEff) mode (stRoot stEff) name
-              Just fv -> do
-                base <- baseLines mode (stRoot stEff) name
-                if base == fvBase fv
-                  then pure (Just fv)
-                  else do
-                    (rebuilt, _) <-
-                      rebuildFV (cfgSplit (stConfig stEff)) (repoText stEff) fv { fvBase = base }
-                    pure (Just rebuilt)
+      let
+        existing =
+          Map.fromList (map (\fv -> (fvPath fv, fv)) (stFiles stEff))
+      let
+        refreshOne name =
+          case Map.lookup name existing of
+            Nothing -> loadOne (stConfig stEff) (stHls stEff) mode (stRoot stEff) name
+            Just fv -> do
+              base <- baseLines mode (stRoot stEff) name
+              if base == fvBase fv
+                then pure (Just fv)
+                else do
+                  (rebuilt, _) <-
+                    rebuildFV (cfgSplit (stConfig stEff)) (repoText stEff) fv {fvBase = base}
+                  pure (Just rebuilt)
       refreshed <- liftIO (forMaybeBounded refreshOne names)
-      let inChangeSet = catMaybes refreshed
+      let
+        inChangeSet = catMaybes refreshed
       -- hand-opened files stay in the session even when the change set
       -- doesn't claim them; once git stops seeing a difference (say the
       -- file was committed), the base honestly rebases to the buffer so
       -- stale hunks don't linger
       extras <-
-        liftIO . forM
-          (filter (`notElem` names) (Set.toList (stOpened stEff))) $ \path ->
+        liftIO
+          . forM
+            (filter (`notElem` names) (Set.toList (stOpened stEff)))
+          $ \path ->
             case Map.lookup path existing of
               Nothing -> pure Nothing
               Just fv -> do
                 base <- baseLines mode (stRoot stEff) path
-                let buf = bufferLines (fvEd fv)
+                let
+                  buf = bufferLines (fvEd fv)
                 if base == buf && fvBase fv /= buf
                   then do
                     (rebuilt, _) <-
-                      rebuildFV (cfgSplit (stConfig stEff)) (repoText stEff) fv { fvBase = buf }
+                      rebuildFV (cfgSplit (stConfig stEff)) (repoText stEff) fv {fvBase = buf}
                     pure (Just rebuilt)
                   else pure (Just fv)
-      let remaining = inChangeSet ++ catMaybes extras
+      let
+        remaining = inChangeSet ++ catMaybes extras
       forM_ remaining (liftIO . stWatch stEff . fileDir (stRoot stEff) . fvPath)
       latest <- get
-      let wasEmpty = null (stFiles latest)
+      let
+        wasEmpty = null (stFiles latest)
       if null remaining
         -- the persistent session idles rather than exits: the watcher
         -- stays live and new work wakes the screen on its own
@@ -1937,11 +2190,12 @@ refreshGit = do
               , stMsg = "change set is empty — watching for changes"
               }
         else do
-          let curPath = case currentFileMay latest of
-                Just fv -> fvPath fv
-                Nothing -> ""
-              oldCur = currentRunOf latest (stCurF latest)
-              newF = fromMaybe 0 (findIndex ((== curPath) . fvPath) remaining)
+          let
+            curPath = case currentFileMay latest of
+              Just fv -> fvPath fv
+              Nothing -> ""
+            oldCur = currentRunOf latest (stCurF latest)
+            newF = fromMaybe 0 (findIndex ((== curPath) . fvPath) remaining)
           put
             latest
               { stFiles = remaining
@@ -1958,7 +2212,7 @@ refreshGit = do
 
 -- What each command is called, what it takes, and what to tell a human
 -- browsing the menu.
-data ArgKind = NoArg | ArgRef | ArgMode | ArgPath | ArgDir | ArgText
+data ArgKind = NoArg | ArgRef | ArgMode | ArgPath | ArgDir | ArgText | ArgSet
 
 commandTable :: [(Text, ArgKind, Text)]
 commandTable =
@@ -1977,6 +2231,7 @@ commandTable =
   , ("close", NoArg, "drop the current file")
   , ("files", NoArg, "fuzzy file finder")
   , ("edit", ArgPath, "$EDITOR at the cursor (or on PATH)")
+  , ("set", ArgSet, "change a setting (live + persisted)")
   , ("q", NoArg, "quit")
   ]
 
@@ -1990,29 +2245,36 @@ argKindOf name =
 -- space, that command's argument domain after it.
 cmdCandidates :: St -> Text -> [Text]
 cmdCandidates st input =
-  let (done, word) = T.breakOnEnd " " input
-      prefixed = filter (word `T.isPrefixOf`)
-  in if T.null done
-       then prefixed (map (\(n, _, _) -> n) commandTable)
-       else case argKindOf (T.strip done) of
-         Just ArgRef -> prefixed ("branch" : stCmdRefs st)
-         Just ArgMode -> prefixed ["head", "unstaged", "untracked"]
-         Just ArgPath -> prefixed (stCmdFiles st)
-         Just ArgDir -> prefixed (stCmdDirs st ++ stCmdFiles st)
-         _ -> []
+  let
+    (done, word) = T.breakOnEnd " " input
+    prefixed = filter (word `T.isPrefixOf`)
+  in
+    case T.words done of
+      [] -> prefixed (map (\(n, _, _) -> n) commandTable)
+      ["set"] -> prefixed settingNames
+      ["set", "keys"] -> prefixed ["helix", "emacs"]
+      ["set", "note-on-flag"] -> prefixed ["0", "1"]
+      [cmd] -> case argKindOf cmd of
+        Just ArgRef -> prefixed ("branch" : stCmdRefs st)
+        Just ArgMode -> prefixed ["head", "unstaged", "untracked"]
+        Just ArgPath -> prefixed (stCmdFiles st)
+        Just ArgDir -> prefixed (stCmdDirs st ++ stCmdFiles st)
+        _ -> []
+      _ -> []
 
 openCmdPrompt :: EventM Name St ()
 openCmdPrompt = do
   st <- get
   files <- liftIO (listFiles (stRoot st))
   refs <- liftIO (listRefs (stRoot st))
-  let dirs =
-        Set.toList
-          (Set.fromList (concatMap (parentDirs . takeDirectory) files))
-      parentDirs d =
-        if d == "." || d == "/" || null d
-          then []
-          else d : parentDirs (takeDirectory d)
+  let
+    dirs =
+      Set.toList
+        (Set.fromList (concatMap (parentDirs . takeDirectory) files))
+    parentDirs d =
+      if d == "." || d == "/" || null d
+        then []
+        else d : parentDirs (takeDirectory d)
   modify $ \s ->
     s
       { stPrompt = Just (CmdPrompt "")
@@ -2027,27 +2289,29 @@ openCmdPrompt = do
 promptComplete :: Int -> Text -> EventM Name St ()
 promptComplete step input = do
   st <- get
-  let (base, prevIx) = case stPromptCycle st of
-        Just (b, i) -> (b, i + step)
-        Nothing -> (input, if step > 0 then 0 else -1)
-      cands = cmdCandidates st base
+  let
+    (base, prevIx) = case stPromptCycle st of
+      Just (b, i) -> (b, i + step)
+      Nothing -> (input, if step > 0 then 0 else -1)
+    cands = cmdCandidates st base
   case cands of
     [] -> pure ()
     _ -> do
-      let n = length cands
-          ix = ((prevIx `mod` n) + n) `mod` n
-          cand = cands !! ix
-          (done, _) = T.breakOnEnd " " base
-          suffix =
-            case (T.null done, argKindOf cand) of
-              (True, Just NoArg) -> ""
-              (True, Just _) -> " "
-              _ -> ""
-          completed = done <> cand <> suffix
-          -- accepting a command that takes arguments moves to a fresh
-          -- stage: the next Tab completes the argument, not the verb
-          nextCycle =
-            if T.null suffix then Just (base, ix) else Nothing
+      let
+        n = length cands
+        ix = ((prevIx `mod` n) + n) `mod` n
+        cand = cands !! ix
+        (done, _) = T.breakOnEnd " " base
+        suffix =
+          case (T.null done, argKindOf cand) of
+            (True, Just NoArg) -> ""
+            (True, Just _) -> " "
+            _ -> ""
+        completed = done <> cand <> suffix
+        -- accepting a command that takes arguments moves to a fresh
+        -- stage: the next Tab completes the argument, not the verb
+        nextCycle =
+          if T.null suffix then Just (base, ix) else Nothing
       modify $ \s ->
         s
           { stPrompt = Just (CmdPrompt completed)
@@ -2060,37 +2324,43 @@ promptMenu :: St -> Maybe (Widget Name)
 promptMenu st =
   case stPrompt st of
     Just (CmdPrompt input) ->
-      let base = case stPromptCycle st of
-            Just (b, _) -> b
-            Nothing -> input
-          cands = cmdCandidates st base
-          selIx = fmap snd (stPromptCycle st)
-          isCmdStage = not (" " `T.isInfixOf` base)
-          descOf n = case filter (\(c, _, _) -> c == n) commandTable of
-            ((_, _, d) : _) -> d
-            [] -> ""
-          row (i, n) =
-            let label =
-                  if isCmdStage
-                    then
-                      " :" <> T.justifyLeft 10 ' ' n <> "  "
-                        <> descOf n
-                    else " " <> n
-                w = padRight Max (txt label)
-            in if Just i == selIx then withDefAttr selAttr w else w
-          shown = take 16 (zip [0 ..] cands)
-          more = length cands - length shown
-          moreRow =
-            if more > 0
-              then [withAttr hintAttr (txt ("   \8230 " <> tshow more <> " more"))]
-              else []
-      in case cands of
-           [] -> Nothing
-           _ -> Just (vBox (map row shown ++ moreRow))
+      let
+        base = case stPromptCycle st of
+          Just (b, _) -> b
+          Nothing -> input
+        cands = cmdCandidates st base
+        selIx = fmap snd (stPromptCycle st)
+        isCmdStage = not (" " `T.isInfixOf` base)
+        descOf n = case filter (\(c, _, _) -> c == n) commandTable of
+          ((_, _, d) : _) -> d
+          [] -> ""
+        row (i, n) =
+          let
+            label =
+              if isCmdStage
+                then
+                  " :"
+                    <> T.justifyLeft 10 ' ' n
+                    <> "  "
+                    <> descOf n
+                else " " <> n
+            w = padRight Max (txt label)
+          in
+            if Just i == selIx then withDefAttr selAttr w else w
+        shown = take 16 (zip [0 ..] cands)
+        more = length cands - length shown
+        moreRow =
+          if more > 0
+            then [withAttr hintAttr (txt ("   \8230 " <> tshow more <> " more"))]
+            else []
+      in
+        case cands of
+          [] -> Nothing
+          _ -> Just (vBox (map row shown ++ moreRow))
     _ -> Nothing
 
 setMsg :: Text -> EventM Name St ()
-setMsg t = modify (\s -> s { stMsg = t })
+setMsg t = modify (\s -> s {stMsg = t})
 
 runCommand :: Text -> EventM Name St ()
 runCommand input =
@@ -2115,6 +2385,9 @@ runCommand input =
     ("note" : rest) -> noteCmd (T.unwords rest)
     ["unnote"] -> unnoteCmd
     ["accept", path] -> acceptPath path
+    ["set"] -> showSettings
+    ["set", key] -> showSetting key
+    ["set", key, val] -> applySet key val
     ["open", path] -> openFilePath path
     ["close"] -> closeCurrent
     ["files"] -> openPicker
@@ -2124,11 +2397,118 @@ runCommand input =
       launchEditor (stRoot st </> T.unpack path) 1
     _ -> setMsg ("unknown command: " <> input)
 
+-- Settings management: :set with no arguments lists everything, one
+-- argument shows a value, two applies it — live and persisted to the
+-- config file.
+settingNames :: [Text]
+settingNames =
+  [ "keys"
+  , "scrolloff"
+  , "note-wrap"
+  , "note-on-flag"
+  , "split-threshold"
+  , "piece-min"
+  , "piece-max"
+  ]
+
+settingValue :: Config -> Text -> Text
+settingValue cfg key =
+  case key of
+    "keys" -> if cfgKeys cfg == KeysEmacs then "emacs" else "helix"
+    "scrolloff" -> tshow (cfgScrolloff cfg)
+    "note-wrap" -> tshow (cfgNoteWrap cfg)
+    "note-on-flag" -> if cfgNoteOnFlag cfg then "1" else "0"
+    "split-threshold" -> tshow (splitThreshold (cfgSplit cfg))
+    "piece-min" -> tshow (pieceMin (cfgSplit cfg))
+    "piece-max" -> tshow (pieceMax (cfgSplit cfg))
+    _ -> "?"
+
+showSettings :: EventM Name St ()
+showSettings = do
+  st <- get
+  let
+    one k = k <> "=" <> settingValue (stConfig st) k
+  setMsg (T.intercalate "  " (map one settingNames))
+
+showSetting :: Text -> EventM Name St ()
+showSetting key = do
+  st <- get
+  if key `elem` settingNames
+    then setMsg (key <> " = " <> settingValue (stConfig st) key)
+    else setMsg ("unknown setting: " <> key)
+
+applySet :: Text -> Text -> EventM Name St ()
+applySet key val = do
+  st <- get
+  let
+    cfg = stConfig st
+    asInt = case TR.signed TR.decimal val of
+      Right (n, rest) | T.null rest -> Just (n :: Int)
+      _ -> Nothing
+    finish :: Config -> EventM Name St () -> EventM Name St ()
+    finish newCfg after = do
+      modify (\s -> s {stConfig = newCfg})
+      liftIO (persistSetting key val)
+      after
+      setMsg (":set " <> key <> " = " <> val)
+    withInt build after = case asInt of
+      Just n -> finish (build n) after
+      Nothing -> setMsg (key <> " wants a number")
+    splitWith f = f (cfgSplit cfg)
+  case key of
+    "keys"
+      | val == "helix" -> finish cfg {cfgKeys = KeysHelix} (pure ())
+      | val == "emacs" -> finish cfg {cfgKeys = KeysEmacs} (pure ())
+      | otherwise -> setMsg "keys = helix | emacs"
+    "scrolloff" -> withInt (\n -> cfg {cfgScrolloff = max 0 n}) (pure ())
+    "note-wrap" -> withInt (\n -> cfg {cfgNoteWrap = max 20 n}) (pure ())
+    "note-on-flag" ->
+      withInt (\n -> cfg {cfgNoteOnFlag = n /= 0}) (pure ())
+    "split-threshold" ->
+      withInt
+        (\n -> cfg {cfgSplit = splitWith (\sc -> sc {splitThreshold = max 1 n})})
+        rebuildAllFiles
+    "piece-min" ->
+      withInt
+        (\n -> cfg {cfgSplit = splitWith (\sc -> sc {pieceMin = max 1 n})})
+        rebuildAllFiles
+    "piece-max" ->
+      withInt
+        (\n -> cfg {cfgSplit = splitWith (\sc -> sc {pieceMax = max 2 n})})
+        rebuildAllFiles
+    _ -> setMsg ("unknown setting: " <> key)
+
+-- Split knobs reshape every file's hunks; rebuild them all (bounded
+-- workers) and keep the current hunk by content.
+rebuildAllFiles :: EventM Name St ()
+rebuildAllFiles = do
+  st <- get
+  let
+    sc = cfgSplit (stConfig st)
+    oldCur = currentRunOf st (stCurF st)
+  rebuilt <-
+    liftIO
+      ( forMaybeBounded
+          (\fv -> fmap (Just . fst) (rebuildFV sc (repoText st) fv))
+          (stFiles st)
+      )
+  let
+    files = catMaybes rebuilt
+  unless (null files) $
+    modify $ \s ->
+      s
+        { stFiles = files
+        , stCurH =
+            case safeIdx files (stCurF s) of
+              Just fv -> matchRun oldCur (fvRuns fv)
+              Nothing -> 0
+        }
+
 -- Reflect git state right now, bypassing the watcher throttle — for
 -- commands whose whole point is an immediate view change.
 forceGitRefresh :: EventM Name St ()
 forceGitRefresh = do
-  modify (\s -> s { stLastGit = 0, stGitQueued = False })
+  modify (\s -> s {stLastGit = 0, stGitQueued = False})
   refreshGit
 
 -- Switch what the session reviews against. Each switch closes the pass
@@ -2144,7 +2524,7 @@ setBase mode = do
     _ -> do
       liftIO (finishPass (stConn st) (stPassId st))
       newPass <- liftIO (beginPass (stConn st) (repoText st) (modeLabel mode))
-      modify (\s -> s { stMode = mode, stPassId = newPass })
+      modify (\s -> s {stMode = mode, stPassId = newPass})
       forceGitRefresh
       refreshed <- get
       unless
@@ -2163,10 +2543,12 @@ setBaseBranch = do
 
 rebaseStopMsg :: RebaseStatus -> Text
 rebaseStopMsg rb =
-  let at = tshow (rebaseStep rb) <> "/" <> tshow (rebaseTotal rb)
-  in if rebaseConflicted rb
-       then "conflict at commit " <> at <> " — resolve, then :continue"
-       else "commit " <> at <> " — review, edit, :continue (:abort! backs out)"
+  let
+    at = tshow (rebaseStep rb) <> "/" <> tshow (rebaseTotal rb)
+  in
+    if rebaseConflicted rb
+      then "conflict at commit " <> at <> " — resolve, then :continue"
+      else "commit " <> at <> " — review, edit, :continue (:abort! backs out)"
 
 -- Start the surgical commit-by-commit pass: `git rebase --exec false`
 -- pauses the sequencer after every commit (the failing exec is the stop
@@ -2193,7 +2575,7 @@ startRebase mRef = do
             Right ref -> do
               res <- liftIO (runGit (stRoot st) ["rebase", "--exec", "false", T.unpack ref])
               rb <- liftIO (rebaseStatus (stRoot st))
-              modify (\s -> s { stRebase = rb, stWritten = Set.empty })
+              modify (\s -> s {stRebase = rb, stWritten = Set.empty})
               case rb of
                 Just info -> do
                   forceGitRefresh
@@ -2212,8 +2594,9 @@ continueRebase = do
   case stRebase st of
     Nothing -> setMsg "no rebase in progress"
     Just rb -> do
-      let root = stRoot st
-          written = Set.toList (stWritten st)
+      let
+        root = stRoot st
+        written = Set.toList (stWritten st)
       folded <- liftIO $ do
         addRes <-
           if null written
@@ -2230,7 +2613,7 @@ continueRebase = do
         Right () -> do
           res <- liftIO (runGit root ["rebase", "--continue"])
           rbNext <- liftIO (rebaseStatus root)
-          modify (\s -> s { stRebase = rbNext, stWritten = Set.empty })
+          modify (\s -> s {stRebase = rbNext, stWritten = Set.empty})
           forceGitRefresh
           case rbNext of
             Nothing -> setMsg "rebase complete — base restored"
@@ -2238,9 +2621,12 @@ continueRebase = do
               -- --continue itself exits nonzero when the next exec-false
               -- stop is reached; a stop that actually advanced is fine
               if rebaseStep next == rebaseStep rb && not (rebaseConflicted next)
-                then setMsg (case res of
-                       Left e -> e
-                       Right () -> rebaseStopMsg next)
+                then
+                  setMsg
+                    ( case res of
+                        Left e -> e
+                        Right () -> rebaseStopMsg next
+                    )
                 else setMsg (rebaseStopMsg next)
 
 abortRebase :: EventM Name St ()
@@ -2251,7 +2637,7 @@ abortRebase = do
     Just _ -> do
       res <- liftIO (runGit (stRoot st) ["rebase", "--abort"])
       rbNext <- liftIO (rebaseStatus (stRoot st))
-      modify (\s -> s { stRebase = rbNext, stWritten = Set.empty })
+      modify (\s -> s {stRebase = rbNext, stWritten = Set.empty})
       forceGitRefresh
       setMsg $ case res of
         Left e -> e
@@ -2264,7 +2650,8 @@ amendHead = do
   case stRebase st of
     Just _ -> setMsg "rebase in progress — :continue folds edits into the stopped commit"
     Nothing -> do
-      let written = Set.toList (stWritten st)
+      let
+        written = Set.toList (stWritten st)
       if null written
         then setMsg "no files written this session — nothing to amend"
         else do
@@ -2276,7 +2663,7 @@ amendHead = do
           case res of
             Left e -> setMsg e
             Right () -> do
-              modify (\s -> s { stWritten = Set.empty })
+              modify (\s -> s {stWritten = Set.empty})
               forceGitRefresh
               setMsg "amended HEAD with the session's edits"
 
@@ -2290,40 +2677,45 @@ amendHead = do
 -- moved on); with none of those, the current hunk.
 noteTargetKeys :: St -> [Text]
 noteTargetKeys st =
-  let selectionKeys = do
-        fv <- currentFileMay st
-        (lo, hi) <- activeSelectionRows (fvEd fv)
-        pure (map (\(k, _, _) -> k) (selectedChanges fv lo hi))
-      cursorKeys = do
-        fv <- currentFileMay st
-        let row = fst (cursorRC (fvEd fv))
-            ks = map (\(k, _, _) -> k) (selectedChanges fv row row)
-            relevant k =
-              Map.member k (stVerdicts st) || Map.member k (stNotes st)
-        noted <- case mapMaybe (\k -> Map.lookup k (stNotes st)) ks of
-          (n : _) ->
-            -- the whole group sharing this note text, so editing keeps
-            -- it a single note rather than forking per line
-            let inGroup r = do
-                  k <- rKey r
-                  if Map.lookup k (stNotes st) == Just n
-                    then Just k
-                    else Nothing
-            in Just (Just (mapMaybe inGroup (fvRows fv)))
-          [] ->
-            if any relevant ks
-              then Just Nothing
-              else Nothing
-        pure $ case noted of
-          Just groupKeys -> groupKeys
-          Nothing -> filter relevant ks
-      hunkKeys = do
-        fv <- currentFileMay st
-        r <- safeIdx (fvRuns fv) (clampH (fvRuns fv) (stCurH st))
-        pure (runKeys r)
-      lastKeys =
-        if null (stLastMarked st) then Nothing else Just (stLastMarked st)
-  in fromMaybe [] (selectionKeys <|> cursorKeys <|> lastKeys <|> hunkKeys)
+  let
+    selectionKeys = do
+      fv <- currentFileMay st
+      (lo, hi) <- activeSelectionRows (fvEd fv)
+      pure (map (\(k, _, _) -> k) (selectedChanges fv lo hi))
+    cursorKeys = do
+      fv <- currentFileMay st
+      let
+        row = fst (cursorRC (fvEd fv))
+        ks = map (\(k, _, _) -> k) (selectedChanges fv row row)
+        relevant k =
+          Map.member k (stVerdicts st) || Map.member k (stNotes st)
+      noted <- case mapMaybe (\k -> Map.lookup k (stNotes st)) ks of
+        (n : _) ->
+          -- the whole group sharing this note text, so editing keeps
+          -- it a single note rather than forking per line
+          let
+            inGroup r = do
+              k <- rKey r
+              if Map.lookup k (stNotes st) == Just n
+                then Just k
+                else Nothing
+          in
+            Just (Just (mapMaybe inGroup (fvRows fv)))
+        [] ->
+          if any relevant ks
+            then Just Nothing
+            else Nothing
+      pure $ case noted of
+        Just groupKeys -> groupKeys
+        Nothing -> filter relevant ks
+    hunkKeys = do
+      fv <- currentFileMay st
+      r <- safeIdx (fvRuns fv) (clampH (fvRuns fv) (stCurH st))
+      pure (runKeys r)
+    lastKeys =
+      if null (stLastMarked st) then Nothing else Just (stLastMarked st)
+  in
+    fromMaybe [] (selectionKeys <|> cursorKeys <|> lastKeys <|> hunkKeys)
 
 -- Record a note (empty text clears instead), keep the in-memory view in
 -- step, and report where it landed.
@@ -2344,7 +2736,8 @@ applyNote text keys = do
           else "removed note from " <> tshow n <> " line(s)"
     else do
       n <- liftIO (recordNotes (stConn st) (repoText st) text keys)
-      let markedKeys = filter (`Map.member` stVerdicts st) keys
+      let
+        markedKeys = filter (`Map.member` stVerdicts st) keys
       modify $ \s ->
         s
           { stNotes = foldr (\k m -> Map.insert k text m) (stNotes s) markedKeys
@@ -2358,7 +2751,8 @@ applyNote text keys = do
 noteCmd :: Text -> EventM Name St ()
 noteCmd text = do
   st <- get
-  let keys = noteTargetKeys st
+  let
+    keys = noteTargetKeys st
   if null keys
     then setMsg "nothing to note — mark lines with ! or ? first"
     else applyNote (T.strip text) keys
@@ -2366,7 +2760,8 @@ noteCmd text = do
 unnoteCmd :: EventM Name St ()
 unnoteCmd = do
   st <- get
-  let keys = noteTargetKeys st
+  let
+    keys = noteTargetKeys st
   if null keys
     then setMsg "nothing here to unnote"
     else applyNote "" keys
@@ -2376,29 +2771,31 @@ unnoteCmd = do
 openNotePopup :: EventM Name St ()
 openNotePopup = do
   st <- get
-  let keys = noteTargetKeys st
+  let
+    keys = noteTargetKeys st
   if null keys
     then setMsg "nothing to note — mark lines with ! or ? first"
     else do
-      let existing = case mapMaybe (`Map.lookup` stNotes st) keys of
-            (n : _) -> n
-            [] -> ""
-          ls = if T.null existing then [""] else T.lines existing
-          lastRow = length ls - 1
-          lastCol = case reverse ls of
-            (l : _) -> T.length l
-            [] -> 0
-          ed0 = newEdState lastRow ls
-          ed1 =
-            ed0
-              { edZipper = Z.moveCursor (lastRow, lastCol) (edZipper ed0)
-              , edMode = Insert
-              }
-      modify (\s -> s { stNotePopup = Just (NotePopup ed1 keys) })
+      let
+        existing = case mapMaybe (`Map.lookup` stNotes st) keys of
+          (n : _) -> n
+          [] -> ""
+        ls = if T.null existing then [""] else T.lines existing
+        lastRow = length ls - 1
+        lastCol = case reverse ls of
+          (l : _) -> T.length l
+          [] -> 0
+        ed0 = newEdState lastRow ls
+        ed1 =
+          ed0
+            { edZipper = Z.moveCursor (lastRow, lastCol) (edZipper ed0)
+            , edMode = Insert
+            }
+      modify (\s -> s {stNotePopup = Just (NotePopup ed1 keys)})
 
 setNotePopupEd :: EdState -> EventM Name St ()
 setNotePopupEd ed =
-  modify (\s -> s { stNotePopup = fmap (\np -> np { npEd = ed }) (stNotePopup s) })
+  modify (\s -> s {stNotePopup = fmap (\np -> np {npEd = ed}) (stNotePopup s)})
 
 handleNotePopupKey :: V.Event -> NotePopup -> EventM Name St ()
 handleNotePopupKey ev np =
@@ -2406,7 +2803,7 @@ handleNotePopupKey ev np =
     -- discard works from either popup mode; nobody should need to leave
     -- insert just to bail out
     V.EvKey (V.KChar 'c') [V.MCtrl] ->
-      modify (\s -> s { stNotePopup = Nothing, stMsg = "note discarded" })
+      modify (\s -> s {stNotePopup = Nothing, stMsg = "note discarded"})
     _ ->
       case edMode (npEd np) of
         Insert ->
@@ -2419,13 +2816,14 @@ handleNotePopupKey ev np =
         Normal ->
           case ev of
             V.EvKey V.KEnter [] -> do
-              modify (\s -> s { stNotePopup = Nothing })
-              let text = T.strip (T.intercalate "\n" (bufferLines (npEd np)))
+              modify (\s -> s {stNotePopup = Nothing})
+              let
+                text = T.strip (T.intercalate "\n" (bufferLines (npEd np)))
               applyNote text (npKeys np)
             -- Esc from insert lands here in the popup's normal mode; Esc
             -- again cancels the dialog outright
             V.EvKey V.KEsc [] ->
-              modify (\s -> s { stNotePopup = Nothing, stMsg = "note discarded" })
+              modify (\s -> s {stNotePopup = Nothing, stMsg = "note discarded"})
             _ ->
               case handleNormal ev (npEd np) of
                 Just ed -> setNotePopupEd ed
@@ -2436,103 +2834,120 @@ handleNotePopupKey ev np =
 -- A single overlong word is left alone.
 wrapNoteLine :: Int -> EdState -> EdState
 wrapNoteLine noteWrapCol ed =
-  let (row, col) = cursorRC ed
-      ls = bufferLines ed
-      line = case drop row ls of
-        (l : _) -> l
-        [] -> ""
-      breakAt =
-        T.findIndex (== ' ') (T.reverse (T.take (noteWrapCol + 1) line))
-  in if T.length line <= noteWrapCol
-       then ed
-       else case breakAt of
-         Nothing -> ed
-         Just fromEnd ->
-           let at = noteWrapCol - fromEnd
-               keep = T.take at line
-               rest = T.drop (at + 1) line
-               wrapped = take row ls ++ (keep : rest : drop (row + 1) ls)
-               cursor =
-                 if col > at
-                   then (row + 1, col - at - 1)
-                   else (row, col)
-           in ed { edZipper = Z.moveCursor cursor (Z.textZipper wrapped Nothing) }
+  let
+    (row, col) = cursorRC ed
+    ls = bufferLines ed
+    line = case drop row ls of
+      (l : _) -> l
+      [] -> ""
+    breakAt =
+      T.findIndex (== ' ') (T.reverse (T.take (noteWrapCol + 1) line))
+  in
+    if T.length line <= noteWrapCol
+      then ed
+      else case breakAt of
+        Nothing -> ed
+        Just fromEnd ->
+          let
+            at = noteWrapCol - fromEnd
+            keep = T.take at line
+            rest = T.drop (at + 1) line
+            wrapped = take row ls ++ (keep : rest : drop (row + 1) ls)
+            cursor =
+              if col > at
+                then (row + 1, col - at - 1)
+                else (row, col)
+          in
+            ed {edZipper = Z.moveCursor cursor (Z.textZipper wrapped Nothing)}
+notePopupLayer :: NotePopup -> Widget Name
 notePopupLayer np =
-  let ed = npEd np
-      (row, col) = cursorRC ed
-      ls = bufferLines ed
-      modeTag = case edMode ed of
-        Insert -> "INS"
-        Normal -> "NOR"
-      -- selections paint here the same way they do in the main buffer:
-      -- whole rows for x, column spans for v
-      lineSel = selectionRows ed
-      charSel = charSelection ed
-      spanFor i = do
-        ((lr, lc), (hr, hc)) <- charSel
-        if i < lr || i > hr
-          then Nothing
-          else
-            Just
-              ( if i == lr then lc else 0
-              , if i == hr then Just hc else Nothing
-              )
-      inLineSel i = case lineSel of
-        Just (a, b) -> i >= a && i <= b
-        Nothing -> False
-      bodyLine (i, l)
-        | inLineSel i = withDefAttr selAttr (txt (padT l))
-        | otherwise = case spanFor i of
-            Nothing -> txt (padT l)
-            Just (start, mEnd) ->
-              let (pre, rest) = T.splitAt start l
-                  (mid, post) = case mEnd of
-                    Nothing -> (rest, T.empty)
-                    Just e -> T.splitAt (e + 1 - start) rest
-                  midW = if T.null mid then txt " " else txt mid
-              in txt pre <+> withDefAttr selAttr midW <+> txt post
-      bodyW =
-        showCursor
-          TheCursor
-          (Location (col, row))
-          (vBox (map bodyLine (zip [0 ..] ls)))
-  in C.centerLayer . B.border . hLimit 64 $
-       vBox
-         [ withDefAttr statusAttr (padRight Max (txt (" note · " <> modeTag)))
-         , padTop (Pad 1) . padBottom (Pad 1) . padLeft (Pad 2) . padRight (Pad 2) $
-             vLimit 10 bodyW
-         , withAttr hintAttr (txt " NOR \9166 save · C-c discard · empty note clears ")
-         ]
+  let
+    ed = npEd np
+    (row, col) = cursorRC ed
+    ls = bufferLines ed
+    modeTag = case edMode ed of
+      Insert -> "INS"
+      Normal -> "NOR"
+    -- selections paint here the same way they do in the main buffer:
+    -- whole rows for x, column spans for v
+    lineSel = selectionRows ed
+    charSel = charSelection ed
+    spanFor i = do
+      ((lr, lc), (hr, hc)) <- charSel
+      if i < lr || i > hr
+        then Nothing
+        else
+          Just
+            ( if i == lr then lc else 0
+            , if i == hr then Just hc else Nothing
+            )
+    inLineSel i = case lineSel of
+      Just (a, b) -> i >= a && i <= b
+      Nothing -> False
+    bodyLine (i, l)
+      | inLineSel i = withDefAttr selAttr (txt (padT l))
+      | otherwise = case spanFor i of
+          Nothing -> txt (padT l)
+          Just (start, mEnd) ->
+            let
+              (pre, rest) = T.splitAt start l
+              (mid, post) = case mEnd of
+                Nothing -> (rest, T.empty)
+                Just e -> T.splitAt (e + 1 - start) rest
+              midW = if T.null mid then txt " " else txt mid
+            in
+              txt pre <+> withDefAttr selAttr midW <+> txt post
+    bodyW =
+      showCursor
+        TheCursor
+        (Location (col, row))
+        (vBox (map bodyLine (zip [0 ..] ls)))
+  in
+    C.centerLayer . B.border . hLimit 64 $
+      vBox
+        [ withDefAttr statusAttr (padRight Max (txt (" note · " <> modeTag)))
+        , padTop (Pad 1) . padBottom (Pad 1) . padLeft (Pad 2) . padRight (Pad 2) $
+            vLimit 10 bodyW
+        , withAttr hintAttr (txt " NOR \9166 save · C-c discard · empty note clears ")
+        ]
 
 -- Accept everything under a directory (or one file) as reviewed — the
 -- bulk verb for generated code nobody reads line by line. Matching is
 -- by path component, so `gen` covers gen/a.txt but not generated.hs.
 acceptPath :: Text -> EventM Name St ()
-acceptPath raw = do
+acceptPath rawPath = do
   st <- get
-  let prefix =
-        dropTrailingPathSeparator
-          (normalise (makeRelative (stRoot st) (T.unpack raw)))
-      matches fv =
-        fvPath fv == prefix || (prefix ++ "/") `isPrefixOf` fvPath fv
-      targets = filter matches (stFiles st)
-      fileRows fv =
-        let hunks = [0 .. length (fvRuns fv) - 1]
-            perRun h =
-              map
-                (\(k, l, n) -> (k, T.pack (fvPath fv), l, n))
-                (runChanges fv h)
-        in concatMap perRun hunks
-      rows = concatMap fileRows targets
-      keys = map (\(k, _, _, _) -> k) rows
-      hunkCount = sum (map (length . fvRuns) targets)
+  let
+    prefix =
+      dropTrailingPathSeparator
+        (normalise (makeRelative (stRoot st) (T.unpack rawPath)))
+    matches fv =
+      fvPath fv == prefix || (prefix ++ "/") `isPrefixOf` fvPath fv
+    targets = filter matches (stFiles st)
+    fileRows fv =
+      let
+        hunks = [0 .. length (fvRuns fv) - 1]
+        perRun h =
+          map
+            (\(k, l, n) -> (k, T.pack (fvPath fv), l, n))
+            (runChanges fv h)
+      in
+        concatMap perRun hunks
+    rows = concatMap fileRows targets
+    keys = map (\(k, _, _, _) -> k) rows
+    hunkCount = sum (map (length . fvRuns) targets)
   if null targets
     then setMsg ("nothing in the change set under " <> T.pack prefix)
     else do
       mCommit <- verdictCommitContext
       liftIO
         ( recordVerdicts
-            (stConn st) (repoText st) (stPassId st) Reviewed mCommit rows
+            (stConn st)
+            (repoText st)
+            (stPassId st)
+            Reviewed
+            mCommit
+            rows
         )
       modify $ \s ->
         s
@@ -2542,8 +2957,12 @@ acceptPath raw = do
           }
       advanceToPending
       setMsg
-        ( "accepted " <> tshow hunkCount <> " hunk(s) in "
-            <> tshow (length targets) <> " file(s) under " <> T.pack prefix
+        ( "accepted "
+            <> tshow hunkCount
+            <> " hunk(s) in "
+            <> tshow (length targets)
+            <> " file(s) under "
+            <> T.pack prefix
         )
 
 -- Files beyond the change set ---------------------------------------------------
@@ -2553,16 +2972,17 @@ acceptPath raw = do
 -- (zero hunks — a plain editable view whose later session edits decorate
 -- honestly). Opened files are pinned so git refreshes keep them around.
 openFilePath :: Text -> EventM Name St ()
-openFilePath raw = do
+openFilePath rawPath = do
   st <- get
-  let rootP = stRoot st
-      given = T.unpack raw
-      rel =
-        normalise
-          (makeRelative rootP (if isAbsolute given then given else rootP </> given))
+  let
+    rootP = stRoot st
+    given = T.unpack rawPath
+    rel =
+      normalise
+        (makeRelative rootP (if isAbsolute given then given else rootP </> given))
   case findIndex ((== rel) . fvPath) (stFiles st) of
     Just i -> do
-      modify (\s -> s { stOpened = Set.insert rel (stOpened s) })
+      modify (\s -> s {stOpened = Set.insert rel (stOpened s)})
       parkM i 0
     Nothing -> do
       got <- liftIO (loadOpened (stConfig st) (stHls st) rootP rel)
@@ -2579,12 +2999,12 @@ openFilePath raw = do
           parkM (length (stFiles grown) - 1) 0
 
 -- Like loadOne, but the base is the file's own content right now.
-loadOpened
-  :: Config
-  -> [([String], TS.Highlighter)]
-  -> FilePath
-  -> FilePath
-  -> IO (Maybe FileView)
+loadOpened ::
+  Config ->
+  [([String], TS.Highlighter)] ->
+  FilePath ->
+  FilePath ->
+  IO (Maybe FileView)
 loadOpened cfg hls root path = do
   readable <- try (looksBinary root path) :: IO (Either IOException Bool)
   case readable of
@@ -2595,19 +3015,20 @@ loadOpened cfg hls root path = do
       case gotNew of
         Left _ -> pure Nothing
         Right newTxt -> do
-          let newLs = T.lines newTxt
-              fv0 =
-                FileView
-                  { fvPath = path
-                  , fvBase = newLs
-                  , fvEd = newEdState 0 newLs
-                  , fvRows = []
-                  , fvRuns = []
-                  , fvToks = []
-                  , fvStale = False
-                  , fvHighlighted = False
-                  , fvHl = TS.highlighterFor hls path
-                  }
+          let
+            newLs = T.lines newTxt
+            fv0 =
+              FileView
+                { fvPath = path
+                , fvBase = newLs
+                , fvEd = newEdState 0 newLs
+                , fvRows = []
+                , fvRuns = []
+                , fvToks = []
+                , fvStale = False
+                , fvHighlighted = False
+                , fvHl = TS.highlighterFor hls path
+                }
           (fv, _) <- rebuildFV (cfgSplit cfg) (T.pack root) fv0
           pure (Just fv)
 
@@ -2617,7 +3038,8 @@ closeCurrent = do
   case currentFileMay st of
     Nothing -> pure ()
     Just fv -> do
-      let i = stCurF st
+      let
+        i = stCurF st
       modify $ \s ->
         s
           { stOpened = Set.delete (fvPath fv) (stOpened s)
@@ -2631,7 +3053,8 @@ closeCurrent = do
 switchFile :: Int -> EventM Name St ()
 switchFile d = do
   st <- get
-  let n = length (stFiles st)
+  let
+    n = length (stFiles st)
   when (n > 1) $
     parkM ((stCurF st + d + n) `mod` n) 0
 
@@ -2642,20 +3065,22 @@ openPicker = do
   st <- get
   files <- liftIO (listFiles (stRoot st))
   modify $ \s ->
-    s { stPicker = Just (refreshPicker (Picker "" files [] 0)) }
+    s {stPicker = Just (refreshPicker (Picker "" files [] 0))}
 
 -- The picker narrowed to what the session already has open.
 openBufferPicker :: EventM Name St ()
 openBufferPicker = do
   st <- get
   modify $ \s ->
-    s { stPicker = Just (refreshPicker (Picker "" (map fvPath (stFiles st)) [] 0)) }
+    s {stPicker = Just (refreshPicker (Picker "" (map fvPath (stFiles st)) [] 0))}
 
 refreshPicker :: Picker -> Picker
 refreshPicker pk =
-  let q = pkInput pk
-      scored = mapMaybe (\path -> fmap (\sc -> (sc, path)) (fuzzyScore q path)) (pkAll pk)
-  in pk { pkMatches = take 200 (map snd (sortOn fst scored)), pkSel = 0 }
+  let
+    q = pkInput pk
+    scored = mapMaybe (\path -> fmap (\sc -> (sc, path)) (fuzzyScore q path)) (pkAll pk)
+  in
+    pk {pkMatches = take 200 (map snd (sortOn fst scored)), pkSel = 0}
 
 -- Case-insensitive subsequence match; lower scores first. Prefers
 -- matches inside the file name, then tight spans, then short paths.
@@ -2663,25 +3088,27 @@ fuzzyScore :: Text -> FilePath -> Maybe (Int, Int, Int)
 fuzzyScore q path
   | T.null q = Just (0, 0, length path)
   | otherwise =
-      let ql = map toLower (T.unpack q)
-          pl = map toLower path
-          base = map toLower (takeFileName path)
-          walk needle hay firstPos lastPos =
-            case (needle, hay) of
-              ([], _) -> Just (firstPos, lastPos)
-              (_, []) -> Nothing
-              (c : cs, (i, h) : hs) ->
-                if c == h
-                  then walk cs hs (if firstPos < 0 then i else firstPos) i
-                  else walk needle hs firstPos lastPos
-      in case walk ql (zip [0 ..] pl) (-1) (-1) of
-           Nothing -> Nothing
-           Just (firstPos, lastPos) ->
-             Just
-               ( if ql `isSubsequenceOfStr` base then 0 else 1
-               , (lastPos - firstPos) - (length ql - 1)
-               , length path
-               )
+      let
+        ql = map toLower (T.unpack q)
+        pl = map toLower path
+        base = map toLower (takeFileName path)
+        walk needle hay firstPos lastPos =
+          case (needle, hay) of
+            ([], _) -> Just (firstPos, lastPos)
+            (_, []) -> Nothing
+            (c : cs, (i, h) : hs) ->
+              if c == h
+                then walk cs hs (if firstPos < 0 then i else firstPos) i
+                else walk needle hs firstPos lastPos
+      in
+        case walk ql (zip [0 ..] pl) (-1) (-1) of
+          Nothing -> Nothing
+          Just (firstPos, lastPos) ->
+            Just
+              ( if ql `isSubsequenceOfStr` base then 0 else 1
+              , (lastPos - firstPos) - (length ql - 1)
+              , length path
+              )
 
 isSubsequenceOfStr :: String -> String -> Bool
 isSubsequenceOfStr needle hay =
@@ -2694,46 +3121,55 @@ isSubsequenceOfStr needle hay =
 
 handlePickerKey :: V.Event -> Picker -> EventM Name St ()
 handlePickerKey ev pk =
-  let move :: Int -> EventM Name St ()
-      move d =
-        let bound = max 0 (length (pkMatches pk) - 1)
-            next = max 0 (min bound (pkSel pk + d))
-        in modify (\s -> s { stPicker = Just pk { pkSel = next } })
-      retype :: Text -> EventM Name St ()
-      retype q =
-        modify
-          (\s -> s { stPicker = Just (refreshPicker pk { pkInput = q }) })
-  in case ev of
-       V.EvKey V.KEsc [] -> modify (\s -> s { stPicker = Nothing })
-       V.EvKey V.KEnter [] -> do
-         modify (\s -> s { stPicker = Nothing })
-         case safeIdx (pkMatches pk) (pkSel pk) of
-           Just path -> openFilePath (T.pack path)
-           Nothing -> pure ()
-       V.EvKey V.KUp [] -> move (-1)
-       V.EvKey (V.KChar 'p') [V.MCtrl] -> move (-1)
-       V.EvKey V.KDown [] -> move 1
-       V.EvKey (V.KChar 'n') [V.MCtrl] -> move 1
-       V.EvKey V.KBS [] -> retype (T.dropEnd 1 (pkInput pk))
-       V.EvKey (V.KChar c) [] -> retype (T.snoc (pkInput pk) c)
-       _ -> pure ()
+  let
+    move :: Int -> EventM Name St ()
+    move d =
+      let
+        bound = max 0 (length (pkMatches pk) - 1)
+        next = max 0 (min bound (pkSel pk + d))
+      in
+        modify (\s -> s {stPicker = Just pk {pkSel = next}})
+    retype :: Text -> EventM Name St ()
+    retype q =
+      modify
+        (\s -> s {stPicker = Just (refreshPicker pk {pkInput = q})})
+  in
+    case ev of
+      V.EvKey V.KEsc [] -> modify (\s -> s {stPicker = Nothing})
+      V.EvKey V.KEnter [] -> do
+        modify (\s -> s {stPicker = Nothing})
+        case safeIdx (pkMatches pk) (pkSel pk) of
+          Just path -> openFilePath (T.pack path)
+          Nothing -> pure ()
+      V.EvKey V.KUp [] -> move (-1)
+      V.EvKey (V.KChar 'p') [V.MCtrl] -> move (-1)
+      V.EvKey V.KDown [] -> move 1
+      V.EvKey (V.KChar 'n') [V.MCtrl] -> move 1
+      V.EvKey V.KBS [] -> retype (T.dropEnd 1 (pkInput pk))
+      V.EvKey (V.KChar c) [] -> retype (T.snoc (pkInput pk) c)
+      _ -> pure ()
 
 pickerLayer :: Picker -> Widget Name
 pickerLayer pk =
-  let visibleCount = 15
-      start = max 0 (pkSel pk - (visibleCount - 1))
-      shown = take visibleCount (drop start (zip [0 ..] (pkMatches pk)))
-      matchRow (i, path) =
-        let line = padRight Max (txt (" " <> shortPath 66 (T.pack path)))
-        in if i == pkSel pk then withDefAttr selAttr line else line
-      counter =
-        tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
-  in C.centerLayer . B.border . hLimit 70 $
-       vBox
-         ( withDefAttr statusAttr
-             (padRight Max (txt (" file: " <> pkInput pk <> "\9612  " <> counter)))
-             : map matchRow shown
-         )
+  let
+    visibleCount = 15
+    start = max 0 (pkSel pk - (visibleCount - 1))
+    shown = take visibleCount (drop start (zip [0 ..] (pkMatches pk)))
+    matchRow (i, path) =
+      let
+        line = padRight Max (txt (" " <> shortPath 66 (T.pack path)))
+      in
+        if i == pkSel pk then withDefAttr selAttr line else line
+    counter =
+      tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
+  in
+    C.centerLayer . B.border . hLimit 70 $
+      vBox
+        ( withDefAttr
+            statusAttr
+            (padRight Max (txt (" file: " <> pkInput pk <> "\9612  " <> counter)))
+            : map matchRow shown
+        )
 
 -- The editor escape hatch -----------------------------------------------------------
 
@@ -2743,7 +3179,8 @@ editCurrent = do
   case currentFileMay st of
     Nothing -> setMsg "no file on screen — :edit PATH opens one"
     Just fv -> do
-      let (row, _) = cursorRC (fvEd fv)
+      let
+        (row, _) = cursorRC (fvEd fv)
       launchEditor (stRoot st </> fvPath fv) (row + 1)
 
 -- Suspend the TUI, run the user's editor on the file at the given line,
@@ -2755,39 +3192,65 @@ launchEditor file line = do
     (cmd, args) <- editorInvocation file line
     got <-
       ( try $ do
-          (_, _, _, ph) <- createProcess (proc cmd args) { delegate_ctlc = True }
+          (_, _, _, ph) <- createProcess (proc cmd args) {delegate_ctlc = True}
           void (waitForProcess ph)
-      )
-        :: IO (Either IOException ())
+      ) ::
+        IO (Either IOException ())
     pure $ case got of
-      Left _ -> st { stMsg = "could not launch " <> T.pack cmd }
+      Left _ -> st {stMsg = "could not launch " <> T.pack cmd}
       Right () -> st
 
--- $EDITOR, hx-aware: helix takes file:line, the classic editors take
--- +line, anything unrecognized just gets the file.
+{- $EDITOR, hx-aware: helix takes file:line, the classic editors take
++line, anything unrecognized just gets the file.
+-}
 editorInvocation :: FilePath -> Int -> IO (String, [String])
 editorInvocation file line = do
   mEd <- lookupEnv "EDITOR"
-  let editorWords = words (fromMaybe "hx" mEd)
-      (cmd, extraArgs) = case editorWords of
-        (c : extra) -> (c, extra)
-        [] -> ("hx", [])
-      name = takeFileName cmd
-      positional
-        | name `elem` ["hx", "helix"] = [file ++ ":" ++ show line]
-        | name `elem` ["vi", "vim", "nvim", "nano", "emacs", "kak"] =
-            ["+" ++ show line, file]
-        | otherwise = [file]
+  let
+    editorWords = words (fromMaybe "hx" mEd)
+    (cmd, extraArgs) = case editorWords of
+      (c : extra) -> (c, extra)
+      [] -> ("hx", [])
+    name = takeFileName cmd
+    positional
+      | name `elem` ["hx", "helix"] = [file ++ ":" ++ show line]
+      | name `elem` ["vi", "vim", "nvim", "nano", "emacs", "kak"] =
+          ["+" ++ show line, file]
+      | otherwise = [file]
   pure (cmd, extraArgs ++ positional)
 
 -- Attributes -----------------------------------------------------------------------
 
-headerAttr, headerFileAttr, headerOkAttr, cursorMarkAttr, addedMarkAttr,
-  removedMarkAttr, ctxMarkAttr, removedTextAttr, selAttr, selDimAttr,
-  dimAttr, reviewedDimAttr, curRunAttr, norAttr, insAttr, msgAttr,
-  hintAttr, statusAttr, borderAttr, lineNrAttr, lineNrCurAttr,
-  trayFileAttr, trayFileCurAttr, flagMarkAttr, questionMarkAttr,
-  doneMarkAttr, pendingMarkAttr, lineNrDoneAttr, headerRebaseAttr :: AttrName
+headerAttr
+  , headerFileAttr
+  , headerOkAttr
+  , cursorMarkAttr
+  , addedMarkAttr
+  , removedMarkAttr
+  , ctxMarkAttr
+  , removedTextAttr
+  , selAttr
+  , selDimAttr
+  , dimAttr
+  , reviewedDimAttr
+  , curRunAttr
+  , norAttr
+  , insAttr
+  , msgAttr
+  , hintAttr
+  , statusAttr
+  , borderAttr
+  , lineNrAttr
+  , lineNrCurAttr
+  , trayFileAttr
+  , trayFileCurAttr
+  , flagMarkAttr
+  , questionMarkAttr
+  , doneMarkAttr
+  , pendingMarkAttr
+  , lineNrDoneAttr
+  , headerRebaseAttr ::
+    AttrName
 headerAttr = attrName "header"
 headerFileAttr = headerAttr <> attrName "file"
 headerOkAttr = headerAttr <> attrName "ok"
@@ -2821,7 +3284,7 @@ pendingMarkAttr = attrName "pendingMark"
 -- A theme scope may carry a background; the border glyphs must not, or
 -- the whole cell fills in and the thin bar reads as a thick one.
 fgOnly :: V.Attr -> V.Attr
-fgOnly a = a { V.attrBackColor = V.Default }
+fgOnly a = a {V.attrBackColor = V.Default}
 
 -- Helix-style scopes the tree-sitter path colors: top-level entries carry
 -- built-in fallback colors so non-helix users get a sane palette, and
@@ -2846,70 +3309,96 @@ tsTopScopes =
 
 tsDeepScopes :: [Text]
 tsDeepScopes =
-  [ "keyword.control", "keyword.control.import", "keyword.control.exception"
-  , "keyword.operator", "keyword.directive"
-  , "function.method", "function.macro", "function.builtin", "function.special"
-  , "type.builtin", "type.enum.variant"
-  , "constant.builtin", "constant.builtin.boolean", "constant.character"
-  , "constant.character.escape", "constant.numeric"
-  , "string.special", "string.regexp"
+  [ "keyword.control"
+  , "keyword.control.import"
+  , "keyword.control.exception"
+  , "keyword.operator"
+  , "keyword.directive"
+  , "function.method"
+  , "function.macro"
+  , "function.builtin"
+  , "function.special"
+  , "type.builtin"
+  , "type.enum.variant"
+  , "constant.builtin"
+  , "constant.builtin.boolean"
+  , "constant.character"
+  , "constant.character.escape"
+  , "constant.numeric"
+  , "string.special"
+  , "string.regexp"
   , "comment.block.documentation"
-  , "variable", "variable.builtin", "variable.parameter", "variable.other.member"
-  , "punctuation", "punctuation.bracket", "punctuation.delimiter"
+  , "variable"
+  , "variable.builtin"
+  , "variable.parameter"
+  , "variable.other.member"
+  , "punctuation"
+  , "punctuation.bracket"
+  , "punctuation.delimiter"
   , "punctuation.special"
-  , "markup.heading", "markup.bold", "markup.italic", "markup.list"
-  , "markup.quote", "markup.link.url", "markup.link.text", "markup.raw"
+  , "markup.heading"
+  , "markup.bold"
+  , "markup.italic"
+  , "markup.list"
+  , "markup.quote"
+  , "markup.link.url"
+  , "markup.link.text"
+  , "markup.raw"
   ]
 
 mkAttrMap :: Maybe HelixTheme -> AttrMap
 mkAttrMap mth =
-  let topPair (s, c) = (tsScopeAttr s, scopeAttr mth s (fg c))
-      deepPairs = case mth of
-        Nothing -> []
-        Just th ->
-          map
-            (\s -> (tsScopeAttr s, scopeAttr mth s V.defAttr))
-            (filter (hasScope th) tsDeepScopes)
-      tsPairs = map topPair tsTopScopes ++ deepPairs
-      baseAttr =
-        let bgA = scopeAttr mth "ui.background" V.defAttr
-            fgA = scopeAttr mth "ui.text" V.defAttr
-        in V.defAttr
-             { V.attrForeColor = V.attrForeColor fgA
-             , V.attrBackColor = V.attrBackColor bgA
-             }
-      statusline = scopeAttr mth "ui.statusline" (V.white `on` V.brightBlack)
-      selection =
-        scopeAttr mth "ui.selection.primary" (V.defAttr `V.withStyle` V.reverseVideo)
-      uiPairs =
-        [ (headerAttr, statusline `V.withStyle` V.bold)
-        , (headerRebaseAttr, scopeAttr mth "warning" (fg V.brightYellow) `V.withStyle` V.bold)
-        , (headerFileAttr, scopeAttr mth "markup.heading" (fg V.brightYellow))
-        , (headerOkAttr, scopeAttr mth "diff.plus" (fg V.brightGreen))
-        , (cursorMarkAttr, fg V.yellow)
-        , (addedMarkAttr, scopeAttr mth "diff.plus" (fg V.green) `V.withStyle` V.bold)
-        , (removedMarkAttr, scopeAttr mth "diff.minus" (fg V.red))
-        , (ctxMarkAttr, scopeAttr mth "comment" (fg V.brightBlack))
-        , (removedTextAttr, scopeAttr mth "diff.minus" (fg V.red))
-        , (selAttr, selection)
-        , (selDimAttr, selection `V.withStyle` V.dim)
-        , (dimAttr, scopeAttr mth "comment" (fg V.brightBlack))
-        , (reviewedDimAttr, V.defAttr `V.withStyle` V.dim)
-        , (curRunAttr, fgOnly (scopeAttr mth "diff.delta" (fg V.brightBlue)))
-        , (norAttr, scopeAttr mth "ui.statusline.normal" ((V.black `on` V.blue) `V.withStyle` V.bold))
-        , (insAttr, scopeAttr mth "ui.statusline.insert" ((V.black `on` V.green) `V.withStyle` V.bold))
-        , (msgAttr, scopeAttr mth "warning" (fg V.yellow))
-        , (hintAttr, scopeAttr mth "comment" (fg V.brightBlack))
-        , (statusAttr, statusline)
-        , (lineNrAttr, scopeAttr mth "ui.linenr" (fg V.brightBlack))
-        , (lineNrCurAttr, scopeAttr mth "ui.linenr.selected" (fg V.yellow))
-        , (lineNrDoneAttr, scopeAttr mth "ui.linenr" (fg V.brightBlack) `V.withStyle` V.dim)
-        , (borderAttr, fgOnly (scopeAttr mth "ui.linenr" (fg V.brightBlack)))
-        , (trayFileAttr, scopeAttr mth "markup.heading" (V.defAttr `V.withStyle` V.bold))
-        , (trayFileCurAttr, scopeAttr mth "markup.heading" (fg V.brightYellow) `V.withStyle` V.bold)
-        , (flagMarkAttr, scopeAttr mth "warning" (fg V.brightYellow))
-        , (questionMarkAttr, scopeAttr mth "info" (fg V.brightBlue))
-        , (doneMarkAttr, scopeAttr mth "diff.plus" (fg V.green))
-        , (pendingMarkAttr, scopeAttr mth "warning" (fg V.yellow))
-        ]
-  in attrMap baseAttr (tsPairs ++ uiPairs)
+  let
+    topPair (s, c) = (tsScopeAttr s, scopeAttr mth s (fg c))
+    deepPairs = case mth of
+      Nothing -> []
+      Just th ->
+        map
+          (\s -> (tsScopeAttr s, scopeAttr mth s V.defAttr))
+          (filter (hasScope th) tsDeepScopes)
+    tsPairs = map topPair tsTopScopes ++ deepPairs
+    baseAttr =
+      let
+        bgA = scopeAttr mth "ui.background" V.defAttr
+        fgA = scopeAttr mth "ui.text" V.defAttr
+      in
+        V.defAttr
+          { V.attrForeColor = V.attrForeColor fgA
+          , V.attrBackColor = V.attrBackColor bgA
+          }
+    statusline = scopeAttr mth "ui.statusline" (V.white `on` V.brightBlack)
+    selection =
+      scopeAttr mth "ui.selection.primary" (V.defAttr `V.withStyle` V.reverseVideo)
+    uiPairs =
+      [ (headerAttr, statusline `V.withStyle` V.bold)
+      , (headerRebaseAttr, scopeAttr mth "warning" (fg V.brightYellow) `V.withStyle` V.bold)
+      , (headerFileAttr, scopeAttr mth "markup.heading" (fg V.brightYellow))
+      , (headerOkAttr, scopeAttr mth "diff.plus" (fg V.brightGreen))
+      , (cursorMarkAttr, fg V.yellow)
+      , (addedMarkAttr, scopeAttr mth "diff.plus" (fg V.green) `V.withStyle` V.bold)
+      , (removedMarkAttr, scopeAttr mth "diff.minus" (fg V.red))
+      , (ctxMarkAttr, scopeAttr mth "comment" (fg V.brightBlack))
+      , (removedTextAttr, scopeAttr mth "diff.minus" (fg V.red))
+      , (selAttr, selection)
+      , (selDimAttr, selection `V.withStyle` V.dim)
+      , (dimAttr, scopeAttr mth "comment" (fg V.brightBlack))
+      , (reviewedDimAttr, V.defAttr `V.withStyle` V.dim)
+      , (curRunAttr, fgOnly (scopeAttr mth "diff.delta" (fg V.brightBlue)))
+      , (norAttr, scopeAttr mth "ui.statusline.normal" ((V.black `on` V.blue) `V.withStyle` V.bold))
+      , (insAttr, scopeAttr mth "ui.statusline.insert" ((V.black `on` V.green) `V.withStyle` V.bold))
+      , (msgAttr, scopeAttr mth "warning" (fg V.yellow))
+      , (hintAttr, scopeAttr mth "comment" (fg V.brightBlack))
+      , (statusAttr, statusline)
+      , (lineNrAttr, scopeAttr mth "ui.linenr" (fg V.brightBlack))
+      , (lineNrCurAttr, scopeAttr mth "ui.linenr.selected" (fg V.yellow))
+      , (lineNrDoneAttr, scopeAttr mth "ui.linenr" (fg V.brightBlack) `V.withStyle` V.dim)
+      , (borderAttr, fgOnly (scopeAttr mth "ui.linenr" (fg V.brightBlack)))
+      , (trayFileAttr, scopeAttr mth "markup.heading" (V.defAttr `V.withStyle` V.bold))
+      , (trayFileCurAttr, scopeAttr mth "markup.heading" (fg V.brightYellow) `V.withStyle` V.bold)
+      , (flagMarkAttr, scopeAttr mth "warning" (fg V.brightYellow))
+      , (questionMarkAttr, scopeAttr mth "info" (fg V.brightBlue))
+      , (doneMarkAttr, scopeAttr mth "diff.plus" (fg V.green))
+      , (pendingMarkAttr, scopeAttr mth "warning" (fg V.yellow))
+      ]
+  in
+    attrMap baseAttr (tsPairs ++ uiPairs)

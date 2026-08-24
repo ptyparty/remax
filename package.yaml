@@ -1,0 +1,100 @@
+name: remax
+version: 0.1.0.0
+github: "flipstone/remax"
+license: MIT
+author: "Flipstone Technology Partners, Inc"
+maintainer: "maintainers@flipstone.com"
+copyright: "2026 Flipstone Technology Partners, Inc"
+synopsis: Hunk review with tracked verdicts and in-place editing
+description: |
+  Hunk-by-hunk code review in the terminal: the whole file on screen,
+  hunks decorated in place by a live diff, editing anywhere with
+  helix-flavored modal keys, and per-line content-keyed verdicts
+  (reviewed / flagged / questioned) that survive rebases.
+
+extra-source-files:
+  - README.md
+  - vendor/tree-sitter/include/tree_sitter/api.h
+  - vendor/tree-sitter/src/*.h
+  - vendor/grammars/*/highlights.scm
+  - vendor/grammars/*/src/*.h
+  - vendor/grammars/*/src/tree_sitter/*.h
+  - vendor/grammars/QUERY-LICENSE.md
+  - vendor/themes/*.toml
+  - vendor/themes/THEME-LICENSE.md
+
+flags:
+  ci:
+    description: Stricter ghc options for CI, not intended for end-use.
+    manual: true
+    default: false
+
+executables:
+  remax:
+    main: Main.hs
+    source-dirs:
+      - app
+      - src
+    language: Haskell2010
+    ghc-options:
+      - -Wall
+      - -threaded
+    when:
+      - condition: flag(ci)
+        ghc-options:
+          - -Werror
+          - -Wcompat
+          - -Widentities
+          - -Wpartial-fields
+    c-sources:
+      - cbits/shim.c
+      - vendor/tree-sitter/src/lib.c
+      - vendor/grammars/haskell/src/parser.c
+      - vendor/grammars/haskell/src/scanner.c
+      - vendor/grammars/purescript/src/parser.c
+      - vendor/grammars/purescript/src/scanner.c
+      - vendor/grammars/yaml/src/parser.c
+      - vendor/grammars/json/src/parser.c
+      - vendor/grammars/toml/src/parser.c
+      - vendor/grammars/toml/src/scanner.c
+      - vendor/grammars/hcl/src/parser.c
+      - vendor/grammars/hcl/src/scanner.c
+      - vendor/grammars/sql/src/parser.c
+      - vendor/grammars/sql/src/scanner.c
+      - vendor/grammars/bash/src/parser.c
+      - vendor/grammars/bash/src/scanner.c
+      - vendor/grammars/nu/src/parser.c
+      - vendor/grammars/nu/src/scanner.c
+      - vendor/grammars/markdown/src/parser.c
+      - vendor/grammars/markdown/src/scanner.c
+    cxx-sources:
+      - vendor/grammars/yaml/src/scanner.cc
+    extra-libraries:
+      - stdc++
+    # Grammar sources find their own headers via quote-includes (the
+    # vendored files are patched from angle to quote form), so only the
+    # runtime's directories are on the global include path — a global
+    # grammar dir would let one grammar's ABI-versioned parser.h shadow
+    # another's.
+    include-dirs:
+      - vendor/tree-sitter/include
+      - vendor/tree-sitter/src
+    cc-options: -O1 -std=gnu11 -D_DEFAULT_SOURCE -D_BSD_SOURCE
+    dependencies:
+      - array
+      - base >= 4.17 && < 5
+      - brick >= 2.0
+      - bytestring
+      - containers
+      - Diff
+      - directory
+      - file-embed
+      - filepath
+      - fsnotify
+      - mtl
+      - process
+      - SHA
+      - sqlite-simple
+      - text
+      - vty >= 6.0
+      - vty-crossplatform

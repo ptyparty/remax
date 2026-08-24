@@ -6,28 +6,36 @@
 -- the same tolerance the theme loader practices.
 module Remax.Config
   ( Config (..)
+  , KeyMode (..)
   , defaultConfig
   , loadConfig
+  , persistSetting
   , loadIgnores
   , ignoredPath
   ) where
 
 import Control.Exception (IOException, try)
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Read as TR
-import System.Directory (getHomeDirectory)
-import System.FilePath ((</>))
+import System.Directory (createDirectoryIfMissing, getHomeDirectory)
+import System.FilePath (takeDirectory, (</>))
 
 import Data.List (isPrefixOf)
 import System.FilePath (dropTrailingPathSeparator)
 
 import Remax.DiffModel (SplitConfig (..), defaultSplitConfig)
 
+-- Which keybinding family drives the buffer: helix-style modal, or
+-- modeless emacs chords.
+data KeyMode = KeysHelix | KeysEmacs
+  deriving (Eq)
+
 data Config = Config
-  { cfgScrolloff :: Int
+  { cfgKeys :: KeyMode
+  , cfgScrolloff :: Int
   , cfgNoteWrap :: Int
   , cfgNoteOnFlag :: Bool -- ! and ? open the note popup immediately
   , cfgSplit :: SplitConfig
@@ -36,34 +44,60 @@ data Config = Config
 defaultConfig :: Config
 defaultConfig =
   Config
-    { cfgScrolloff = 5
+    { cfgKeys = KeysHelix
+    , cfgScrolloff = 5
     , cfgNoteWrap = 58
     , cfgNoteOnFlag = True
     , cfgSplit = defaultSplitConfig
     }
 
+configPath :: IO FilePath
+configPath = do
+  home <- getHomeDirectory
+  pure (home </> ".config" </> "remax" </> "config.toml")
+
 loadConfig :: IO Config
 loadConfig = do
-  home <- getHomeDirectory
-  got <-
-    try (TIO.readFile (home </> ".config" </> "remax" </> "config.toml"))
-      :: IO (Either IOException Text)
+  path <- configPath
+  got <- try (TIO.readFile path) :: IO (Either IOException Text)
   pure $ case got of
     Left _ -> defaultConfig
     Right body -> fromEntries (parseEntries body)
 
-parseEntries :: Text -> [(Text, Int)]
+-- Raw key/value pairs; values may be numbers or bare words.
+parseEntries :: Text -> [(Text, Text)]
 parseEntries body =
-  let entry line = do
-        let t = T.strip line
-        _ <- if T.null t || "#" `T.isPrefixOf` t then Nothing else Just ()
-        let (lhs, rhs) = T.breakOn "=" t
-        _ <- if T.null rhs then Nothing else Just ()
-        n <- case TR.signed TR.decimal (T.strip (T.drop 1 rhs)) of
-          Right (v, rest) | T.null (T.strip rest) -> Just v
-          _ -> Nothing
-        pure (T.strip lhs, n)
-  in mapMaybe entry (T.lines body)
+  let
+    entry line = do
+      let
+        t = T.strip line
+      _ <- if T.null t || "#" `T.isPrefixOf` t then Nothing else Just ()
+      let
+        (lhs, rhs) = T.breakOn "=" t
+      _ <- if T.null rhs then Nothing else Just ()
+      pure (T.strip lhs, T.strip (T.drop 1 rhs))
+  in
+    mapMaybe entry (T.lines body)
+
+-- Persist one setting: replace its line in the config file (create the
+-- file if needed), keeping everything else — comments included — as-is.
+persistSetting :: Text -> Text -> IO ()
+persistSetting key value = do
+  path <- configPath
+  got <- try (TIO.readFile path) :: IO (Either IOException Text)
+  let
+    body = either (const "") id got
+    ls = T.lines body
+    isKeyLine l = case parseEntries l of
+      ((k, _) : _) -> k == key
+      [] -> False
+    newLine = key <> " = " <> value
+    replaced =
+      if any isKeyLine ls
+        then map (\l -> if isKeyLine l then newLine else l) ls
+        else ls ++ [newLine]
+  createDirectoryIfMissing True (takeDirectory path)
+  TIO.writeFile path (T.unlines replaced)
 
 -- Per-repository exclusions: .remaxignore at the repo root, one pattern
 -- per line ('#' comments). Two forms: a path prefix, matched by
@@ -73,40 +107,59 @@ parseEntries body =
 loadIgnores :: FilePath -> IO [Text]
 loadIgnores root = do
   got <-
-    try (TIO.readFile (root </> ".remaxignore"))
-      :: IO (Either IOException Text)
+    try (TIO.readFile (root </> ".remaxignore")) ::
+      IO (Either IOException Text)
   pure $ case got of
     Left _ -> []
     Right body ->
-      let keep line =
-            let t = T.strip line
-            in if T.null t || "#" `T.isPrefixOf` t then Nothing else Just t
-      in mapMaybe keep (T.lines body)
+      let
+        keep line =
+          let
+            t = T.strip line
+          in
+            if T.null t || "#" `T.isPrefixOf` t then Nothing else Just t
+      in
+        mapMaybe keep (T.lines body)
 
 ignoredPath :: [Text] -> FilePath -> Bool
 ignoredPath pats path =
-  let matchOne pat =
-        case T.stripPrefix "*" pat of
-          Just suffix -> suffix `T.isSuffixOf` T.pack path
-          Nothing ->
-            let p = dropTrailingPathSeparator (T.unpack pat)
-            in path == p || (p ++ "/") `isPrefixOf` path
-  in any matchOne pats
+  let
+    matchOne pat =
+      case T.stripPrefix "*" pat of
+        Just suffix -> suffix `T.isSuffixOf` T.pack path
+        Nothing ->
+          let
+            p = dropTrailingPathSeparator (T.unpack pat)
+          in
+            path == p || (p ++ "/") `isPrefixOf` path
+  in
+    any matchOne pats
 
-fromEntries :: [(Text, Int)] -> Config
+fromEntries :: [(Text, Text)] -> Config
 fromEntries entries =
-  let get key fallback = fromMaybe fallback (lookup key entries)
-      base = defaultConfig
-      baseSplit = cfgSplit base
-  in Config
-       { cfgScrolloff = max 0 (get "scrolloff" (cfgScrolloff base))
-       , cfgNoteWrap = max 20 (get "note-wrap" (cfgNoteWrap base))
-       , cfgNoteOnFlag = get "note-on-flag" 1 /= 0
-       , cfgSplit =
-           SplitConfig
-             { splitThreshold =
-                 max 1 (get "split-threshold" (splitThreshold baseSplit))
-             , pieceMin = max 1 (get "piece-min" (pieceMin baseSplit))
-             , pieceMax = max 2 (get "piece-max" (pieceMax baseSplit))
-             }
-       }
+  let
+    getInt key fallback =
+      case lookup key entries of
+        Nothing -> fallback
+        Just raw -> case TR.signed TR.decimal raw of
+          Right (v, rest) | T.null (T.strip rest) -> v
+          _ -> fallback
+    base = defaultConfig
+    baseSplit = cfgSplit base
+  in
+    Config
+      { cfgKeys =
+          if lookup "keys" entries == Just "emacs"
+            then KeysEmacs
+            else KeysHelix
+      , cfgScrolloff = max 0 (getInt "scrolloff" (cfgScrolloff base))
+      , cfgNoteWrap = max 20 (getInt "note-wrap" (cfgNoteWrap base))
+      , cfgNoteOnFlag = getInt "note-on-flag" (1 :: Int) /= 0
+      , cfgSplit =
+          SplitConfig
+            { splitThreshold =
+                max 1 (getInt "split-threshold" (splitThreshold baseSplit))
+            , pieceMin = max 1 (getInt "piece-min" (pieceMin baseSplit))
+            , pieceMax = max 2 (getInt "piece-max" (pieceMax baseSplit))
+            }
+      }

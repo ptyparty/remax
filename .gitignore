@@ -4,3 +4,7 @@ cabal.project.local*
 *.prof
 *.hi
 *.o
+.stack-work/
+.env
+test-all-logs/
+*~

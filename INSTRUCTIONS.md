@@ -1,12 +1,11 @@
 # Instructions
 
-- Make a port of the `dev review` command found in `~/dotfiles/bin/dev` that has full
-  editing capabilities
+- Build a hunk-by-hunk code review tool with full editing capabilities
 
 # Requirements
 
-- I want to be able to review code hunk by hunk in a way where was I've reviewed is
-  tracked a  la the `dev review` command
+- I want to be able to review code hunk by hunk in a way where what I've reviewed is
+  tracked persistently by line content
 
 - I also want to be able to edit said code inline without launching a separate editor
 
@@ -53,6 +52,11 @@
 - No GPL-encumbered dependencies in the distributed tool
 
 - Eventually offer vi-mode and emacs-mode keybindings alongside helix-style
+  (emacs mode exists; vi mode still to come)
+
+- Change settings from inside the session, persisted to the config file
+
+- Helix-style yank and paste
 
 - I must have a way to highlight and mark specific lines as reviewed rather
   than a whole chunk

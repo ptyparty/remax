@@ -1,82 +1,170 @@
-cabal-version:      3.0
-name:               remax
-version:            0.1.0.0
-synopsis:           Hunk review with tracked verdicts and in-place editing
-description:
-  A full-editing port of `dev review`: walk the change set with the whole
-  file on screen, hunks decorated in place by a live diff, edit anywhere
-  with helix-flavored modal keys, and record per-line content-keyed
-  verdicts (reviewed / flagged / questioned) that survive rebases.
-build-type:         Simple
+cabal-version: 2.2
+
+-- This file has been generated from package.yaml by hpack version 0.39.6.
+--
+-- see: https://github.com/sol/hpack
+
+name:           remax
+version:        0.1.0.0
+synopsis:       Hunk review with tracked verdicts and in-place editing
+description:    Hunk-by-hunk code review in the terminal: the whole file on screen,
+                hunks decorated in place by a live diff, editing anywhere with
+                helix-flavored modal keys, and per-line content-keyed verdicts
+                (reviewed / flagged / questioned) that survive rebases.
+homepage:       https://github.com/flipstone/remax#readme
+bug-reports:    https://github.com/flipstone/remax/issues
+author:         Flipstone Technology Partners, Inc
+maintainer:     maintainers@flipstone.com
+copyright:      2026 Flipstone Technology Partners, Inc
+license:        MIT
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+    vendor/tree-sitter/include/tree_sitter/api.h
+    vendor/tree-sitter/src/alloc.h
+    vendor/tree-sitter/src/array.h
+    vendor/tree-sitter/src/atomic.h
+    vendor/tree-sitter/src/clock.h
+    vendor/tree-sitter/src/error_costs.h
+    vendor/tree-sitter/src/get_changed_ranges.h
+    vendor/tree-sitter/src/host.h
+    vendor/tree-sitter/src/language.h
+    vendor/tree-sitter/src/length.h
+    vendor/tree-sitter/src/lexer.h
+    vendor/tree-sitter/src/parser.h
+    vendor/tree-sitter/src/point.h
+    vendor/tree-sitter/src/reduce_action.h
+    vendor/tree-sitter/src/reusable_node.h
+    vendor/tree-sitter/src/stack.h
+    vendor/tree-sitter/src/subtree.h
+    vendor/tree-sitter/src/tree.h
+    vendor/tree-sitter/src/tree_cursor.h
+    vendor/tree-sitter/src/ts_assert.h
+    vendor/tree-sitter/src/unicode.h
+    vendor/tree-sitter/src/wasm_store.h
+    vendor/grammars/bash/highlights.scm
+    vendor/grammars/haskell/highlights.scm
+    vendor/grammars/hcl/highlights.scm
+    vendor/grammars/json/highlights.scm
+    vendor/grammars/markdown/highlights.scm
+    vendor/grammars/nu/highlights.scm
+    vendor/grammars/purescript/highlights.scm
+    vendor/grammars/sql/highlights.scm
+    vendor/grammars/toml/highlights.scm
+    vendor/grammars/yaml/highlights.scm
+    vendor/grammars/haskell/src/unicode.h
+    vendor/grammars/purescript/src/unicode.h
+    vendor/grammars/bash/src/tree_sitter/alloc.h
+    vendor/grammars/bash/src/tree_sitter/array.h
+    vendor/grammars/bash/src/tree_sitter/parser.h
+    vendor/grammars/haskell/src/tree_sitter/alloc.h
+    vendor/grammars/haskell/src/tree_sitter/array.h
+    vendor/grammars/haskell/src/tree_sitter/parser.h
+    vendor/grammars/hcl/src/tree_sitter/alloc.h
+    vendor/grammars/hcl/src/tree_sitter/array.h
+    vendor/grammars/hcl/src/tree_sitter/parser.h
+    vendor/grammars/json/src/tree_sitter/alloc.h
+    vendor/grammars/json/src/tree_sitter/array.h
+    vendor/grammars/json/src/tree_sitter/parser.h
+    vendor/grammars/markdown/src/tree_sitter/alloc.h
+    vendor/grammars/markdown/src/tree_sitter/array.h
+    vendor/grammars/markdown/src/tree_sitter/parser.h
+    vendor/grammars/nu/src/tree_sitter/alloc.h
+    vendor/grammars/nu/src/tree_sitter/array.h
+    vendor/grammars/nu/src/tree_sitter/parser.h
+    vendor/grammars/purescript/src/tree_sitter/alloc.h
+    vendor/grammars/purescript/src/tree_sitter/array.h
+    vendor/grammars/purescript/src/tree_sitter/parser.h
+    vendor/grammars/sql/src/tree_sitter/alloc.h
+    vendor/grammars/sql/src/tree_sitter/array.h
+    vendor/grammars/sql/src/tree_sitter/parser.h
+    vendor/grammars/toml/src/tree_sitter/alloc.h
+    vendor/grammars/toml/src/tree_sitter/array.h
+    vendor/grammars/toml/src/tree_sitter/parser.h
+    vendor/grammars/yaml/src/tree_sitter/parser.h
+    vendor/grammars/QUERY-LICENSE.md
+    vendor/themes/jellybeans.toml
+    vendor/themes/THEME-LICENSE.md
+
+source-repository head
+  type: git
+  location: https://github.com/flipstone/remax
+
+flag ci
+  description: Stricter ghc options for CI, not intended for end-use.
+  manual: True
+  default: False
 
 executable remax
-  main-is:          Main.hs
-  hs-source-dirs:   app, src
-  autogen-modules:  Paths_remax
+  main-is: Main.hs
   other-modules:
-    Paths_remax
-    Remax.Config
-    Remax.DiffModel
-    Remax.Git
-    Remax.Highlight
-    Remax.Key
-    Remax.Modal
-    Remax.Store
-    Remax.Theme
-    Remax.Zipper
-    Remax.TreeSitter
-    Remax.UI
-  c-sources:
-    cbits/shim.c
-    vendor/tree-sitter/src/lib.c
-    vendor/grammars/haskell/src/parser.c
-    vendor/grammars/haskell/src/scanner.c
-    vendor/grammars/purescript/src/parser.c
-    vendor/grammars/purescript/src/scanner.c
-    vendor/grammars/yaml/src/parser.c
-    vendor/grammars/json/src/parser.c
-    vendor/grammars/toml/src/parser.c
-    vendor/grammars/toml/src/scanner.c
-    vendor/grammars/hcl/src/parser.c
-    vendor/grammars/hcl/src/scanner.c
-    vendor/grammars/sql/src/parser.c
-    vendor/grammars/sql/src/scanner.c
-    vendor/grammars/bash/src/parser.c
-    vendor/grammars/bash/src/scanner.c
-    vendor/grammars/nu/src/parser.c
-    vendor/grammars/nu/src/scanner.c
-    vendor/grammars/markdown/src/parser.c
-    vendor/grammars/markdown/src/scanner.c
-
-  cxx-sources:      vendor/grammars/yaml/src/scanner.cc
-  extra-libraries:  stdc++
-  -- Grammar sources find their own headers via quote-includes (the
-  -- vendored files are patched from angle to quote form), so only the
-  -- runtime's directories are on the global include path — a global
-  -- grammar dir would let one grammar's ABI-versioned parser.h shadow
-  -- another's.
+      Remax.Config
+      Remax.DiffModel
+      Remax.Emacs
+      Remax.Git
+      Remax.Highlight
+      Remax.Key
+      Remax.Modal
+      Remax.Store
+      Remax.Theme
+      Remax.TreeSitter
+      Remax.UI
+      Remax.Zipper
+      Paths_remax
+  autogen-modules:
+      Paths_remax
+  hs-source-dirs:
+      app
+      src
+  ghc-options: -Wall -threaded
+  cc-options: -O1 -std=gnu11 -D_DEFAULT_SOURCE -D_BSD_SOURCE
   include-dirs:
-    vendor/tree-sitter/include
-    vendor/tree-sitter/src
-
-  cc-options:       -O1 -std=gnu11 -D_DEFAULT_SOURCE -D_BSD_SOURCE
+      vendor/tree-sitter/include
+      vendor/tree-sitter/src
+  c-sources:
+      cbits/shim.c
+      vendor/tree-sitter/src/lib.c
+      vendor/grammars/haskell/src/parser.c
+      vendor/grammars/haskell/src/scanner.c
+      vendor/grammars/purescript/src/parser.c
+      vendor/grammars/purescript/src/scanner.c
+      vendor/grammars/yaml/src/parser.c
+      vendor/grammars/json/src/parser.c
+      vendor/grammars/toml/src/parser.c
+      vendor/grammars/toml/src/scanner.c
+      vendor/grammars/hcl/src/parser.c
+      vendor/grammars/hcl/src/scanner.c
+      vendor/grammars/sql/src/parser.c
+      vendor/grammars/sql/src/scanner.c
+      vendor/grammars/bash/src/parser.c
+      vendor/grammars/bash/src/scanner.c
+      vendor/grammars/nu/src/parser.c
+      vendor/grammars/nu/src/scanner.c
+      vendor/grammars/markdown/src/parser.c
+      vendor/grammars/markdown/src/scanner.c
+  cxx-sources:
+      vendor/grammars/yaml/src/scanner.cc
+  extra-libraries:
+      stdc++
   build-depends:
+      Diff
+    , SHA
     , array
-    , base          >=4.17 && <5
-    , brick         >=2.0
+    , base >=4.17 && <5
+    , brick >=2.0
     , bytestring
-    , file-embed
     , containers
-    , Diff
     , directory
+    , file-embed
     , filepath
     , fsnotify
     , mtl
     , process
-    , SHA
     , sqlite-simple
     , text
-    , vty           >=6.0
+    , vty >=6.0
     , vty-crossplatform
   default-language: Haskell2010
-  ghc-options:      -Wall -threaded
+  if flag(ci)
+    ghc-options: -Werror -Wcompat -Widentities -Wpartial-fields

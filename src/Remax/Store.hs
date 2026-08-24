@@ -32,8 +32,8 @@ module Remax.Store
 import Control.Monad (unless, void)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
-import Data.Maybe (mapMaybe)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Database.SQLite.Simple
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
@@ -100,9 +100,10 @@ openStore = do
 migrate :: Connection -> IO ()
 migrate conn = do
   cols <-
-    query_ conn "PRAGMA table_info(line_verdict)"
-      :: IO [(Int, Text, Text, Int, Maybe Text, Int)]
-  let names = map (\(_, name, _, _, _, _) -> name) cols
+    query_ conn "PRAGMA table_info(line_verdict)" ::
+      IO [(Int, Text, Text, Int, Maybe Text, Int)]
+  let
+    names = map (\(_, name, _, _, _, _) -> name) cols
   unless ("line_no" `elem` names) $
     execute_ conn "ALTER TABLE line_verdict ADD COLUMN line_no INTEGER"
   unless ("note" `elem` names) $
@@ -118,7 +119,8 @@ loadVerdicts :: Connection -> Text -> IO (Map Text Verdict)
 loadVerdicts conn repo = do
   rows <-
     query conn "SELECT key, verdict FROM line_verdict WHERE repo = ?" (Only repo)
-  let parseRow (k, vt) = fmap (\v -> (k, v)) (parseVerdict vt)
+  let
+    parseRow (k, vt) = fmap (\v -> (k, v)) (parseVerdict vt)
   pure . Map.fromList . mapMaybe parseRow $ rows
 
 beginPass :: Connection -> Text -> Text -> IO Int64
@@ -137,65 +139,73 @@ finishPass conn passId =
 -- the last time it was looked at; a note already on the line survives.
 -- The commit context (sha, subject) is stamped when the review knows
 -- which commit it is looking at — a rebase stop — and is NULL otherwise.
-recordVerdicts
-  :: Connection
-  -> Text
-  -> Int64
-  -> Verdict
-  -> Maybe (Text, Text)
-  -> [(Text, Text, Text, Int)]
-  -> IO ()
+recordVerdicts ::
+  Connection ->
+  Text ->
+  Int64 ->
+  Verdict ->
+  Maybe (Text, Text) ->
+  [(Text, Text, Text, Int)] ->
+  IO ()
 recordVerdicts conn repo passId v mCommit rows =
-  let (sha, subject) = case mCommit of
-        Just (s, subj) -> (Just s, Just subj)
-        Nothing -> (Nothing, Nothing)
-      toParams (key, file, line, lineNo) =
-        (key, repo, file, line, lineNo, verdictText v, passId, sha, subject)
-  in withTransaction conn $
-       executeMany
-         conn
-         "INSERT INTO line_verdict\
-         \ (key, repo, file, line, line_no, verdict, pass_id,\
-         \  commit_sha, commit_subject, updated_at)\
-         \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))\
-         \ ON CONFLICT(key) DO UPDATE SET\
-         \   repo = excluded.repo, file = excluded.file,\
-         \   line = excluded.line, line_no = excluded.line_no,\
-         \   verdict = excluded.verdict, pass_id = excluded.pass_id,\
-         \   commit_sha = excluded.commit_sha,\
-         \   commit_subject = excluded.commit_subject,\
-         \   updated_at = excluded.updated_at"
-         (map toParams rows)
+  let
+    (sha, subject) = case mCommit of
+      Just (s, subj) -> (Just s, Just subj)
+      Nothing -> (Nothing, Nothing)
+    toParams (key, file, line, lineNo) =
+      (key, repo, file, line, lineNo, verdictText v, passId, sha, subject)
+  in
+    withTransaction conn $
+      executeMany
+        conn
+        "INSERT INTO line_verdict\
+        \ (key, repo, file, line, line_no, verdict, pass_id,\
+        \  commit_sha, commit_subject, updated_at)\
+        \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))\
+        \ ON CONFLICT(key) DO UPDATE SET\
+        \   repo = excluded.repo, file = excluded.file,\
+        \   line = excluded.line, line_no = excluded.line_no,\
+        \   verdict = excluded.verdict, pass_id = excluded.pass_id,\
+        \   commit_sha = excluded.commit_sha,\
+        \   commit_subject = excluded.commit_subject,\
+        \   updated_at = excluded.updated_at"
+        (map toParams rows)
 
 -- Attach a reviewer note to lines that already carry verdicts. Returns
 -- how many rows the note landed on. Writing a note clears any standing
 -- agent reply — the question changed, so the old answer is stale.
 recordNotes :: Connection -> Text -> Text -> [Text] -> IO Int
 recordNotes conn repo note keys =
-  let batch ks = do
-        let holes = mconcat (replicate (length ks - 1) ", ?")
-        execute
-          conn
-          (Query ("UPDATE line_verdict SET note = ?, reply = NULL WHERE repo = ? AND key IN (?" <> holes <> ")"))
-          (toRow (note, repo) <> toRow ks)
-        changes conn
-  in withTransaction conn $ do
-       counts <- mapM batch (chunks 400 keys)
-       pure (sum counts)
+  let
+    batch ks = do
+      let
+        holes = mconcat (replicate (length ks - 1) ", ?")
+      execute
+        conn
+        (Query ("UPDATE line_verdict SET note = ?, reply = NULL WHERE repo = ? AND key IN (?" <> holes <> ")"))
+        (toRow (note, repo) <> toRow ks)
+      changes conn
+  in
+    withTransaction conn $ do
+      counts <- mapM batch (chunks 400 keys)
+      pure (sum counts)
 
 -- Take the notes back off some lines. Returns how many rows changed.
 clearNotes :: Connection -> Text -> [Text] -> IO Int
 clearNotes conn repo keys =
-  let batch ks = do
-        let holes = mconcat (replicate (length ks - 1) ", ?")
-        execute
-          conn
-          (Query ("UPDATE line_verdict SET note = NULL, reply = NULL WHERE repo = ? AND note IS NOT NULL AND key IN (?" <> holes <> ")"))
-          (toRow (Only repo) <> toRow ks)
-        changes conn
-  in withTransaction conn $ do
-       counts <- mapM batch (chunks 400 keys)
-       pure (sum counts)
+  let
+    batch ks = do
+      let
+        holes = mconcat (replicate (length ks - 1) ", ?")
+      execute
+        conn
+        (Query ("UPDATE line_verdict SET note = NULL, reply = NULL WHERE repo = ? AND note IS NOT NULL AND key IN (?" <> holes <> ")"))
+        (toRow (Only repo) <> toRow ks)
+      changes conn
+  in
+    withTransaction conn $ do
+      counts <- mapM batch (chunks 400 keys)
+      pure (sum counts)
 
 -- Every note in the repo, by line key — the session's in-memory view.
 loadNotes :: Connection -> Text -> IO (Map Text Text)
@@ -227,8 +237,8 @@ replyToNote conn repo key text = do
     query
       conn
       "SELECT file, note FROM line_verdict WHERE repo = ? AND key = ?"
-      (repo, key)
-      :: IO [(Text, Maybe Text)]
+      (repo, key) ::
+      IO [(Text, Maybe Text)]
   case rows of
     [] -> pure 0
     ((file, mNote) : _) -> do
@@ -269,19 +279,20 @@ punchRows conn repo = do
       \ WHERE repo = ? AND verdict <> 'reviewed'\
       \ ORDER BY file, line_no, updated_at DESC"
       (Only repo)
-  let toPunch ((key, file, verdict, line, lineNo, note) :. (reply, sha, subject, at)) =
-        PunchRow
-          { punchKey = key
-          , punchFile = file
-          , punchVerdict = verdict
-          , punchLine = line
-          , punchLineNo = lineNo
-          , punchNote = note
-          , punchReply = reply
-          , punchCommitSha = sha
-          , punchCommitSubject = subject
-          , punchAt = at
-          }
+  let
+    toPunch ((key, file, verdict, line, lineNo, note) :. (reply, sha, subject, at)) =
+      PunchRow
+        { punchKey = key
+        , punchFile = file
+        , punchVerdict = verdict
+        , punchLine = line
+        , punchLineNo = lineNo
+        , punchNote = note
+        , punchReply = reply
+        , punchCommitSha = sha
+        , punchCommitSubject = subject
+        , punchAt = at
+        }
   pure (map toPunch rows)
 
 repoRows :: Connection -> Text -> IO [(Text, Text)]
@@ -292,27 +303,35 @@ repoRows conn repo =
 -- selection of lines).
 deleteKeys :: Connection -> Text -> [Text] -> IO ()
 deleteKeys conn repo keys =
-  let batch ks =
-        let holes = mconcat (replicate (length ks - 1) ", ?")
-        in execute
-             conn
-             (Query ("DELETE FROM line_verdict WHERE repo = ? AND key IN (?" <> holes <> ")"))
-             (toRow (Only repo) <> toRow ks)
-  in withTransaction conn $
-       mapM_ batch (chunks 400 keys)
+  let
+    batch ks =
+      let
+        holes = mconcat (replicate (length ks - 1) ", ?")
+      in
+        execute
+          conn
+          (Query ("DELETE FROM line_verdict WHERE repo = ? AND key IN (?" <> holes <> ")"))
+          (toRow (Only repo) <> toRow ks)
+  in
+    withTransaction conn $
+      mapM_ batch (chunks 400 keys)
 
 -- Batched so a repository with thousands of recorded lines stays inside
 -- sqlite's limit on parameters per statement.
 deleteFiles :: Connection -> Text -> [Text] -> IO ()
 deleteFiles conn repo files =
-  let batch fs =
-        let holes = mconcat (replicate (length fs - 1) ", ?") -- first hole below
-        in execute
-             conn
-             (Query ("DELETE FROM line_verdict WHERE repo = ? AND file IN (?" <> holes <> ")"))
-             (toRow (Only repo) <> toRow fs)
-  in withTransaction conn $
-       mapM_ batch (chunks 400 files)
+  let
+    batch fs =
+      let
+        holes = mconcat (replicate (length fs - 1) ", ?") -- first hole below
+      in
+        execute
+          conn
+          (Query ("DELETE FROM line_verdict WHERE repo = ? AND file IN (?" <> holes <> ")"))
+          (toRow (Only repo) <> toRow fs)
+  in
+    withTransaction conn $
+      mapM_ batch (chunks 400 files)
 
 chunks :: Int -> [a] -> [[a]]
 chunks _ [] = []

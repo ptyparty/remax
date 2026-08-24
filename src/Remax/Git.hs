@@ -25,6 +25,7 @@ import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import System.Directory (doesDirectoryExist)
+import qualified System.Environment as Env
 import System.Exit (ExitCode (..))
 import System.FilePath (isAbsolute, (</>))
 import System.IO.Error (catchIOError)
@@ -34,7 +35,6 @@ import System.Process
   , readCreateProcessWithExitCode
   , readProcessWithExitCode
   )
-import qualified System.Environment as Env
 
 -- What the working tree is reviewed against. The buffer on screen is
 -- always the working file (that is what editing edits), so the mode picks
@@ -65,13 +65,14 @@ repoRoot = do
 
 changedFiles :: ReviewMode -> FilePath -> IO [FilePath]
 changedFiles mode root = do
-  let args = case mode of
-        VsRef ref ->
-          ["-C", root, "diff", "--name-only", "--diff-filter=d", "--no-color", T.unpack ref]
-        VsIndex ->
-          ["-C", root, "diff", "--name-only", "--diff-filter=d", "--no-color"]
-        Untracked ->
-          ["-C", root, "ls-files", "--others", "--exclude-standard"]
+  let
+    args = case mode of
+      VsRef ref ->
+        ["-C", root, "diff", "--name-only", "--diff-filter=d", "--no-color", T.unpack ref]
+      VsIndex ->
+        ["-C", root, "diff", "--name-only", "--diff-filter=d", "--no-color"]
+      Untracked ->
+        ["-C", root, "ls-files", "--others", "--exclude-standard"]
   (code, out, _) <- readProcessWithExitCode "git" args ""
   pure $ case code of
     ExitSuccess -> filter (not . null) (lines out)
@@ -84,9 +85,10 @@ baseLines mode root path =
   case mode of
     Untracked -> pure []
     _ -> do
-      let ref = case mode of
-            VsRef r -> T.unpack r ++ ":"
-            _ -> ":"
+      let
+        ref = case mode of
+          VsRef r -> T.unpack r ++ ":"
+          _ -> ":"
       (code, out, _) <-
         readProcessWithExitCode "git" ["-C", root, "show", ref ++ path] ""
       pure $ case code of
@@ -118,8 +120,12 @@ listRefs root = do
   (code, out, _) <-
     readProcessWithExitCode
       "git"
-      [ "-C", root, "for-each-ref", "--format=%(refname:short)"
-      , "refs/heads", "refs/remotes"
+      [ "-C"
+      , root
+      , "for-each-ref"
+      , "--format=%(refname:short)"
+      , "refs/heads"
+      , "refs/remotes"
       ]
       ""
   pure $ case code of
@@ -140,13 +146,15 @@ refExists root ref = do
 -- The ref the repository treats as its mainline, for merge-base reviews.
 mainlineRef :: FilePath -> IO (Maybe Text)
 mainlineRef root =
-  let go candidates =
-        case candidates of
-          [] -> pure Nothing
-          (c : rest) -> do
-            ok <- refExists root c
-            if ok then pure (Just c) else go rest
-  in go ["origin/main", "origin/master", "main", "master"]
+  let
+    go candidates =
+      case candidates of
+        [] -> pure Nothing
+        (c : rest) -> do
+          ok <- refExists root c
+          if ok then pure (Just c) else go rest
+  in
+    go ["origin/main", "origin/master", "main", "master"]
 
 -- Where the current branch forked from the mainline: the whole-branch
 -- review base.
@@ -184,20 +192,24 @@ trackedChanges root = do
 -- common dir. Watching the literal root/.git there watches nothing.
 gitStateWatchDirs :: FilePath -> IO [FilePath]
 gitStateWatchDirs root = do
-  let resolve name = do
-        (code, out, _) <-
-          readProcessWithExitCode
-            "git"
-            ["-C", root, "rev-parse", "--path-format=absolute", name]
-            ""
-        pure $ case code of
-          ExitSuccess ->
-            let path = T.unpack (T.strip (T.pack out))
-            in if null path then [] else [path]
-          ExitFailure _ -> []
+  let
+    resolve name = do
+      (code, out, _) <-
+        readProcessWithExitCode
+          "git"
+          ["-C", root, "rev-parse", "--path-format=absolute", name]
+          ""
+      pure $ case code of
+        ExitSuccess ->
+          let
+            path = T.unpack (T.strip (T.pack out))
+          in
+            if null path then [] else [path]
+        ExitFailure _ -> []
   gitDir <- resolve "--git-dir"
   commonDir <- resolve "--git-common-dir"
-  let dirs = gitDir ++ filter (`notElem` gitDir) commonDir
+  let
+    dirs = gitDir ++ filter (`notElem` gitDir) commonDir
   pure $ case dirs of
     [] -> [root </> ".git"]
     _ -> dirs
@@ -226,8 +238,9 @@ gitStateDir root name = do
   case code of
     ExitFailure _ -> pure Nothing
     ExitSuccess -> do
-      let raw = T.unpack (T.strip (T.pack out))
-          path = if isAbsolute raw then raw else root </> raw
+      let
+        raw = T.unpack (T.strip (T.pack out))
+        path = if isAbsolute raw then raw else root </> raw
       present <- doesDirectoryExist path
       pure (if present then Just path else Nothing)
 
@@ -244,16 +257,17 @@ rebaseStatus root = do
     Just dir -> do
       done <- readFileOr "" (dir </> "done")
       todo <- readFileOr "" (dir </> "git-rebase-todo")
-      let pickWords = ["pick", "p", "edit", "e", "reword", "r", "fixup", "f", "squash", "s"]
-          pickOf l = case T.words l of
-            (verb : _ : rest)
-              | verb `elem` pickWords -> Just (T.unwords rest)
-            _ -> Nothing
-          donePicks = mapMaybe pickOf (T.lines done)
-          todoPicks = mapMaybe pickOf (T.lines todo)
-          subject = case reverse donePicks of
-            (s : _) -> s
-            [] -> ""
+      let
+        pickWords = ["pick", "p", "edit", "e", "reword", "r", "fixup", "f", "squash", "s"]
+        pickOf l = case T.words l of
+          (verb : _ : rest)
+            | verb `elem` pickWords -> Just (T.unwords rest)
+          _ -> Nothing
+        donePicks = mapMaybe pickOf (T.lines done)
+        todoPicks = mapMaybe pickOf (T.lines todo)
+        subject = case reverse donePicks of
+          (s : _) -> s
+          [] -> ""
       conflicted <- hasUnmerged root
       pure . Just $
         RebaseStatus
@@ -271,9 +285,10 @@ rebaseStatus root = do
         Just dir -> do
           nextT <- readFileOr "0" (dir </> "next")
           lastT <- readFileOr "0" (dir </> "last")
-          let num t = case reads (T.unpack (T.strip t)) of
-                [(n, "")] -> n
-                _ -> 0
+          let
+            num t = case reads (T.unpack (T.strip t)) of
+              [(n, "")] -> n
+              _ -> 0
           conflicted <- hasUnmerged root
           pure . Just $
             RebaseStatus
@@ -313,12 +328,16 @@ headCommit root = do
 runGit :: FilePath -> [String] -> IO (Either Text ())
 runGit root args = do
   environment <- Env.getEnvironment
-  let p =
-        (proc "git" (["-C", root] ++ args))
-          { env = Just (("GIT_EDITOR", "true") : filter ((/= "GIT_EDITOR") . fst) environment) }
+  let
+    p =
+      (proc "git" (["-C", root] ++ args))
+        { env = Just (("GIT_EDITOR", "true") : filter ((/= "GIT_EDITOR") . fst) environment)
+        }
   (code, _, err) <- readCreateProcessWithExitCode p ""
   pure $ case code of
     ExitSuccess -> Right ()
     ExitFailure _ ->
-      let msg = T.strip (T.pack err)
-      in Left (if T.null msg then "git " <> T.pack (unwords args) <> " failed" else msg)
+      let
+        msg = T.strip (T.pack err)
+      in
+        Left (if T.null msg then "git " <> T.pack (unwords args) <> " failed" else msg)

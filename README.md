@@ -1,9 +1,8 @@
 # remax
 
-A full-editing port of `dev review`: walk a change set hunk by hunk with
-the **whole file on screen**, edit it **in place** with helix-flavored
-modal keys, and record per-line, content-keyed verdicts that survive
-rebases. Runs in a plain terminal (zellij-friendly).
+Hunk-by-hunk code review with the **whole file on screen**: edit it
+**in place** with helix-flavored modal keys, and record per-line,
+content-keyed verdicts that survive rebases. Runs in a plain terminal (zellij-friendly).
 
 ```sh
 remax                 # review everything uncommitted (working tree vs HEAD)
@@ -18,10 +17,9 @@ remax -C DIR ...      # any of the above, as if started in DIR
 ```
 
 The buffer on screen is always the working file — editing edits the real
-file — so the mode picks the *base* the diff decorates against. (This is
-the one deliberate departure from `dev review`, whose default reviewed the
-index; with a directly editable buffer, index-vs-HEAD review of files that
-differ from the worktree isn't coherent.)
+file — so the mode picks the *base* the diff decorates against. (There is
+deliberately no index-vs-HEAD mode: with a directly editable buffer,
+reviewing an index that differs from the worktree isn't coherent.)
 
 ## Persistent by design
 
@@ -42,7 +40,7 @@ line that changes after being reviewed comes back as pending by itself.
   tool starts in **pending-only** mode: fully *reviewed* hunks fold under
   their file line as a dim `·N✓` count and `]`/`[` skip them; flagged and
   questioned hunks still count as pending — they need another look — so
-  they stay listed and navigable. `p` switches to showing (and walking)
+  they stay listed and navigable. `Space p` switches to showing (and walking)
   every hunk. The current hunk always shows either
   way. `{` / `}` scroll the tray; it auto-centers on the current hunk
   when you jump. Long paths compress like `s/R/Quote.hs` so the file
@@ -95,6 +93,9 @@ Normal mode:
 | `Q` | reflow to 80 columns, comment-aware: the selection, or the same-prefixed paragraph around the cursor, keeping indentation + comment leader (`--`, `-- \|`, `//`, `#`, `;;`…) on every line |
 | `r` + char | replace every character of the selection (or under the cursor) with that character, helix-style |
 | `u` | undo |
+| `y` | yank the selection (or cursor cell) — line-wise for `x` selections |
+| `p` / `P` | paste after / before: whole lines below/above for a line-wise yank, after/at the cursor otherwise; the paste is selected |
+| `Space` | menu (helix-style infobox): `f` file picker, `b` open files, `n` note popup, `e` `$EDITOR` here, `p` pending filter |
 | `.` | repeat the last insert session (the entering command plus what was typed), helix-style — `c`-fix-`Esc` then `.` applies the same change at the cursor |
 | `Enter` | **accept the selection as reviewed** — a selection is required, so what you accept is always visibly highlighted (`X Enter` for the hunk you're looking at). Completing a hunk jumps to the next pending one; a partial mark steps to the next line |
 | `!` / `?` | flag-to-return-to / question — the selection's lines, or the whole current hunk with none. The note popup opens immediately for the reason (`note-on-flag = 0` in the config turns that off); discarding keeps the mark |
@@ -133,6 +134,22 @@ normal mode and **writes the file to disk**. Normal-mode edits that don't
 enter insert (`d`, undo) write immediately; ones that do (`c`, `o`)
 write when insert exits. There is no explicit save and no dirty state in
 normal mode — what you see in normal mode is what's on disk.
+
+## Emacs keys
+
+`keys = emacs` in the config (or `:set keys emacs`, live) swaps the
+buffer to modeless emacs editing: printable keys self-insert and write
+through on every edit. `C-f/b/n/p` and arrows move, `C-a`/`C-e` line
+ends, `M-f`/`M-b` words, `M-<`/`M->` file ends; `C-space` sets the mark
+and the region is the selection the review verbs consume; `C-w`/`M-w`
+kill/copy the region, `C-k` kills to end of line, `C-y` yanks,
+`C-_` (aka `C-/`) undoes, `C-g`/`Esc` clears the mark. `M-x` opens the
+command line, `C-s` the search prompt. Review verbs live behind the
+`C-c` prefix with the same letters as the helix keys — `C-c Enter`
+accept, `C-c !` / `C-c ?` flag/question, `C-c x` select hunk,
+`C-c ]`/`C-c [` hunks, `C-c p` pending filter, `C-c f` files — and
+`C-x C-c` quits, `C-x C-s` saves (edits already write through). The
+note popup keeps its modal keys in either keymap.
 
 ## The : command line
 
@@ -225,7 +242,11 @@ piece-min = 6         # smaller pieces merge forward (within a function)
 piece-max = 32        # bigger pieces keep splitting
 ```
 
-Unknown keys and unparsable lines are ignored. A `.remaxignore` at the
+`keys = helix` (default) or `keys = emacs` picks the keybinding family.
+Every setting can also be changed live from inside the session:
+`:set` lists current values, `:set KEY` shows one, and `:set KEY VALUE`
+applies immediately (split knobs re-split on the spot) and persists to
+the config file. Unknown keys and unparsable lines are ignored. A `.remaxignore` at the
 repository root (one pattern per line, `#` comments) keeps files out of
 the change set entirely: a path prefix matched by component (`gen`
 covers `gen/a.txt`, not `generated.hs`) or a `*suffix` form
@@ -238,7 +259,7 @@ the whole change set.
 
 Each changed line is keyed by content — repository, file, the line text
 with its `+`/`-` marker, and a copy ordinal for identical twins — under
-the `remax/1` scheme (deliberately incompatible with dev review's db).
+the `remax/1` scheme.
 Keys carry no positions, so verdicts survive line shifts, rebases, and
 hunk-boundary changes. A hunk is pending while any of its lines lacks a
 verdict; add one line to a reviewed hunk and it comes back with the old
@@ -295,6 +316,15 @@ tree-sitter, no helix installation, and **no GPL anywhere in the
 dependency tree**. Languages without a vendored grammar render plain —
 vendoring another is copying its sources under vendor/grammars and adding
 one table entry.
+
+## Development
+
+The repo follows the flipstone house layout: `./scripts/bootstrap` once
+(creates the shared stack volume and `.env`), then `./scripts/test`
+builds in the `haskell-tools` dev container (`compose.yaml`), and
+`./scripts/build` formats with fourmolu first. `package.yaml` is the
+source of truth — `remax.cabal` is hpack-generated. Plain `cabal build`
+also works outside the container.
 
 ## Known v1 edges
 

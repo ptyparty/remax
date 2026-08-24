@@ -54,24 +54,26 @@ usage =
 
 parseArgs :: [String] -> Either String (Maybe FilePath, Cmd)
 parseArgs args0 =
-  let go mDir args =
-        case args of
-          ("-C" : dir : rest) -> go (Just dir) rest
-          ["-C"] -> Left usage
-          [] -> Right (mDir, Review ArgHead)
-          ["--unstaged"] -> Right (mDir, Review ArgUnstaged)
-          ["--untracked"] -> Right (mDir, Review ArgUntracked)
-          ["--branch"] -> Right (mDir, Review ArgBranch)
-          ["--base", ref] -> Right (mDir, Review (ArgBase (T.pack ref)))
-          ["forget"] -> Right (mDir, Forget)
-          ["list"] -> Right (mDir, List False)
-          ["list", "--json"] -> Right (mDir, List True)
-          ["--version"] -> Right (mDir, ShowVersion)
-          ("reply" : key : rest)
-            | not (null rest) ->
-                Right (mDir, Reply (T.pack key) (T.pack (unwords rest)))
-          _ -> Left usage
-  in go Nothing args0
+  let
+    go mDir args =
+      case args of
+        ("-C" : dir : rest) -> go (Just dir) rest
+        ["-C"] -> Left usage
+        [] -> Right (mDir, Review ArgHead)
+        ["--unstaged"] -> Right (mDir, Review ArgUnstaged)
+        ["--untracked"] -> Right (mDir, Review ArgUntracked)
+        ["--branch"] -> Right (mDir, Review ArgBranch)
+        ["--base", ref] -> Right (mDir, Review (ArgBase (T.pack ref)))
+        ["forget"] -> Right (mDir, Forget)
+        ["list"] -> Right (mDir, List False)
+        ["list", "--json"] -> Right (mDir, List True)
+        ["--version"] -> Right (mDir, ShowVersion)
+        ("reply" : key : rest)
+          | not (null rest) ->
+              Right (mDir, Reply (T.pack key) (T.pack (unwords rest)))
+        _ -> Left usage
+  in
+    go Nothing args0
 
 review :: ModeArg -> IO ()
 review marg = do
@@ -107,19 +109,24 @@ forget = do
   here <- getCurrentDirectory
   conn <- openStore
   rows <- repoRows conn (T.pack root)
-  let prefix =
-        if here == root
-          then ""
-          else T.pack (drop (length root + 1) here) <> "/"
-      underHere (_, f) = T.null prefix || prefix `T.isPrefixOf` f
-      doomed = filter underHere rows
-      files = nub (map snd doomed)
+  let
+    prefix =
+      if here == root
+        then ""
+        else T.pack (drop (length root + 1) here) <> "/"
+    underHere (_, f) = T.null prefix || prefix `T.isPrefixOf` f
+    doomed = filter underHere rows
+    files = nub (map snd doomed)
   if null doomed
     then putStrLn ("Nothing is recorded for the files under " ++ here ++ ".")
     else do
       putStrLn
-        ( show (length doomed) ++ " line verdict(s) across "
-            ++ show (length files) ++ " file(s) under " ++ here ++ "."
+        ( show (length doomed)
+            ++ " line verdict(s) across "
+            ++ show (length files)
+            ++ " file(s) under "
+            ++ here
+            ++ "."
         )
       putStrLn "  Forgetting them means reviewing those changes again from scratch."
       putStr "  Forget them? [y/n]: "
@@ -142,12 +149,18 @@ list asJson = do
       if null rows
         then putStrLn "No flagged or questioned lines recorded for this repository."
         else forM_ rows $ \row -> do
-          let position = case punchLineNo row of
-                Just n -> ":" <> T.pack (show n)
-                Nothing -> ""
+          let
+            position = case punchLineNo row of
+              Just n -> ":" <> T.pack (show n)
+              Nothing -> ""
           TIO.putStrLn
-            ( punchVerdict row <> "  " <> punchFile row <> position
-                <> "  (" <> punchAt row <> ")"
+            ( punchVerdict row
+                <> "  "
+                <> punchFile row
+                <> position
+                <> "  ("
+                <> punchAt row
+                <> ")"
             )
           TIO.putStrLn ("    " <> punchLine row)
           forM_ (punchNote row) $ \note ->
@@ -164,7 +177,9 @@ list asJson = do
                 forM_ more (\l -> TIO.putStrLn ("           " <> l))
           forM_ (punchCommitSha row) $ \sha ->
             TIO.putStrLn
-              ( "    commit: " <> sha <> " "
+              ( "    commit: "
+                  <> sha
+                  <> " "
                   <> fromMaybe "" (punchCommitSubject row)
               )
 
@@ -187,40 +202,48 @@ reply key text = do
 -- from when the verdict was recorded.
 punchJson :: Text -> [PunchRow] -> Text
 punchJson repo rows =
-  let item row =
-        jsonObject
-          [ ("key", jsonString (punchKey row))
-          , ("file", jsonString (punchFile row))
-          , ("verdict", jsonString (punchVerdict row))
-          , ("line", jsonString (punchLine row))
-          , ("line_no", maybe "null" (T.pack . show) (punchLineNo row))
-          , ("note", maybe "null" jsonString (punchNote row))
-          , ("reply", maybe "null" jsonString (punchReply row))
-          , ("commit_sha", maybe "null" jsonString (punchCommitSha row))
-          , ("commit_subject", maybe "null" jsonString (punchCommitSubject row))
-          , ("updated_at", jsonString (punchAt row))
-          ]
-  in jsonObject
-       [ ("repo", jsonString repo)
-       , ("items", "[" <> T.intercalate ", " (map item rows) <> "]")
-       ]
+  let
+    item row =
+      jsonObject
+        [ ("key", jsonString (punchKey row))
+        , ("file", jsonString (punchFile row))
+        , ("verdict", jsonString (punchVerdict row))
+        , ("line", jsonString (punchLine row))
+        , ("line_no", maybe "null" (T.pack . show) (punchLineNo row))
+        , ("note", maybe "null" jsonString (punchNote row))
+        , ("reply", maybe "null" jsonString (punchReply row))
+        , ("commit_sha", maybe "null" jsonString (punchCommitSha row))
+        , ("commit_subject", maybe "null" jsonString (punchCommitSubject row))
+        , ("updated_at", jsonString (punchAt row))
+        ]
+  in
+    jsonObject
+      [ ("repo", jsonString repo)
+      , ("items", "[" <> T.intercalate ", " (map item rows) <> "]")
+      ]
 
 jsonObject :: [(Text, Text)] -> Text
 jsonObject fields =
-  let field (k, v) = jsonString k <> ": " <> v
-  in "{" <> T.intercalate ", " (map field fields) <> "}"
+  let
+    field (k, v) = jsonString k <> ": " <> v
+  in
+    "{" <> T.intercalate ", " (map field fields) <> "}"
 
 jsonString :: Text -> Text
 jsonString t =
-  let escape c = case c of
-        '"' -> "\\\""
-        '\\' -> "\\\\"
-        '\n' -> "\\n"
-        '\t' -> "\\t"
-        '\r' -> "\\r"
-        _
-          | isControl c ->
-              let hex = showHex (ord c) ""
-              in T.pack ("\\u" ++ replicate (4 - length hex) '0' ++ hex)
-          | otherwise -> T.singleton c
-  in "\"" <> T.concatMap escape t <> "\""
+  let
+    escape c = case c of
+      '"' -> "\\\""
+      '\\' -> "\\\\"
+      '\n' -> "\\n"
+      '\t' -> "\\t"
+      '\r' -> "\\r"
+      _
+        | isControl c ->
+            let
+              hex = showHex (ord c) ""
+            in
+              T.pack ("\\u" ++ replicate (4 - length hex) '0' ++ hex)
+        | otherwise -> T.singleton c
+  in
+    "\"" <> T.concatMap escape t <> "\""
