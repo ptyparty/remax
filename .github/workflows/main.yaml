@@ -107,3 +107,61 @@ jobs:
         # not configured here, but seemingly only through the api/webui for "branch protection"
         continue-on-error: true
         run: scripts/cabal-latest
+
+  release-binary:
+    name: Publish Linux Binary
+    # only a fully green main gets shipped (cabal-latest-build is
+    # advisory and excluded on purpose)
+    needs:
+      - build
+      - formatting-check
+      - cabal-check
+      - shellcheck
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Cache
+        uses: actions/cache@v5
+        env:
+          cache-version: v1
+        with:
+          key: ${{ env.cache-version }}-release-${{ hashFiles('stack.yaml', 'stack-ghc-9.10.yaml', 'stack-base.yaml', 'package.yaml') }}
+          restore-keys: |
+            ${{ env.cache-version }}-release-
+          path: |
+            ./stack-root
+
+      - name: Setup Stack
+        uses: flipstone/github-actions/setup-dockerized-stack@2c1f2781f8a1b92a0ad82223adf77bbf24b262c2
+        with:
+          stack-root: ./stack-root
+
+      - name: Build optimized binary
+        run: |
+          stack build --copy-bins --local-bin-path ./out
+          mv ./out/remax ./out/remax-linux-x86_64
+
+      - name: Publish rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: latest (rolling, from main)
+          prerelease: true
+          make_latest: false
+          body: |
+            Rolling build of the most recent push to main. Install with:
+
+            ```sh
+            mkdir -p "$HOME/.local/bin" && \
+              curl -fL https://github.com/${{ github.repository }}/releases/download/latest/remax-linux-x86_64 \
+                -o "$HOME/.local/bin/remax" && \
+              chmod +x "$HOME/.local/bin/remax"
+            ```
+
+            Built in the flipstone haskell-tools container (Debian, glibc-linked).
+          files: out/remax-linux-x86_64
