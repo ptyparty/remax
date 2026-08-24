@@ -124,7 +124,7 @@ Normal mode:
 | `Q` | reflow to 80 columns, comment-aware: the selection, or the same-prefixed paragraph around the cursor, keeping indentation + comment leader (`--`, `-- \|`, `//`, `#`, `;;`…) on every line |
 | `r` + char | replace every character of the selection (or under the cursor) with that character, helix-style |
 | `u` | undo |
-| `y` | yank the selection (or cursor cell) — line-wise for `x` selections |
+| `y` | yank the selection (or cursor cell) — line-wise for `x` selections; the yank slot is session-wide, so paste works across files (and the note popup) |
 | `p` / `P` | paste after / before: whole lines below/above for a line-wise yank, after/at the cursor otherwise; the paste is selected |
 | `Space` | menu (helix-style infobox): `f` file picker, `b` open files, `n` note popup, `e` `$EDITOR` here, `p` pending filter, `u` resolve the note here, `h` adopt the hunk under the cursor as current, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search |
 | `.` | repeat the last insert session (the entering command plus what was typed), helix-style — `c`-fix-`Esc` then `.` applies the same change at the cursor |
@@ -132,12 +132,12 @@ Normal mode:
 | `!` / `?` | flag-to-return-to / question — the selection's lines, or the whole current hunk with none. The note popup opens immediately for the reason (`note-on-flag = 0` in the config turns that off); discarding keeps the mark, and the jump to the next hunk waits until the popup closes |
 | `]` / `[` | next / previous hunk, crossing file boundaries |
 | `/`, `n` / `N` | search the file (literal, helix-shaped: the match becomes the selection); repeat forward / back, wrapping |
-| `Space /` | project-wide search (`git grep` behind the picker; also `:grep TEXT`): type, pick a hit, Enter jumps to the file and line with the match selected and `n`/`N` primed |
+| `Space /` | project-wide search (`git grep` behind the picker; also `:grep TEXT`): type, pick a hit, Enter jumps to the file and line with the match selected — and `n`/`N` then walk the **hit list across files** without re-searching (a fresh `/` or `*` returns them to in-file duty). The results box stretches to the pane width so lines keep their context |
 | `:` | the command line — see below |
 | `*` | search for the selection (single-line) or the identifier under the cursor — primes `n`/`N` and jumps to the next occurrence |
 | `'` | jump back to the hunk under review — **global**: review-flow navigation (`]`/`[`, auto-advance, `Space h`) drops the anchor there, and investigation moves (pickers, `Space /`, `ga`, `:open`) don't touch it, so wandering off to check something always has a way home |
 | `E` | suspend and open `$EDITOR` (hx-aware: helix gets `file:line`, classic editors get `+line`) on the current file at the cursor's line; the session reloads whatever you changed when you return |
-| `)` / `(` | next / previous file |
+| `)` / `(` | next / previous file — browsing moves (`)`/`(`, `ga`, pickers) keep each file's own cursor position, so coming back finds it where you left it |
 | `Ctrl-p` | fuzzy file finder over the whole repository (tracked + untracked); type a subsequence, Enter opens, Esc closes |
 | `Tab` | collapse / expand the tray |
 | `{` / `}` | scroll the tray |

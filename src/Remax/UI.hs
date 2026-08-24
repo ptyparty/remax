@@ -214,6 +214,8 @@ data St = St
   , stDeferAdvance :: Bool -- hold the post-mark jump until the note popup closes
   , stAltFile :: Maybe (FilePath, Int) -- where Space a bounces back to
   , stAnchor :: Maybe (FilePath, Int) -- the hunk under review; ' returns here
+  , stGrepNav :: Maybe (Text, [(FilePath, Int)], Int) -- grep hits n/N walk
+  , stKill :: Text -- session-wide kill/yank slot, shared across files
   }
 
 repoText :: St -> Text
@@ -339,6 +341,8 @@ runReview mode root = do
           , stDeferAdvance = False
           , stAltFile = Nothing
           , stAnchor = Nothing
+          , stGrepNav = Nothing
+          , stKill = T.empty
           }
       st1 = case firstUnrespondedOrPending st0 of
         Just (f, h) ->
@@ -1342,7 +1346,7 @@ handlePromptKey ev prompt =
         modify (\s -> s {stPrompt = Nothing, stPromptCycle = Nothing})
         case prompt of
           SearchPrompt t -> do
-            modify (\s -> s {stLastSearch = t})
+            modify (\s -> s {stLastSearch = t, stGrepNav = Nothing})
             unless (T.null t) (searchStep 1 t)
           CmdPrompt t -> runCommand t
       V.EvKey (V.KChar '\t') [] | isCmd -> promptComplete 1 input
@@ -1371,7 +1375,9 @@ handleModalKey ev = do
   let
     i = stCurF st
     fv = stFiles st !! i
-    ed = fvEd fv
+    -- the kill slot is session state: whatever was yanked anywhere is
+    -- pasteable here
+    ed = (fvEd fv) {edKill = stKill st}
   if cfgKeys (stConfig st) == KeysEmacs
     then handleEmacsKey i ed ev
     else handleHelixKey i fv ed ev
@@ -1431,10 +1437,8 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar '/') [] -> openGrepPicker ""
         V.EvKey (V.KChar '\'') [] -> jumpToAnchor
         V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
-        V.EvKey (V.KChar 'n') [] ->
-          unless (T.null (stLastSearch st)) (searchStep 1 (stLastSearch st))
-        V.EvKey (V.KChar 'N') [] ->
-          unless (T.null (stLastSearch st)) (searchStep (-1) (stLastSearch st))
+        V.EvKey (V.KChar 'n') [] -> searchNext 1
+        V.EvKey (V.KChar 'N') [] -> searchNext (-1)
         V.EvKey (V.KChar 'f') [] -> openPicker
         V.EvKey (V.KChar 'b') [] -> openBufferPicker
         V.EvKey (V.KChar 'e') [] -> editCurrent
@@ -1494,10 +1498,8 @@ handleHelixKey i fv ed ev = do
           modify (\s -> s {stPrompt = Just (SearchPrompt "")})
         V.EvKey (V.KChar ':') [] -> openCmdPrompt
         V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
-        V.EvKey (V.KChar 'n') [] ->
-          unless (T.null (stLastSearch st)) (searchStep 1 (stLastSearch st))
-        V.EvKey (V.KChar 'N') [] ->
-          unless (T.null (stLastSearch st)) (searchStep (-1) (stLastSearch st))
+        V.EvKey (V.KChar 'n') [] -> searchNext 1
+        V.EvKey (V.KChar 'N') [] -> searchNext (-1)
         V.EvKey (V.KChar '\'') [] -> jumpToAnchor
         V.EvKey (V.KChar 'X') [] -> selectCurrentHunk
         -- paste with an empty kill slot would be a silent no-op; the
@@ -1591,6 +1593,7 @@ currentRunOf st i = do
 
 rebuildWith :: Int -> EdState -> EventM Name St ()
 rebuildWith i ed = do
+  modify (\s -> s {stKill = edKill ed})
   st <- get
   let
     fv = (stFiles st !! i) {fvEd = ed}
@@ -1604,7 +1607,8 @@ rebuildWith i ed = do
     modify (\s -> s {stMsg = "diff too large — file shown as one hunk"})
 
 setEd :: Int -> EdState -> EventM Name St ()
-setEd i ed = modify (updateFile i (withEd ed))
+setEd i ed =
+  modify (\s -> updateFile i (withEd ed) s {stKill = edKill ed})
 
 updateFile :: Int -> (FileView -> FileView) -> St -> St
 updateFile i f st =
@@ -1795,8 +1799,31 @@ searchWordUnderCursor = do
   case selectionNeedle <|> wordNeedle of
     Nothing -> modify (\s -> s {stMsg = "no word under cursor"})
     Just needle -> do
-      modify (\s -> s {stLastSearch = needle})
+      modify (\s -> s {stLastSearch = needle, stGrepNav = Nothing})
       searchStep 1 needle
+
+-- n/N: when the last search came from the grep picker, walk its hit
+-- list across files without re-searching; otherwise repeat the in-file
+-- search as always.
+searchNext :: Int -> EventM Name St ()
+searchNext dir = do
+  st <- get
+  case stGrepNav st of
+    Just (q, hits, ix)
+      | not (null hits) -> do
+          let
+            n = length hits
+            ix2 = (((ix + dir) `mod` n) + n) `mod` n
+          case safeIdx hits ix2 of
+            Just (path, line) -> do
+              modify (\s -> s {stGrepNav = Just (q, hits, ix2)})
+              openGrepHit path line q
+              setMsg ("grep hit " <> tshow (ix2 + 1) <> "/" <> tshow n)
+            Nothing -> pure ()
+    _ ->
+      unless
+        (T.null (stLastSearch st))
+        (searchStep dir (stLastSearch st))
 
 -- Literal search over the current file's buffer, helix-shaped: the match
 -- becomes the selection, n/N walk matches, wrapping at either end.
@@ -1921,7 +1948,7 @@ gotoAltFile = do
     Just (path, h) ->
       case findIndex ((== path) . fvPath) (stFiles st) of
         Nothing -> setMsg ("alternate file left the session: " <> T.pack path)
-        Just f -> parkM f h
+        Just f -> visitFile f (Just h)
 
 -- Review-flow navigation parks AND drops the review anchor there, so '
 -- can always come back; investigation moves (pickers, grep, ga, open)
@@ -3074,10 +3101,17 @@ openNotePopup = do
 
 setNotePopupEd :: EdState -> EventM Name St ()
 setNotePopupEd ed =
-  modify (\s -> s {stNotePopup = fmap (\np -> np {npEd = ed}) (stNotePopup s)})
+  modify $ \s ->
+    s
+      { stNotePopup = fmap (\np -> np {npEd = ed}) (stNotePopup s)
+      , stKill = edKill ed
+      }
 
 handleNotePopupKey :: V.Event -> NotePopup -> EventM Name St ()
-handleNotePopupKey ev np =
+handleNotePopupKey ev np0 = do
+  st0 <- get
+  let
+    np = np0 {npEd = (npEd np0) {edKill = stKill st0}}
   case ev of
     -- discard works from either popup mode; nobody should need to leave
     -- insert just to bail out
@@ -3266,7 +3300,7 @@ openFilePath rawPath = do
   case findIndex ((== rel) . fvPath) (stFiles st) of
     Just i -> do
       modify (\s -> s {stOpened = Set.insert rel (stOpened s)})
-      parkM i 0
+      visitFile i Nothing
     Nothing -> do
       got <- liftIO (loadOpened (stConfig st) (stHls st) rootP rel)
       case got of
@@ -3340,7 +3374,31 @@ switchFile d = do
   let
     n = length (stFiles st)
   when (n > 1) $
-    parkM ((stCurF st + d + n) `mod` n) 0
+    visitFile ((stCurF st + d + n) `mod` n) Nothing
+
+-- Change files without re-parking: the file's buffer keeps its own
+-- cursor, so coming back finds it where it was left. Review-flow parks
+-- still position deliberately; this is for browsing moves.
+visitFile :: Int -> Maybe Int -> EventM Name St ()
+visitFile f mh = do
+  st <- get
+  case safeIdx (stFiles st) f of
+    Nothing -> pure ()
+    Just fv -> do
+      when (f /= stCurF st) $
+        modify $ \s ->
+          s
+            { stAltFile =
+                case currentFileMay s of
+                  Just prev -> Just (fvPath prev, stCurH s)
+                  Nothing -> stAltFile s
+            }
+      modify $ \s ->
+        s
+          { stCurF = f
+          , stCurH = clampH (fvRuns fv) (fromMaybe (stCurH st) mh)
+          , stMsg = " "
+          }
 
 -- The fuzzy file finder -----------------------------------------------------------
 
@@ -3439,11 +3497,11 @@ grepRepo root query =
           let
             snippet = T.strip (T.drop 1 rest2)
             display =
-              shortPath 28 path
+              shortPath 36 path
                 <> ":"
                 <> lineT
                 <> "  "
-                <> T.take 34 snippet
+                <> T.take 160 snippet
           pure (display, (T.unpack path, n))
         parsed = mapMaybe parse hits
       pure (map fst parsed, map snd parsed)
@@ -3457,7 +3515,7 @@ refreshPicker pk =
     ranked = take 200 (map snd (sortOn fst scored))
   in
     pk
-      { pkMatches = map (shortPath 66 . T.pack) ranked
+      { pkMatches = map (shortPath 120 . T.pack) ranked
       , pkTargets = map (\path -> (path, 0)) ranked
       , pkSel = 0
       }
@@ -3536,7 +3594,10 @@ handlePickerKey ev pk =
         modify (\s -> s {stPicker = Nothing})
         case safeIdx (pkTargets pk) (pkSel pk) of
           Just (path, 0) -> openFilePath (T.pack path)
-          Just (path, line) -> openGrepHit path line (pkInput pk)
+          Just (path, line) -> do
+            modify $ \s ->
+              s {stGrepNav = Just (pkInput pk, pkTargets pk, pkSel pk)}
+            openGrepHit path line (pkInput pk)
           Nothing -> pure ()
       V.EvKey V.KUp [] -> move (-1)
       V.EvKey (V.KChar 'p') [V.MCtrl] -> move (-1)
@@ -3546,32 +3607,37 @@ handlePickerKey ev pk =
       V.EvKey (V.KChar c) [] -> retype (T.snoc (pkInput pk) c)
       _ -> pure ()
 
+-- The overlay stretches to nearly the pane width, so grep hits keep
+-- their line context instead of losing it to a narrow box.
 pickerLayer :: Picker -> Widget Name
 pickerLayer pk =
-  let
-    visibleCount = 15
-    start = max 0 (pkSel pk - (visibleCount - 1))
-    shown = take visibleCount (drop start (zip [0 ..] (pkMatches pk)))
-    matchRow (i, display) =
-      let
-        line = padRight Max (txt (" " <> T.take 66 display))
-      in
-        if i == pkSel pk then withDefAttr selAttr line else line
-    counter = case pkMode pk of
-      PickFiles ->
-        tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
-      PickGrep -> tshow (length (pkMatches pk)) <> " hits"
-    title = case pkMode pk of
-      PickFiles -> " file: "
-      PickGrep -> " grep: "
-  in
-    C.centerLayer . B.border . hLimit 70 $
-      vBox
-        ( withDefAttr
-            statusAttr
-            (padRight Max (txt (title <> pkInput pk <> "\9612  " <> counter)))
-            : map matchRow shown
-        )
+  Widget Greedy Greedy $ do
+    ctx <- getContext
+    let
+      boxWidth = min 140 (max 50 (availWidth ctx - 6))
+      visibleCount = 15
+      start = max 0 (pkSel pk - (visibleCount - 1))
+      shown = take visibleCount (drop start (zip [0 ..] (pkMatches pk)))
+      matchRow (i, display) =
+        let
+          line = padRight Max (txt (" " <> T.take (boxWidth - 4) display))
+        in
+          if i == pkSel pk then withDefAttr selAttr line else line
+      counter = case pkMode pk of
+        PickFiles ->
+          tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
+        PickGrep -> tshow (length (pkMatches pk)) <> " hits"
+      title = case pkMode pk of
+        PickFiles -> " file: "
+        PickGrep -> " grep: "
+    render $
+      C.centerLayer . B.border . hLimit boxWidth $
+        vBox
+          ( withDefAttr
+              statusAttr
+              (padRight Max (txt (title <> pkInput pk <> "\9612  " <> counter)))
+              : map matchRow shown
+          )
 
 -- The editor escape hatch -----------------------------------------------------------
 
