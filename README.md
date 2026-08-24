@@ -141,7 +141,7 @@ Normal mode:
 | `Ctrl-p` | fuzzy file finder over the whole repository (tracked + untracked); type a subsequence, Enter opens, Esc closes |
 | `Tab` | collapse / expand the tray |
 | `{` / `}` | scroll the tray |
-| `q` | quit (prints the pass summary and punch list) |
+| `:q` | quit (prints the pass summary and punch list) — bare `q` is deliberately unbound, reserved for the future |
 
 During a rebase the status line and header carry the rebase state; all
 normal review keys keep working at every stop.

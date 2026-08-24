@@ -747,7 +747,7 @@ idleBody =
       , txt " "
       , withAttr
           hintAttr
-          (txt "  watching for changes · :base REF or :mode switches the view · q quits")
+          (txt "  watching for changes · :base REF or :mode switches the view · :q quits")
       ]
 
 headerBar :: St -> Widget Name
@@ -1221,10 +1221,10 @@ statusBar st =
           Nothing -> txt ""
       Nothing -> txt ""
     hint = case currentFileMay st of
-      Nothing -> ": command  q quit "
+      Nothing -> ": command  :q quit "
       Just fv ->
         (if fvStale fv then "· hunks refresh on Esc " else "")
-          <> "X\9166 accept  !/? flag  R unmark  ]/[ hunk  \9251p pending  q quit "
+          <> "X\9166 accept  !/? flag  R unmark  ]/[ hunk  \9251p pending  :q quit "
   in
     withDefAttr statusAttr $
       modeChip
@@ -1307,7 +1307,6 @@ togglePendingOnly = do
 handleIdleKey :: V.Event -> EventM Name St ()
 handleIdleKey ev =
   case ev of
-    V.EvKey (V.KChar 'q') [] -> halt
     V.EvKey (V.KChar ':') [] -> openCmdPrompt
     V.EvKey (V.KChar 'p') [V.MCtrl] -> openPicker
     V.EvKey (V.KChar ' ') [] -> modify (\s -> s {stSpace = True})
@@ -1483,7 +1482,6 @@ handleHelixKey i fv ed ev = do
     Normal | hasPending ed -> deferToModal i ed ev
     Normal ->
       case ev of
-        V.EvKey (V.KChar 'q') [] -> halt
         V.EvKey (V.KChar '\t') [] ->
           modify (\s -> s {stTray = not (stTray s)})
         V.EvKey V.KEnter [] -> acceptSelection
@@ -2249,7 +2247,7 @@ advanceToPending = do
     pending = filter (pairPending st) wrapped
   case unvisited ++ pending of
     ((f, h) : _) -> parkAnchor f h
-    [] -> modify (\s -> s {stMsg = "All hunks have verdicts — q to quit."})
+    [] -> modify (\s -> s {stMsg = "All hunks have verdicts — :q to quit."})
 
 applyToDisk :: Int -> EventM Name St ()
 applyToDisk i = do
