@@ -6,7 +6,14 @@
 
 Hunk-by-hunk code review with the **whole file on screen**: edit it
 **in place** with helix-flavored modal keys, and record per-line,
-content-keyed verdicts that survive rebases. Runs in a plain terminal (zellij-friendly).
+content-keyed verdicts that survive rebases.
+
+![remax reviewing a commit mid-rebase](hero.png)
+
+*A commit-by-commit `:rebase` review in progress: the header tracks the
+rebase (commit 1/4) and the pending counts, the tray lists hunks by file
+with their verdicts and notes, and removed lines float inline beside
+what replaced them.* Runs in a plain terminal (zellij-friendly).
 
 ```sh
 remax                 # review everything uncommitted (working tree vs HEAD)
