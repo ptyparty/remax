@@ -93,8 +93,12 @@ line that changes after being reviewed comes back as pending by itself.
   their syntax colors under a dim style (plus a gutter mark), so the
   unreviewed lines still pop when a hunk comes back — without flattening
   the reviewed code to gray.
-- Status line: mode chip (NOR/INS), messages, key hints — styled by your
-  `ui.statusline` theme scopes.
+- Status line: mode chip (NOR/INS), the top-level declaration the
+  cursor is inside, messages, key hints — styled by your
+  `ui.statusline` theme scopes. The tray shows each hunk's enclosing
+  declaration next to its line number, so hunks read as "which
+  function", not just "which line". (Both use the column-zero heuristic
+  the hunk splitter trusts; a tree-sitter-exact version can come later.)
 
 ## Keys
 

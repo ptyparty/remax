@@ -68,7 +68,7 @@ import Control.Exception (IOException, evaluate, try)
 import Control.Monad (forM, forM_, unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State (get, modify, put)
-import Data.Char (isAlphaNum, toLower)
+import Data.Char (isAlphaNum, isSpace, toLower)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
 import Data.List (find, findIndex, isPrefixOf, maximumBy, sortOn)
@@ -171,6 +171,7 @@ data FileView = FileView
   , fvStale :: Bool
   , fvHighlighted :: Bool -- real syntax colors computed yet? plain until shown
   , fvHl :: Maybe TS.Highlighter -- vendored tree-sitter grammar, when we have one
+  , fvRunDecls :: [Text] -- per run: the top-level declaration it falls under
   }
 
 data St = St
@@ -495,6 +496,7 @@ loadOne cfg hls mode root path = do
                 , fvStale = False
                 , fvHighlighted = False
                 , fvHl = TS.highlighterFor hls path
+                , fvRunDecls = []
                 }
           (fv, _) <- rebuildFV (cfgSplit cfg) (T.pack root) fv0
           let
@@ -531,10 +533,65 @@ rebuildFV sc repo fv = do
   (rows3, degraded) <- diffIO (fvBase fv) newLs
   let
     (rows, runs) = assemble sc repo (T.pack (fvPath fv)) rows3 toks
+    decls = map (fromMaybe "" . declAt newLs . runAnchor) runs
   pure
-    ( fv {fvRows = rows, fvRuns = runs, fvToks = toks, fvStale = False}
+    ( fv
+        { fvRows = rows
+        , fvRuns = runs
+        , fvToks = toks
+        , fvStale = False
+        , fvRunDecls = decls
+        }
     , degraded
     )
+
+-- The top-level declaration a buffer row falls under: the nearest line
+-- at or above it whose first character sits in column zero and isn't a
+-- comment or closing bracket — the boundary heuristic hunk splitting
+-- already trusts. A tree-sitter walk could be exact; this is right
+-- nearly always and costs one upward scan at rebuild time.
+declAt :: [Text] -> Int -> Maybe Text
+declAt ls row =
+  let
+    isDecl l = case T.uncons l of
+      Just (c, _) ->
+        not (isSpace c)
+          && not
+            ( any
+                (`T.isPrefixOf` l)
+                ["--", "//", "#", ";", "{-", "/*", "*", "<!--", "}", ")", "]"]
+            )
+      Nothing -> False
+  in
+    find isDecl (reverse (take (row + 1) ls))
+
+-- Just the name from a declaration line: its first word, or two when
+-- the first is a defining keyword (data Foo, def foo, class Bar ...).
+declName :: Text -> Text
+declName decl =
+  case T.words decl of
+    (w1 : w2 : _)
+      | w1
+          `elem` [ "data"
+                 , "type"
+                 , "newtype"
+                 , "class"
+                 , "instance"
+                 , "module"
+                 , "def"
+                 , "fn"
+                 , "func"
+                 , "function"
+                 , "impl"
+                 , "pub"
+                 , "let"
+                 , "const"
+                 , "var"
+                 , "export"
+                 ] ->
+          w1 <> " " <> w2
+    (w1 : _) -> w1
+    [] -> ""
 
 diffIO :: [Text] -> [Text] -> IO ([(Char, Maybe Int, Text)], Bool)
 diffIO old new = do
@@ -806,6 +863,11 @@ tray st =
         let
           fv = stFiles st !! fi
           r = fvRuns fv !! hi
+          decl = case safeIdx (fvRunDecls fv) hi of
+            Just d
+              | not (T.null d) ->
+                  " " <> T.take 12 (declName d)
+            _ -> ""
           current =
             fi == stCurF st
               && hi == clampH (fvRuns (currentFile st)) (stCurH st)
@@ -824,6 +886,7 @@ tray st =
               [ txt "  "
               , withAttr markAttr (str [mark])
               , txt (" :" <> tshow (runAnchor r + 1))
+              , withAttr trayDeclAttr (txt decl)
               , noteMark
               ]
           w = padRight Max line
@@ -1141,6 +1204,13 @@ statusBar st =
                   Normal -> case pendingLabel (fvEd fv) of
                     Just p -> withAttr norAttr (txt (" " <> p <> "\8230  "))
                     Nothing -> withAttr norAttr (txt " NOR ")
+    declSeg = case currentFileMay st of
+      Just fv ->
+        case declAt (bufferLines (fvEd fv)) (fst (cursorRC (fvEd fv))) of
+          Just d ->
+            withAttr trayDeclAttr (txt (" " <> T.take 32 (declName d) <> " \183"))
+          Nothing -> txt ""
+      Nothing -> txt ""
     hint = case currentFileMay st of
       Nothing -> ": command  q quit "
       Just fv ->
@@ -1149,6 +1219,7 @@ statusBar st =
   in
     withDefAttr statusAttr $
       modeChip
+        <+> declSeg
         <+> txt " "
         <+> middle
         <+> padLeft Max (withAttr hintAttr (txt hint))
@@ -3201,6 +3272,7 @@ loadOpened cfg hls root path = do
                 , fvStale = False
                 , fvHighlighted = False
                 , fvHl = TS.highlighterFor hls path
+                , fvRunDecls = []
                 }
           (fv, _) <- rebuildFV (cfgSplit cfg) (T.pack root) fv0
           pure (Just fv)
@@ -3540,12 +3612,14 @@ headerAttr
   , doneMarkAttr
   , pendingMarkAttr
   , lineNrDoneAttr
-  , headerRebaseAttr ::
+  , headerRebaseAttr
+  , trayDeclAttr ::
     AttrName
 headerAttr = attrName "header"
 headerFileAttr = headerAttr <> attrName "file"
 headerOkAttr = headerAttr <> attrName "ok"
 headerRebaseAttr = headerAttr <> attrName "rebase"
+trayDeclAttr = attrName "trayDecl"
 cursorMarkAttr = attrName "cursorMark"
 addedMarkAttr = attrName "addedMark"
 removedMarkAttr = attrName "removedMark"
@@ -3663,6 +3737,7 @@ mkAttrMap mth =
     uiPairs =
       [ (headerAttr, statusline `V.withStyle` V.bold)
       , (headerRebaseAttr, scopeAttr mth "warning" (fg V.brightYellow) `V.withStyle` V.bold)
+      , (trayDeclAttr, scopeAttr mth "function" (fg V.blue))
       , (headerFileAttr, scopeAttr mth "markup.heading" (fg V.brightYellow))
       , (headerOkAttr, scopeAttr mth "diff.plus" (fg V.brightGreen))
       , (cursorMarkAttr, fg V.yellow)
