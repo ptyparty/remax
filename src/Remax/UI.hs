@@ -203,6 +203,7 @@ data St = St
   , stCmdRefs :: [Text]
   , stPromptCycle :: Maybe (Text, Int) -- Tab cycling: typed base + applied index
   , stEmacsPrefix :: Maybe Char -- a pending C-c / C-x chord (emacs keymap)
+  , stDeferAdvance :: Bool -- hold the post-mark jump until the note popup closes
   }
 
 repoText :: St -> Text
@@ -325,6 +326,7 @@ runReview mode root = do
           , stCmdRefs = []
           , stPromptCycle = Nothing
           , stEmacsPrefix = Nothing
+          , stDeferAdvance = False
           }
       st1 = case firstUnrespondedOrPending st0 of
         Just (f, h) -> (park f h st0) {stMsg = stMsg st0}
@@ -603,7 +605,8 @@ app theme =
   App
     { appDraw = draw
     , appChooseCursor = showFirstCursor
-    , appHandleEvent = \ev -> handleEvent ev >> ensureCurrentHighlighted
+    , appHandleEvent =
+        \ev -> handleEvent ev >> ensureCurrentHighlighted
     , appStartEvent = do
         vty <- getVtyHandle
         let
@@ -653,6 +656,7 @@ spaceMenu =
       , txt " e  $EDITOR here"
       , txt " p  pending filter"
       , txt " u  resolve note here"
+      , txt " h  adopt hunk here"
       ]
 
 -- The persistent session's resting state: nothing to review, but the
@@ -1187,6 +1191,7 @@ handleSpaceKey ev = do
     V.EvKey (V.KChar 'e') [] -> editCurrent
     V.EvKey (V.KChar 'p') [] -> togglePendingOnly
     V.EvKey (V.KChar 'u') [] -> unnoteCmd
+    V.EvKey (V.KChar 'h') [] -> adoptHunkUnderCursor
     _ -> pure ()
 
 togglePendingOnly :: EventM Name St ()
@@ -1328,6 +1333,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'x') [] -> selectCurrentHunk
         V.EvKey (V.KChar 'p') [] -> togglePendingOnly
         V.EvKey (V.KChar 'u') [] -> unnoteCmd
+        V.EvKey (V.KChar 'h') [] -> adoptHunkUnderCursor
         V.EvKey (V.KChar '\'') [] -> parkM (stCurF st) (stCurH st)
         V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
         V.EvKey (V.KChar 'n') [] ->
@@ -1762,6 +1768,37 @@ runChanges fv h =
 -- The current hunk as a line-wise selection — the review-unit motion.
 -- Every verb then composes with it: X r reviews it, X d deletes it,
 -- X > indents it.
+-- Which hunk the cursor is standing in: the run of the cursor's display
+-- row, or — for a delete-only hunk, which owns no buffer rows — the run
+-- whose deletion rests at the cursor's line.
+hunkUnderCursor :: St -> Maybe Int
+hunkUnderCursor st = do
+  fv <- currentFileMay st
+  let
+    (cur, _) = cursorRC (fvEd fv)
+    rows = fvRows fv
+    bufferLen = length (bufferLines (fvEd fv))
+    points =
+      drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
+    directHit row =
+      if rNewRow row == Just cur then rRunIx row else Nothing
+    restingHit (row, point) =
+      if rNewRow row == Nothing && point == cur then rRunIx row else Nothing
+  case mapMaybe directHit rows of
+    (h : _) -> Just h
+    [] -> case mapMaybe restingHit (zip rows points) of
+      (h : _) -> Just h
+      [] -> Nothing
+
+-- Space h: adopt the hunk the cursor is standing in as the current one
+-- — the deliberate counterpart of ', which jumps to the current hunk.
+adoptHunkUnderCursor :: EventM Name St ()
+adoptHunkUnderCursor = do
+  st <- get
+  case hunkUnderCursor st of
+    Nothing -> setMsg "cursor isn't in a hunk"
+    Just h -> modify (\s -> s {stCurH = h, stMsg = " "})
+
 selectCurrentHunk :: EventM Name St ()
 selectCurrentHunk = do
   st <- get
@@ -1770,31 +1807,30 @@ selectCurrentHunk = do
     inCurrentRun row =
       rRunIx row == Just (clampH (fvRuns fv) (stCurH st))
     hunkRows = mapMaybe rNewRow (filter inCurrentRun (fvRows fv))
-  case (hunkRows, currentRunOf st (stCurF st)) of
-    ((first : _), _) -> do
-      let
-        lastRow = last hunkRows
-        ed = fvEd fv
-        selected =
-          ed
-            { edZipper = Z.moveCursor (lastRow, 0) (edZipper ed)
-            , edSelAnchor = Just (first, 0)
-            , edSelKind = LineSel
-            }
-      setEd (stCurF st) selected
-    ([], Just r) -> do
-      -- a delete-only hunk has no buffer rows of its own; select the
-      -- anchor line the deletion sits at
-      let
-        ed = fvEd fv
-        selected =
-          ed
-            { edZipper = Z.moveCursor (runAnchor r, 0) (edZipper ed)
-            , edSelAnchor = Just (runAnchor r, 0)
-            , edSelKind = LineSel
-            }
-      setEd (stCurF st) selected
-    _ -> pure ()
+    -- a delete-only hunk has no buffer rows of its own; its span is the
+    -- anchor line the deletion sits at
+    pickSpan =
+      case (hunkRows, currentRunOf st (stCurF st)) of
+        ((first : rest), _) ->
+          case reverse (first : rest) of
+            (lastRow : _) -> Just (first, lastRow)
+            [] -> Nothing
+        ([], Just r) -> Just (runAnchor r, runAnchor r)
+        _ -> Nothing
+  if hunkUnderCursor st /= Just (clampH (fvRuns fv) (stCurH st))
+    then setMsg "cursor isn't in the current hunk — Space h adopts this one"
+    else case pickSpan of
+      Nothing -> pure ()
+      Just (first, lastRow) -> do
+        let
+          ed = fvEd fv
+          selected =
+            ed
+              { edZipper = Z.moveCursor (lastRow, 0) (edZipper ed)
+              , edSelAnchor = Just (first, 0)
+              , edSelKind = LineSel
+              }
+        setEd (stCurF st) selected
 
 -- Accepting demands a visible object: Enter only acts on an active
 -- selection, so what gets marked reviewed is always what was just seen
@@ -1824,9 +1860,31 @@ applyVerdict v = do
 -- skipped.
 markThenNote :: Verdict -> EventM Name St ()
 markThenNote v = do
+  preSt <- get
+  let
+    noting = cfgNoteOnFlag (stConfig preSt)
+  -- with the note popup coming, the post-mark jump waits until the
+  -- popup closes — advancing first means writing the note while looking
+  -- at the wrong hunk
+  when noting (modify (\s -> s {stDeferAdvance = True}))
   marked <- applyVerdict v
+  if marked && noting
+    then do
+      openNotePopup
+      opened <- get
+      case stNotePopup opened of
+        Nothing -> runDeferredAdvance
+        Just _ -> pure ()
+    else modify (\s -> s {stDeferAdvance = False})
+
+-- The advance a mark would have made, released when the note popup
+-- closes.
+runDeferredAdvance :: EventM Name St ()
+runDeferredAdvance = do
   st <- get
-  when (marked && cfgNoteOnFlag (stConfig st)) openNotePopup
+  when (stDeferAdvance st) $ do
+    modify (\s -> s {stDeferAdvance = False})
+    advanceToPending
 
 clearVerdictBySelection :: EventM Name St ()
 clearVerdictBySelection = do
@@ -1855,8 +1913,18 @@ applyVerdictHunk v = do
     fv = currentFile st
     rs = fvRuns fv
     path = T.pack (fvPath fv)
-  case safeIdx rs (clampH rs (stCurH st)) of
-    Nothing -> pure False
+    -- with no selection, the verb needs the cursor to actually be in
+    -- the hunk it would mark — acting on one out of view is how
+    -- mistakes get recorded
+    target = do
+      here <- hunkUnderCursor st
+      if here == clampH rs (stCurH st)
+        then safeIdx rs (clampH rs (stCurH st))
+        else Nothing
+  case target of
+    Nothing -> do
+      setMsg "cursor isn't in the current hunk — Space h adopts this one"
+      pure False
     Just r -> do
       let
         storeRow (k, l, n) = (k, path, l, n)
@@ -1876,7 +1944,8 @@ applyVerdictHunk v = do
                 else (fvPath fv, runAnchor r + 1, v) : stPunch s
           }
       setEd (stCurF st) (collapseSelection (fvEd fv))
-      advanceToPending
+      deferred <- get
+      unless (stDeferAdvance deferred) advanceToPending
       pure True
 
 -- Mark just the selected lines (or the cursor's line); the hunk stays
@@ -1934,8 +2003,8 @@ applyVerdictLines v = do
           modify
             (\s -> s {stCounts = Map.insertWith (+) v 1 (stCounts s)})
           setEd (stCurF settled) (collapseSelection (fvEd fvSettled))
-          advanceToPending
-        else do
+          unless (stDeferAdvance settled) advanceToPending
+        else unless (stDeferAdvance settled) $ do
           let
             ed = fvEd fvSettled
             nextRow = min (hi + 1) (length (bufferLines ed) - 1)
@@ -2843,8 +2912,9 @@ handleNotePopupKey ev np =
   case ev of
     -- discard works from either popup mode; nobody should need to leave
     -- insert just to bail out
-    V.EvKey (V.KChar 'c') [V.MCtrl] ->
+    V.EvKey (V.KChar 'c') [V.MCtrl] -> do
       modify (\s -> s {stNotePopup = Nothing, stMsg = "note discarded"})
+      runDeferredAdvance
     _ ->
       case edMode (npEd np) of
         Insert ->
@@ -2861,10 +2931,12 @@ handleNotePopupKey ev np =
               let
                 text = T.strip (T.intercalate "\n" (bufferLines (npEd np)))
               applyNote text (npKeys np)
+              runDeferredAdvance
             -- Esc from insert lands here in the popup's normal mode; Esc
             -- again cancels the dialog outright
-            V.EvKey V.KEsc [] ->
+            V.EvKey V.KEsc [] -> do
               modify (\s -> s {stNotePopup = Nothing, stMsg = "note discarded"})
+              runDeferredAdvance
             _ ->
               case handleNormal ev (npEd np) of
                 Just ed -> setNotePopupEd ed
