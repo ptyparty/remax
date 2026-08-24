@@ -39,6 +39,7 @@ import Brick
   , str
   , suspendAndResume
   , txt
+  , txtWrap
   , vBox
   , vLimit
   , viewport
@@ -115,6 +116,7 @@ import Remax.Git
   , baseLines
   , branchRoot
   , changedFiles
+  , commitMessage
   , gitStateWatchDirs
   , hasStagedChanges
   , headCommit
@@ -216,6 +218,7 @@ data St = St
   , stAltFile :: Maybe (FilePath, Int) -- where Space a bounces back to
   , stAnchor :: Maybe (FilePath, Int) -- the hunk under review; ' returns here
   , stGrepNav :: Maybe (Text, [(FilePath, Int)], Int) -- grep hits n/N walk
+  , stInfoPopup :: Maybe (Text, Text) -- read-only text popup: title, body
   , stKill :: Text -- session-wide kill/yank slot, shared across files
   }
 
@@ -343,6 +346,7 @@ runReview mode root = do
           , stAltFile = Nothing
           , stAnchor = Nothing
           , stGrepNav = Nothing
+          , stInfoPopup = Nothing
           , stKill = T.empty
           }
       st1 = case firstUnrespondedOrPending st0 of
@@ -717,9 +721,56 @@ draw st =
     menuRows = case promptMenu st of
       Just menu -> [menu]
       Nothing -> []
+    rebaseRows = case stRebase st of
+      Just rb -> [rebaseBar rb]
+      Nothing -> []
+    infoRows = case stInfoPopup st of
+      Just (title, body) -> [infoPopupLayer title body]
+      Nothing -> []
   in
-    overlays
-      ++ [vBox ([headerBar st, hBox panes] ++ menuRows ++ [statusBar st])]
+    infoRows
+      ++ overlays
+      ++ [ vBox
+             ( [headerBar st]
+                 ++ rebaseRows
+                 ++ [hBox panes]
+                 ++ menuRows
+                 ++ [statusBar st]
+             )
+         ]
+
+-- The commit under review gets its own full-width bar during a rebase:
+-- step, sha, and the whole subject line. Space c shows the full
+-- message.
+rebaseBar :: RebaseStatus -> Widget Name
+rebaseBar rb =
+  let
+    conflictNote = if rebaseConflicted rb then "  · CONFLICT" else ""
+    shaNote = if T.null (rebaseSha rb) then "" else rebaseSha rb <> "  "
+  in
+    withDefAttr headerRebaseAttr . padRight Max $
+      txt
+        ( " \10227 commit "
+            <> tshow (rebaseStep rb)
+            <> "/"
+            <> tshow (rebaseTotal rb)
+            <> "  "
+            <> shaNote
+            <> rebaseSubject rb
+            <> conflictNote
+            <> "   (\9251c full message)"
+        )
+
+-- A read-only text popup (full commit messages and kin); any key closes.
+infoPopupLayer :: Text -> Text -> Widget Name
+infoPopupLayer title body =
+  C.centerLayer . B.border . hLimit 78 $
+    vBox
+      [ withDefAttr statusAttr (padRight Max (txt (" " <> title)))
+      , padTop (Pad 1) . padBottom (Pad 1) . padLeft (Pad 2) . padRight (Pad 2) $
+          vLimit 24 (txtWrap (padT body))
+      , withAttr hintAttr (txt " any key closes ")
+      ]
 
 -- The pending-space infobox, helix style: bottom-right, listing what the
 -- menu offers.
@@ -739,6 +790,7 @@ spaceMenu =
       , txt " h  adopt hunk here"
       , txt " a  alternate file"
       , txt " /  project search"
+      , txt " c  commit message"
       ]
 
 -- The persistent session's resting state: nothing to review, but the
@@ -761,22 +813,7 @@ headerBar st =
     lead = " remax · " <> modeLabel (stMode st) <> " · "
     rebaseSeg = case stRebase st of
       Nothing -> txt ""
-      Just rb ->
-        let
-          conflictNote = if rebaseConflicted rb then " · CONFLICT" else ""
-        in
-          withAttr
-            headerRebaseAttr
-            ( txt
-                ( "  ·  rebasing "
-                    <> tshow (rebaseStep rb)
-                    <> "/"
-                    <> tshow (rebaseTotal rb)
-                    <> ": "
-                    <> rebaseSubject rb
-                    <> conflictNote
-                )
-            )
+      Just _ -> withAttr headerRebaseAttr (txt "  ·  rebasing")
   in
     withDefAttr headerAttr . padRight Max $
       case currentFileMay st of
@@ -1263,6 +1300,9 @@ handleEvent brickEvent =
     VtyEvent ev -> do
       st <- get
       case (stNotePopup st, stPicker st, stPrompt st) of
+        _
+          | stInfoPopup st /= Nothing ->
+              modify (\s -> s {stInfoPopup = Nothing})
         (Just np, _, _) -> handleNotePopupKey ev np
         (_, Just pk, _) -> handlePickerKey ev pk
         (_, _, Just p) -> handlePromptKey ev p
@@ -1296,6 +1336,7 @@ handleSpaceKey ev = do
     V.EvKey (V.KChar 'h') [] -> adoptHunkUnderCursor
     V.EvKey (V.KChar 'a') [] -> gotoAltFile
     V.EvKey (V.KChar '/') [] -> openGrepPicker ""
+    V.EvKey (V.KChar 'c') [] -> showCommitPopup
     _ -> pure ()
 
 togglePendingOnly :: EventM Name St ()
@@ -1442,6 +1483,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'h') [] -> adoptHunkUnderCursor
         V.EvKey (V.KChar 'a') [] -> gotoAltFile
         V.EvKey (V.KChar '/') [] -> openGrepPicker ""
+        V.EvKey (V.KChar 'c') [] -> showCommitPopup
         V.EvKey (V.KChar '\'') [] -> jumpToAnchor
         V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
         V.EvKey (V.KChar 'n') [] -> searchNext 1
@@ -1943,6 +1985,22 @@ hunkUnderCursor st = do
     [] -> case mapMaybe restingHit (zip rows points) of
       (h : _) -> Just h
       [] -> Nothing
+
+-- The full message of the commit under review: the stopped commit's
+-- own sha during a rebase (HEAD differs at a conflict stop), HEAD
+-- otherwise.
+showCommitPopup :: EventM Name St ()
+showCommitPopup = do
+  st <- get
+  let
+    ref = case stRebase st of
+      Just rb
+        | not (T.null (rebaseSha rb)) -> rebaseSha rb
+      _ -> "HEAD"
+  got <- liftIO (commitMessage (stRoot st) ref)
+  case got of
+    Left e -> setMsg e
+    Right body -> modify (\s -> s {stInfoPopup = Just ("commit", body)})
 
 -- Space a: bounce to the alternate file — the one you were in before
 -- the last file jump — restoring the hunk you'd been on. Pressing it
@@ -2512,6 +2570,7 @@ commandTable =
   , ("open", ArgPath, "open a file in the session")
   , ("close", NoArg, "drop the current file")
   , ("files", NoArg, "fuzzy file finder")
+  , ("commit", NoArg, "full message of the commit under review / HEAD")
   , ("grep", ArgText, "project-wide search (picker)")
   , ("edit", ArgPath, "$EDITOR at the cursor (or on PATH)")
   , ("set", ArgSet, "change a setting (live + persisted)")
@@ -2677,6 +2736,7 @@ runCommand input =
     ["open", path] -> openFilePath path
     ["close"] -> closeCurrent
     ["files"] -> openPicker
+    ["commit"] -> showCommitPopup
     ("grep" : rest)
       | not (null rest) -> openGrepPicker (T.unwords rest)
     ["grep"] -> openGrepPicker ""

@@ -16,6 +16,7 @@ module Remax.Git
   , listRefs
   , RebaseStatus (..)
   , rebaseStatus
+  , commitMessage
   , gitStateWatchDirs
   , headCommit
   , runGit
@@ -234,6 +235,7 @@ hasStagedChanges root = do
 data RebaseStatus = RebaseStatus
   { rebaseStep :: Int
   , rebaseTotal :: Int
+  , rebaseSha :: Text -- short sha of the stopped commit ("" when unknown)
   , rebaseSubject :: Text
   , rebaseConflicted :: Bool
   }
@@ -272,19 +274,20 @@ rebaseStatus root = do
       let
         pickWords = ["pick", "p", "edit", "e", "reword", "r", "fixup", "f", "squash", "s"]
         pickOf l = case T.words l of
-          (verb : _ : rest)
-            | verb `elem` pickWords -> Just (T.unwords rest)
+          (verb : sha : rest)
+            | verb `elem` pickWords -> Just (sha, T.unwords rest)
           _ -> Nothing
         donePicks = mapMaybe pickOf (T.lines done)
         todoPicks = mapMaybe pickOf (T.lines todo)
-        subject = case reverse donePicks of
-          (s : _) -> s
-          [] -> ""
+        (sha, subject) = case reverse donePicks of
+          (p1 : _) -> p1
+          [] -> ("", "")
       conflicted <- hasUnmerged root
       pure . Just $
         RebaseStatus
           { rebaseStep = length donePicks
           , rebaseTotal = length donePicks + length todoPicks
+          , rebaseSha = sha
           , rebaseSubject = subject
           , rebaseConflicted = conflicted
           }
@@ -306,6 +309,7 @@ rebaseStatus root = do
             RebaseStatus
               { rebaseStep = num nextT
               , rebaseTotal = num lastT
+              , rebaseSha = ""
               , rebaseSubject = ""
               , rebaseConflicted = conflicted
               }
@@ -313,6 +317,25 @@ rebaseStatus root = do
 readFileOr :: Text -> FilePath -> IO Text
 readFileOr fallback path =
   catchIOError (fmap T.pack (readFile path)) (const (pure fallback))
+
+-- The full message (with author and date) of one commit, for the
+-- commit-under-review popup.
+commitMessage :: FilePath -> Text -> IO (Either Text Text)
+commitMessage root ref = do
+  (code, out, err) <-
+    readProcessWithExitCode
+      "git"
+      [ "-C"
+      , root
+      , "show"
+      , "-s"
+      , "--format=commit %H%nAuthor: %an <%ae>%nDate:   %ad%n%n%B"
+      , T.unpack ref
+      ]
+      ""
+  pure $ case code of
+    ExitSuccess -> Right (T.strip (T.pack out))
+    ExitFailure _ -> Left (T.strip (T.pack err))
 
 -- The short sha and subject of HEAD — during a rebase stop, that is the
 -- commit under review, so verdicts can carry their commit.
