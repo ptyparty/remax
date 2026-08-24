@@ -101,6 +101,7 @@ import System.Process
   ( CreateProcess (delegate_ctlc)
   , createProcess
   , proc
+  , readProcessWithExitCode
   , waitForProcess
   )
 import System.Timeout (timeout)
@@ -139,11 +140,17 @@ data REvent = FileChangedOnDisk FilePath | GitStateChanged | StoreChanged | Tick
 -- The one-line prompt at the bottom of the screen: / search or : command.
 data Prompt = SearchPrompt Text | CmdPrompt Text
 
--- The fuzzy file finder overlay.
+-- The finder overlay: fuzzy file picking, or project-wide grep. Each
+-- display row is aligned with a jump target (file, and a 1-based line
+-- for grep hits; 0 = just open the file).
+data PickerMode = PickFiles | PickGrep
+
 data Picker = Picker
-  { pkInput :: Text
+  { pkMode :: PickerMode
+  , pkInput :: Text
   , pkAll :: [FilePath]
-  , pkMatches :: [FilePath]
+  , pkMatches :: [Text]
+  , pkTargets :: [(FilePath, Int)]
   , pkSel :: Int
   }
 
@@ -660,6 +667,7 @@ spaceMenu =
       , txt " u  resolve note here"
       , txt " h  adopt hunk here"
       , txt " a  alternate file"
+      , txt " /  project search"
       ]
 
 -- The persistent session's resting state: nothing to review, but the
@@ -1196,10 +1204,11 @@ handleSpaceKey ev = do
     V.EvKey (V.KChar 'u') [] -> unnoteCmd
     V.EvKey (V.KChar 'h') [] -> adoptHunkUnderCursor
     V.EvKey (V.KChar 'a') [] -> gotoAltFile
+    V.EvKey (V.KChar '/') [] -> openGrepPicker ""
     _ -> pure ()
 
 togglePendingOnly :: EventM Name St ()
-togglePendingOnly =
+togglePendingOnly = do
   modify $ \s ->
     let
       now = not (stOnlyPending s)
@@ -1211,6 +1220,7 @@ togglePendingOnly =
               then "pending hunks only"
               else "showing all hunks"
         }
+  scrollTrayToCurrent
 
 -- With nothing on screen the only meaningful keys are quitting and the
 -- command line (to switch what the session is looking at).
@@ -1339,6 +1349,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'u') [] -> unnoteCmd
         V.EvKey (V.KChar 'h') [] -> adoptHunkUnderCursor
         V.EvKey (V.KChar 'a') [] -> gotoAltFile
+        V.EvKey (V.KChar '/') [] -> openGrepPicker ""
         V.EvKey (V.KChar '\'') [] -> parkM (stCurF st) (stCurH st)
         V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
         V.EvKey (V.KChar 'n') [] ->
@@ -1381,6 +1392,14 @@ handleHelixKey i fv ed ev = do
         InsertUnhandled -> pure ()
     -- a pending g/f/t prefix owns the next key outright; review keys
     -- must not steal its target character
+    -- ga is review-level (goto alternate file), but the g prefix lives
+    -- in the modal layer; catch it here and let the modal cancel its
+    -- pending state
+    Normal
+      | pendingLabel ed == Just "g"
+      , V.EvKey (V.KChar 'a') [] <- ev -> do
+          deferToModal i ed ev
+          gotoAltFile
     Normal | hasPending ed -> deferToModal i ed ev
     Normal ->
       case ev of
@@ -1613,16 +1632,25 @@ scrollHunkIntoViewOf fv = do
     _ -> pure ()
   -- follow in the tray too — an explicit scroll on hunk jumps only, so
   -- manual tray scrolling is never fought over
+  scrollTrayToCurrent
+
+-- Center the tray on the current hunk's entry. Also needed whenever the
+-- entry list reshapes under the viewport (the pending filter toggling),
+-- or the scroll position strands past the shrunken content.
+scrollTrayToCurrent :: EventM Name St ()
+scrollTrayToCurrent = do
+  st <- get
   mtvp <- lookupViewport TrayVP
-  case mtvp of
-    Nothing -> pure ()
-    Just tvp -> do
+  case (mtvp, currentFileMay st) of
+    (Just tvp, Just fv) -> do
       let
+        h = clampH (fvRuns fv) (stCurH st)
         isCur entry = case entry of
           TrayHunk f hh -> f == stCurF st && hh == h
           _ -> False
         idx = fromMaybe 0 (findIndex isCur (trayEntries st))
       setTop (viewportScroll TrayVP) (max 0 (idx - (snd (_vpSize tvp) `div` 2)))
+    _ -> pure ()
 
 -- Walk hunks in (file, hunk) order, wrapping; with pending-only mode on,
 -- hunks that already have verdicts are skipped entirely.
@@ -2340,6 +2368,7 @@ commandTable =
   , ("open", ArgPath, "open a file in the session")
   , ("close", NoArg, "drop the current file")
   , ("files", NoArg, "fuzzy file finder")
+  , ("grep", ArgText, "project-wide search (picker)")
   , ("edit", ArgPath, "$EDITOR at the cursor (or on PATH)")
   , ("set", ArgSet, "change a setting (live + persisted)")
   , ("q", NoArg, "quit")
@@ -2504,6 +2533,9 @@ runCommand input =
     ["open", path] -> openFilePath path
     ["close"] -> closeCurrent
     ["files"] -> openPicker
+    ("grep" : rest)
+      | not (null rest) -> openGrepPicker (T.unwords rest)
+    ["grep"] -> openGrepPicker ""
     ["edit"] -> editCurrent
     ["edit", path] -> do
       st <- get
@@ -3206,22 +3238,118 @@ openPicker = do
   st <- get
   files <- liftIO (listFiles (stRoot st))
   modify $ \s ->
-    s {stPicker = Just (refreshPicker (Picker "" files [] 0))}
+    s {stPicker = Just (refreshPicker (Picker PickFiles "" files [] [] 0))}
 
 -- The picker narrowed to what the session already has open.
 openBufferPicker :: EventM Name St ()
 openBufferPicker = do
   st <- get
   modify $ \s ->
-    s {stPicker = Just (refreshPicker (Picker "" (map fvPath (stFiles st)) [] 0))}
+    s
+      { stPicker =
+          Just (refreshPicker (Picker PickFiles "" (map fvPath (stFiles st)) [] [] 0))
+      }
+
+-- Project-wide search: git grep behind the same overlay, Enter jumping
+-- straight to the hit.
+openGrepPicker :: Text -> EventM Name St ()
+openGrepPicker query = do
+  st <- get
+  (matches, targets) <- liftIO (grepRepo (stRoot st) query)
+  modify $ \s ->
+    s
+      { stPicker =
+          Just (Picker PickGrep query [] matches targets 0)
+      }
+
+-- Land on a grep hit: open the file, select the match on its line, and
+-- prime n/N so the in-file search continues from there.
+openGrepHit :: FilePath -> Int -> Text -> EventM Name St ()
+openGrepHit path line query = do
+  openFilePath (T.pack path)
+  st <- get
+  case currentFileMay st of
+    Just fv
+      | fvPath fv == path -> do
+          let
+            ed = fvEd fv
+            ls = bufferLines ed
+            row = max 0 (min (line - 1) (length ls - 1))
+            lineText = case drop row ls of
+              (l : _) -> l
+              [] -> T.empty
+            col = case T.breakOn query lineText of
+              (pre, rest)
+                | not (T.null rest) -> T.length pre
+              _ -> 0
+            width = max 1 (T.length query)
+            placed =
+              ed
+                { edZipper = Z.moveCursor (row, col + width - 1) (edZipper ed)
+                , edSelAnchor = Just (row, col)
+                , edSelKind = CharSel
+                }
+          setEd (stCurF st) placed
+          modify (\s -> s {stLastSearch = query})
+    _ -> pure ()
+
+-- Literal, case-sensitive, binary-skipping; capped so a short query
+-- cannot flood the overlay.
+grepRepo :: FilePath -> Text -> IO ([Text], [(FilePath, Int)])
+grepRepo root query =
+  if T.length query < 2
+    then pure ([], [])
+    else do
+      (_, out, _) <-
+        readProcessWithExitCode
+          "git"
+          [ "-C"
+          , root
+          , "grep"
+          , "-nF"
+          , "-I"
+          , "--no-color"
+          , "-e"
+          , T.unpack query
+          , "--"
+          ]
+          ""
+      let
+        hits = take 200 (T.lines (T.pack out))
+        parse hit = do
+          let
+            (path, rest1) = T.breakOn ":" hit
+          _ <- if T.null rest1 then Nothing else Just ()
+          let
+            (lineT, rest2) = T.breakOn ":" (T.drop 1 rest1)
+          n <- case TR.decimal lineT of
+            Right (v, leftover) | T.null leftover -> Just v
+            _ -> Nothing
+          let
+            snippet = T.strip (T.drop 1 rest2)
+            display =
+              shortPath 28 path
+                <> ":"
+                <> lineT
+                <> "  "
+                <> T.take 34 snippet
+          pure (display, (T.unpack path, n))
+        parsed = mapMaybe parse hits
+      pure (map fst parsed, map snd parsed)
 
 refreshPicker :: Picker -> Picker
 refreshPicker pk =
   let
     q = pkInput pk
-    scored = mapMaybe (\path -> fmap (\sc -> (sc, path)) (fuzzyScore q path)) (pkAll pk)
+    scored =
+      mapMaybe (\path -> fmap (\sc -> (sc, path)) (fuzzyScore q path)) (pkAll pk)
+    ranked = take 200 (map snd (sortOn fst scored))
   in
-    pk {pkMatches = take 200 (map snd (sortOn fst scored)), pkSel = 0}
+    pk
+      { pkMatches = map (shortPath 66 . T.pack) ranked
+      , pkTargets = map (\path -> (path, 0)) ranked
+      , pkSel = 0
+      }
 
 -- Case-insensitive subsequence match; lower scores first. Prefers
 -- matches inside the file name, then tight spans, then short paths.
@@ -3272,15 +3400,32 @@ handlePickerKey ev pk =
         modify (\s -> s {stPicker = Just pk {pkSel = next}})
     retype :: Text -> EventM Name St ()
     retype q =
-      modify
-        (\s -> s {stPicker = Just (refreshPicker pk {pkInput = q})})
+      case pkMode pk of
+        PickFiles ->
+          modify
+            (\s -> s {stPicker = Just (refreshPicker pk {pkInput = q})})
+        PickGrep -> do
+          st <- get
+          (matches, targets) <- liftIO (grepRepo (stRoot st) q)
+          modify $ \s ->
+            s
+              { stPicker =
+                  Just
+                    pk
+                      { pkInput = q
+                      , pkMatches = matches
+                      , pkTargets = targets
+                      , pkSel = 0
+                      }
+              }
   in
     case ev of
       V.EvKey V.KEsc [] -> modify (\s -> s {stPicker = Nothing})
       V.EvKey V.KEnter [] -> do
         modify (\s -> s {stPicker = Nothing})
-        case safeIdx (pkMatches pk) (pkSel pk) of
-          Just path -> openFilePath (T.pack path)
+        case safeIdx (pkTargets pk) (pkSel pk) of
+          Just (path, 0) -> openFilePath (T.pack path)
+          Just (path, line) -> openGrepHit path line (pkInput pk)
           Nothing -> pure ()
       V.EvKey V.KUp [] -> move (-1)
       V.EvKey (V.KChar 'p') [V.MCtrl] -> move (-1)
@@ -3296,19 +3441,24 @@ pickerLayer pk =
     visibleCount = 15
     start = max 0 (pkSel pk - (visibleCount - 1))
     shown = take visibleCount (drop start (zip [0 ..] (pkMatches pk)))
-    matchRow (i, path) =
+    matchRow (i, display) =
       let
-        line = padRight Max (txt (" " <> shortPath 66 (T.pack path)))
+        line = padRight Max (txt (" " <> T.take 66 display))
       in
         if i == pkSel pk then withDefAttr selAttr line else line
-    counter =
-      tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
+    counter = case pkMode pk of
+      PickFiles ->
+        tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
+      PickGrep -> tshow (length (pkMatches pk)) <> " hits"
+    title = case pkMode pk of
+      PickFiles -> " file: "
+      PickGrep -> " grep: "
   in
     C.centerLayer . B.border . hLimit 70 $
       vBox
         ( withDefAttr
             statusAttr
-            (padRight Max (txt (" file: " <> pkInput pk <> "\9612  " <> counter)))
+            (padRight Max (txt (title <> pkInput pk <> "\9612  " <> counter)))
             : map matchRow shown
         )
 
