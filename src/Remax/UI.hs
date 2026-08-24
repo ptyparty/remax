@@ -1025,20 +1025,23 @@ renderFile st fv =
           if isCurRun
             then withAttr curRunAttr (str "\9612") -- wide: ▌
             else withAttr borderAttr (str "\9614") -- thin: ▎
-            -- the cursor paints this cell's background instead of hiding
-            -- the glyph, so the line you're on still shows its own verdict
-        statusGlyph = case verdict of
-          Just Flagged -> withAttr flagMarkAttr (str "!")
-          Just Questioned -> withAttr questionMarkAttr (str "?")
-          Just Reviewed -> withAttr doneMarkAttr (str "\183")
+            -- the cursor paints this cell yellow and renders the verdict
+            -- glyph in black over it — shape carries the meaning where the
+            -- colors would fight the background (• pending, ✓ reviewed,
+            -- ! flagged, ? questioned)
+        statusPick = case verdict of
+          Just Flagged -> Just ('!', flagMarkAttr)
+          Just Questioned -> Just ('?', questionMarkAttr)
+          Just Reviewed -> Just ('\10003', doneMarkAttr)
           Nothing ->
             case rKey r of
-              Just _ -> withAttr pendingMarkAttr (str "\183")
-              Nothing -> str " "
-        statusCol =
-          if isCursor
-            then withDefAttr cursorMarkAttr statusGlyph
-            else statusGlyph
+              Just _ -> Just ('\8226', pendingMarkAttr)
+              Nothing -> Nothing
+        statusCol = case (isCursor, statusPick) of
+          (True, Just (c, _)) -> withAttr cursorMarkAttr (str [c])
+          (True, Nothing) -> withAttr cursorMarkAttr (str " ")
+          (False, Just (c, a)) -> withAttr a (str [c])
+          (False, Nothing) -> str " "
         numCol = case rNewRow r of
           Just nr ->
             let
