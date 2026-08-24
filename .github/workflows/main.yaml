@@ -12,25 +12,11 @@ defaults:
     shell: bash
 
 jobs:
-  find-stack-yamls:
-    name: Find stack.yamls for GHC Matrix
-    runs-on: ubuntu-24.04
-    outputs:
-      stack-yamls: ${{ steps.set-output.outputs.stack-yamls }}
-    steps:
-      - name: Find Stack Yamls
-        id: set-output
-        uses: flipstone/github-actions/find-stack-ghc-yamls@2c1f2781f8a1b92a0ad82223adf77bbf24b262c2
-
+  # Single-resolver build for now; the GHC matrix can return when the
+  # tool supports more than one.
   build:
     name: Build and Test
-    needs: find-stack-yamls
     runs-on: ubuntu-24.04
-    strategy:
-      max-parallel: 5
-      matrix:
-        stack-yaml: ${{ fromJson(needs.find-stack-yamls.outputs.stack-yamls) }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -40,9 +26,9 @@ jobs:
         env:
           cache-version: v3
         with:
-          key: ${{ env.cache-version }}-${{ matrix.stack-yaml }}-${{ hashFiles(matrix.stack-yaml, 'stack-base.yaml', 'package.yaml') }}
+          key: ${{ env.cache-version }}-stack.yaml-${{ hashFiles('stack.yaml', 'stack-ghc-9.10.yaml', 'stack-base.yaml', 'package.yaml') }}
           restore-keys: |
-            ${{ env.cache-version }}-${{ matrix.stack-yaml }}-
+            ${{ env.cache-version }}-stack.yaml-
           path: |
             ./stack-root
 
@@ -52,7 +38,7 @@ jobs:
           stack-root: ./stack-root
 
       - name: Build and test
-        run: ./scripts/test --stack-yaml ${{ matrix.stack-yaml }}
+        run: ./scripts/test
 
   formatting-check:
     name: Formatting Check
