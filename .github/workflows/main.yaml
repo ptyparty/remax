@@ -100,7 +100,7 @@ jobs:
           stack-root: ./stack-root
 
       - name: Format and Check for Diff
-        run: scripts/shellcheck
+        run: ./scripts/shellcheck
 
   cabal-latest-build:
     name: Cabal Build
