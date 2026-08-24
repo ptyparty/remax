@@ -8,3 +8,4 @@ cabal.project.local*
 .env
 test-all-logs/
 *~
+out/
