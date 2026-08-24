@@ -197,7 +197,7 @@ note popup keeps its modal keys in either keymap.
 | `:base branch` / `:branch` | against the merge-base with the mainline — the whole branch diff, fixes land at the tip |
 | `:mode head` / `:mode unstaged` / `:mode untracked` | the classic change sets |
 | `:rebase [REF]` | start a commit-by-commit review pass (below) |
-| `:continue` | fold this stop's edits into the stopped commit and advance |
+| `:continue` | fold this stop's edits into the stopped commit and advance — *everything* dirty at the stop counts, including edits made through `$EDITOR` or by an agent, since the stop started clean |
 | `:abort!` | abort the rebase (`:abort` asks first) |
 | `:amend` | outside a rebase: fold the session's edits into HEAD (pairs with `:base HEAD^`) |
 | `:note TEXT` | attach a one-line note to the lines just marked `!`/`?` (or the selection) |

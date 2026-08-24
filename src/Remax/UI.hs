@@ -116,6 +116,7 @@ import Remax.Git
   , branchRoot
   , changedFiles
   , gitStateWatchDirs
+  , hasStagedChanges
   , headCommit
   , listFiles
   , listRefs
@@ -2884,18 +2885,18 @@ continueRebase = do
     Just rb -> do
       let
         root = stRoot st
-        written = Set.toList (stWritten st)
+      -- a rebase stop starts from a clean tree, so everything dirty now
+      -- is this stop's fix — including edits made through $EDITOR or by
+      -- an agent, which never pass through remax's own write path
       folded <- liftIO $ do
-        addRes <-
-          if null written
-            then pure (Right ())
-            else runGit root (["add", "--"] ++ written)
+        addRes <- runGit root ["add", "-A"]
         case addRes of
           Left e -> pure (Left e)
-          Right ()
-            | not (rebaseConflicted rb) && not (null written) ->
-                runGit root ["commit", "--amend", "--no-edit"]
-            | otherwise -> pure (Right ())
+          Right () -> do
+            staged <- hasStagedChanges root
+            if not (rebaseConflicted rb) && staged
+              then runGit root ["commit", "--amend", "--no-edit"]
+              else pure (Right ())
       case folded of
         Left e -> setMsg e
         Right () -> do

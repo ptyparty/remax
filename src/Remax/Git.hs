@@ -11,6 +11,7 @@ module Remax.Git
   , mainlineRef
   , branchRoot
   , trackedChanges
+  , hasStagedChanges
   , listFiles
   , listRefs
   , RebaseStatus (..)
@@ -213,6 +214,17 @@ gitStateWatchDirs root = do
   pure $ case dirs of
     [] -> [root </> ".git"]
     _ -> dirs
+
+-- Whether anything is staged — the guard before an --amend that would
+-- otherwise be a pointless no-op (or an error on an empty index).
+hasStagedChanges :: FilePath -> IO Bool
+hasStagedChanges root = do
+  (code, _, _) <-
+    readProcessWithExitCode
+      "git"
+      ["-C", root, "diff", "--cached", "--quiet"]
+      ""
+  pure (code /= ExitSuccess)
 
 -- Rebase awareness ------------------------------------------------------------
 
