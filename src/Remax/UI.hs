@@ -204,6 +204,7 @@ data St = St
   , stPromptCycle :: Maybe (Text, Int) -- Tab cycling: typed base + applied index
   , stEmacsPrefix :: Maybe Char -- a pending C-c / C-x chord (emacs keymap)
   , stDeferAdvance :: Bool -- hold the post-mark jump until the note popup closes
+  , stAltFile :: Maybe (FilePath, Int) -- where Space a bounces back to
   }
 
 repoText :: St -> Text
@@ -327,6 +328,7 @@ runReview mode root = do
           , stPromptCycle = Nothing
           , stEmacsPrefix = Nothing
           , stDeferAdvance = False
+          , stAltFile = Nothing
           }
       st1 = case firstUnrespondedOrPending st0 of
         Just (f, h) -> (park f h st0) {stMsg = stMsg st0}
@@ -657,6 +659,7 @@ spaceMenu =
       , txt " p  pending filter"
       , txt " u  resolve note here"
       , txt " h  adopt hunk here"
+      , txt " a  alternate file"
       ]
 
 -- The persistent session's resting state: nothing to review, but the
@@ -1192,6 +1195,7 @@ handleSpaceKey ev = do
     V.EvKey (V.KChar 'p') [] -> togglePendingOnly
     V.EvKey (V.KChar 'u') [] -> unnoteCmd
     V.EvKey (V.KChar 'h') [] -> adoptHunkUnderCursor
+    V.EvKey (V.KChar 'a') [] -> gotoAltFile
     _ -> pure ()
 
 togglePendingOnly :: EventM Name St ()
@@ -1334,6 +1338,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'p') [] -> togglePendingOnly
         V.EvKey (V.KChar 'u') [] -> unnoteCmd
         V.EvKey (V.KChar 'h') [] -> adoptHunkUnderCursor
+        V.EvKey (V.KChar 'a') [] -> gotoAltFile
         V.EvKey (V.KChar '\'') [] -> parkM (stCurF st) (stCurH st)
         V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
         V.EvKey (V.KChar 'n') [] ->
@@ -1515,27 +1520,36 @@ park :: Int -> Int -> St -> St
 park f h st =
   case safeIdx (stFiles st) f of
     Nothing -> st
-    Just fv ->
-      let
-        rs = fvRuns fv
-        clamped = clampH rs h
-        parked = st {stCurF = f, stCurH = clamped, stMsg = " "}
-        -- land on the first line still needing attention, not merely
-        -- the top of the hunk
-        target r =
-          fromMaybe (runAnchor r) (firstUnacceptedRow st fv clamped)
-        moveTo r v =
-          v
-            { fvEd =
-                (fvEd v)
-                  { edZipper = Z.moveCursor (target r, 0) (edZipper (fvEd v))
-                  , edSelAnchor = Nothing
-                  }
-            }
-      in
-        case safeIdx rs clamped of
-          Nothing -> parked
-          Just r -> updateFile f (moveTo r) parked
+    Just fv
+      | f /= stCurF st ->
+          case currentFileMay st of
+            Just prev ->
+              parkGo f h (st {stAltFile = Just (fvPath prev, stCurH st)}) fv
+            Nothing -> parkGo f h st fv
+    Just fv -> parkGo f h st fv
+
+parkGo :: Int -> Int -> St -> FileView -> St
+parkGo f h st fv =
+  let
+    rs = fvRuns fv
+    clamped = clampH rs h
+    parked = st {stCurF = f, stCurH = clamped, stMsg = " "}
+    -- land on the first line still needing attention, not merely
+    -- the top of the hunk
+    target r =
+      fromMaybe (runAnchor r) (firstUnacceptedRow st fv clamped)
+    moveTo r v =
+      v
+        { fvEd =
+            (fvEd v)
+              { edZipper = Z.moveCursor (target r, 0) (edZipper (fvEd v))
+              , edSelAnchor = Nothing
+              }
+        }
+  in
+    case safeIdx rs clamped of
+      Nothing -> parked
+      Just r -> updateFile f (moveTo r) parked
 
 -- The buffer row of the first line in a run whose verdict is not
 -- Reviewed (removed lines borrow the row they rest before).
@@ -1789,6 +1803,19 @@ hunkUnderCursor st = do
     [] -> case mapMaybe restingHit (zip rows points) of
       (h : _) -> Just h
       [] -> Nothing
+
+-- Space a: bounce to the alternate file — the one you were in before
+-- the last file jump — restoring the hunk you'd been on. Pressing it
+-- again bounces back, since each jump records the other side.
+gotoAltFile :: EventM Name St ()
+gotoAltFile = do
+  st <- get
+  case stAltFile st of
+    Nothing -> setMsg "no alternate file yet"
+    Just (path, h) ->
+      case findIndex ((== path) . fvPath) (stFiles st) of
+        Nothing -> setMsg ("alternate file left the session: " <> T.pack path)
+        Just f -> parkM f h
 
 -- Space h: adopt the hunk the cursor is standing in as the current one
 -- — the deliberate counterpart of ', which jumps to the current hunk.
