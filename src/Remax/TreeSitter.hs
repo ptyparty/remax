@@ -1,0 +1,550 @@
+{-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
+
+-- Tree-sitter highlighting with everything compiled into the binary: the
+-- MIT-licensed runtime and each vendored grammar ride along as C sources,
+-- and each grammar's own MIT highlights.scm is embedded at build time.
+-- Nothing here needs helix, a system libtree-sitter, or network access.
+--
+-- Matches are filtered through their query predicates (#eq?, #any-of?,
+-- and negations; a pattern using a predicate we don't evaluate is
+-- dropped rather than over-applied). Upstream queries follow the nvim
+-- capture conventions, so names are normalized to helix-style scopes and
+-- non-highlight captures (@spell, @_helpers…) are ignored.
+module Remax.TreeSitter
+  ( Highlighter
+  , initHighlighters
+  , highlighterFor
+  , tsHighlight
+  ) where
+
+import Control.Monad (foldM, forM, unless)
+import Data.Char (isAlphaNum)
+import Data.Maybe (mapMaybe)
+import Data.List (find, sortBy)
+import Data.Ord (comparing)
+import qualified Data.ByteString as BS
+import Data.FileEmbed (embedFile)
+import qualified Data.Map.Strict as Map
+import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import Data.Word (Word16, Word32, Word64)
+import Data.Array.IO (IOUArray, newArray, readArray, writeArray)
+import Foreign.C.String (peekCStringLen)
+import Foreign.C.Types (CBool (..), CChar, CInt (..))
+import Foreign.Marshal.Alloc (alloca)
+import Foreign.Marshal.Array (allocaArray)
+import Foreign.Ptr (Ptr, nullPtr, plusPtr)
+import Foreign.Storable (peek, peekByteOff, peekElemOff)
+import System.FilePath (takeExtension)
+import System.Timeout (timeout)
+
+data CParser
+data CTree
+data CQuery
+data CQueryCursor
+data CLanguage
+data CNode
+
+foreign import ccall unsafe "ts_parser_new"
+  c_parser_new :: IO (Ptr CParser)
+
+foreign import ccall unsafe "ts_parser_delete"
+  c_parser_delete :: Ptr CParser -> IO ()
+
+foreign import ccall unsafe "ts_parser_set_language"
+  c_parser_set_language :: Ptr CParser -> Ptr CLanguage -> IO CBool
+
+foreign import ccall unsafe "ts_parser_set_timeout_micros"
+  c_parser_set_timeout :: Ptr CParser -> Word64 -> IO ()
+
+foreign import ccall safe "ts_parser_parse_string"
+  c_parser_parse_string ::
+    Ptr CParser -> Ptr CTree -> Ptr CChar -> Word32 -> IO (Ptr CTree)
+
+foreign import ccall unsafe "ts_tree_delete"
+  c_tree_delete :: Ptr CTree -> IO ()
+
+foreign import ccall unsafe "ts_query_new"
+  c_query_new ::
+    Ptr CLanguage -> Ptr CChar -> Word32 -> Ptr Word32 -> Ptr Word32 -> IO (Ptr CQuery)
+
+foreign import ccall unsafe "ts_query_capture_count"
+  c_query_capture_count :: Ptr CQuery -> IO Word32
+
+foreign import ccall unsafe "ts_query_capture_name_for_id"
+  c_query_capture_name :: Ptr CQuery -> Word32 -> Ptr Word32 -> IO (Ptr CChar)
+
+foreign import ccall unsafe "ts_query_pattern_count"
+  c_query_pattern_count :: Ptr CQuery -> IO Word32
+
+foreign import ccall unsafe "ts_query_predicates_for_pattern"
+  c_query_predicates ::
+    Ptr CQuery -> Word32 -> Ptr Word32 -> IO (Ptr Word32)
+
+foreign import ccall unsafe "ts_query_string_value_for_id"
+  c_query_string_value :: Ptr CQuery -> Word32 -> Ptr Word32 -> IO (Ptr CChar)
+
+foreign import ccall unsafe "ts_query_cursor_new"
+  c_query_cursor_new :: IO (Ptr CQueryCursor)
+
+foreign import ccall unsafe "ts_query_cursor_delete"
+  c_query_cursor_delete :: Ptr CQueryCursor -> IO ()
+
+foreign import ccall unsafe "remax_tree_root_node"
+  c_root_node :: Ptr CTree -> IO (Ptr CNode)
+
+foreign import ccall unsafe "remax_node_free"
+  c_node_free :: Ptr CNode -> IO ()
+
+foreign import ccall unsafe "remax_query_cursor_exec"
+  c_cursor_exec :: Ptr CQueryCursor -> Ptr CQuery -> Ptr CNode -> IO ()
+
+foreign import ccall unsafe "remax_query_cursor_next_match"
+  c_next_match ::
+    Ptr CQueryCursor
+    -> Ptr Word32 -- pattern index
+    -> Ptr Word32 -- starts
+    -> Ptr Word32 -- ends
+    -> Ptr Word32 -- capture ids
+    -> Word32 -- max captures
+    -> Ptr Word32 -- count
+    -> IO CInt
+
+foreign import ccall unsafe "tree_sitter_haskell"
+  c_lang_haskell :: IO (Ptr CLanguage)
+
+foreign import ccall unsafe "tree_sitter_purescript"
+  c_lang_purescript :: IO (Ptr CLanguage)
+
+foreign import ccall unsafe "tree_sitter_yaml"
+  c_lang_yaml :: IO (Ptr CLanguage)
+
+foreign import ccall unsafe "tree_sitter_json"
+  c_lang_json :: IO (Ptr CLanguage)
+
+foreign import ccall unsafe "tree_sitter_toml"
+  c_lang_toml :: IO (Ptr CLanguage)
+
+foreign import ccall unsafe "tree_sitter_hcl"
+  c_lang_hcl :: IO (Ptr CLanguage)
+
+foreign import ccall unsafe "tree_sitter_sql"
+  c_lang_sql :: IO (Ptr CLanguage)
+
+foreign import ccall unsafe "tree_sitter_bash"
+  c_lang_bash :: IO (Ptr CLanguage)
+
+foreign import ccall unsafe "tree_sitter_nu"
+  c_lang_nu :: IO (Ptr CLanguage)
+
+foreign import ccall unsafe "tree_sitter_markdown"
+  c_lang_markdown :: IO (Ptr CLanguage)
+
+-- One vendored grammar: extensions it claims, its language function, and
+-- its embedded highlight query.
+vendored :: [([String], IO (Ptr CLanguage), BS.ByteString)]
+vendored =
+  [ ( [".hs", ".hs-boot", ".hsc"]
+    , c_lang_haskell
+    , $(embedFile "vendor/grammars/haskell/highlights.scm")
+    )
+  , ( [".purs"]
+    , c_lang_purescript
+    , $(embedFile "vendor/grammars/purescript/highlights.scm")
+    )
+  , ( [".yaml", ".yml"]
+    , c_lang_yaml
+    , $(embedFile "vendor/grammars/yaml/highlights.scm")
+    )
+  , ( [".json"]
+    , c_lang_json
+    , $(embedFile "vendor/grammars/json/highlights.scm")
+    )
+  , ( [".toml"]
+    , c_lang_toml
+    , $(embedFile "vendor/grammars/toml/highlights.scm")
+    )
+  , ( [".tf", ".tfvars", ".hcl", ".nomad"]
+    , c_lang_hcl
+    , $(embedFile "vendor/grammars/hcl/highlights.scm")
+    )
+  , ( [".sql"]
+    , c_lang_sql
+    , $(embedFile "vendor/grammars/sql/highlights.scm")
+    )
+  , ( [".sh", ".bash", ".zsh"]
+    , c_lang_bash
+    , $(embedFile "vendor/grammars/bash/highlights.scm")
+    )
+  , ( [".nu"]
+    , c_lang_nu
+    , $(embedFile "vendor/grammars/nu/highlights.scm")
+    )
+  , ( [".md", ".markdown"]
+    , c_lang_markdown
+    , $(embedFile "vendor/grammars/markdown/highlights.scm")
+    )
+  ]
+
+-- One predicate test attached to a pattern. Candidate strings stay as
+-- UTF-8 bytes so match text never needs decoding to compare.
+data PredTest
+  = TestStrings Bool Word32 [BS.ByteString] -- negated? capture-id candidates
+  | TestCaptures Bool Word32 Word32
+  | TestAlwaysPass -- directives like #set!
+  | TestAlwaysFail -- predicates we don't evaluate
+
+data Highlighter = Highlighter
+  { hlLang :: Ptr CLanguage
+  , hlQuery :: Ptr CQuery
+  , hlNames :: [Text] -- capture id -> normalized scope ("" = don't paint)
+  , hlPreds :: [[PredTest]] -- pattern index -> tests
+  }
+
+-- Build every vendored grammar's query once at startup; a grammar whose
+-- query fails to compile is dropped rather than crashing the tool.
+initHighlighters :: IO [([String], Highlighter)]
+initHighlighters =
+  let build (exts, getLang, queryBytes) = do
+        lang <- getLang
+        query <-
+          BS.useAsCStringLen queryBytes $ \(p, len) ->
+            alloca $ \errOffset ->
+              alloca $ \errType ->
+                c_query_new lang p (fromIntegral len) errOffset errType
+        if query == nullPtr
+          then pure []
+          else do
+            names <- captureNames query
+            preds <- patternPredicates query
+            pure [(exts, Highlighter lang query names preds)]
+  in fmap concat (mapM build vendored)
+
+captureNames :: Ptr CQuery -> IO [Text]
+captureNames query = do
+  count <- c_query_capture_count query
+  forM (indices count) $ \i ->
+    alloca $ \lenP -> do
+      namePtr <- c_query_capture_name query i lenP
+      len <- peek lenP
+      raw <- T.pack <$> peekCStringLen (namePtr, fromIntegral len)
+      pure (normalizeScope raw)
+
+indices :: Word32 -> [Word32]
+indices n = if n == 0 then [] else [0 .. n - 1]
+
+-- Upstream queries use nvim capture conventions; map them onto the helix
+-- scope names the theme understands, and blank out the captures that are
+-- not highlights at all.
+normalizeScope :: Text -> Text
+normalizeScope name
+  | "_" `T.isPrefixOf` name = ""
+  | name `elem` ["spell", "nospell", "conceal", "none"] = ""
+  | "injection." `T.isPrefixOf` name = ""
+  | "local." `T.isPrefixOf` name = ""
+  | otherwise = Map.findWithDefault name name renameTable
+
+renameTable :: Map.Map Text Text
+renameTable =
+  Map.fromList
+    [ ("function.call", "function")
+    , ("variable.member", "variable.other.member")
+    , ("property", "variable.other.member")
+    , ("field", "variable.other.member")
+    , ("parameter", "variable.parameter")
+    , ("module", "namespace")
+    , ("boolean", "constant.builtin.boolean")
+    , ("number", "constant.numeric")
+    , ("number.float", "constant.numeric.float")
+    , ("character", "constant.character")
+    , ("keyword.exception", "keyword.control.exception")
+    , ("keyword.repeat", "keyword.control.repeat")
+    , ("keyword.conditional", "keyword.control.conditional")
+    , ("keyword.import", "keyword.control.import")
+    , ("keyword.return", "keyword.control.return")
+    , ("keyword.debug", "function.builtin")
+    , ("comment.documentation", "comment.block.documentation")
+    , ("string.documentation", "comment.block.documentation")
+    , ("constant.macro", "constant.builtin")
+    ]
+
+-- The predicate steps for each pattern: triples of (type, value id) laid
+-- out flat, groups terminated by a Done step. Type 1 is a capture
+-- reference, type 2 a string, 0 the terminator.
+patternPredicates :: Ptr CQuery -> IO [[PredTest]]
+patternPredicates query = do
+  count <- c_query_pattern_count query
+  forM (indices count) $ \pix ->
+    alloca $ \lenP -> do
+      stepsPtr <- c_query_predicates query pix lenP
+      len <- peek lenP
+      steps <- forM (indices len) $ \i -> do
+        let base = stepsPtr `plusPtr` (fromIntegral i * 8)
+        stepType <- peekByteOff base 0 :: IO Word32
+        valueId <- peekByteOff base 4 :: IO Word32
+        pure (stepType, valueId)
+      mapM (parsePred query) (splitOnDone steps)
+
+splitOnDone :: [(Word32, Word32)] -> [[(Word32, Word32)]]
+splitOnDone steps =
+  case break ((== 0) . fst) steps of
+    ([], []) -> []
+    ([], rest) -> splitOnDone (drop 1 rest)
+    (grp, rest) -> grp : splitOnDone (drop 1 rest)
+
+parsePred :: Ptr CQuery -> [(Word32, Word32)] -> IO PredTest
+parsePred query steps =
+  let stepValue (kind, value) =
+        case kind of
+          1 -> pure (Left value)
+          _ -> fmap Right (stringValue query value)
+      buildPred name args =
+        case (name, args) of
+          ("eq?", [Left c, Right s]) -> TestStrings False c [TE.encodeUtf8 s]
+          ("not-eq?", [Left c, Right s]) -> TestStrings True c [TE.encodeUtf8 s]
+          ("eq?", [Left a, Left b]) -> TestCaptures False a b
+          ("not-eq?", [Left a, Left b]) -> TestCaptures True a b
+          ("any-of?", Left c : rest)
+            | all isRight rest ->
+                TestStrings False c (mapMaybe rightBytes rest)
+          ("not-any-of?", Left c : rest)
+            | all isRight rest ->
+                TestStrings True c (mapMaybe rightBytes rest)
+          -- the common "^(a|b|c)$" form of #match? is just an any-of
+          ("match?", [Left c, Right rx])
+            | Just alts <- simpleAlternation rx ->
+                TestStrings False c (map TE.encodeUtf8 alts)
+          ("not-match?", [Left c, Right rx])
+            | Just alts <- simpleAlternation rx ->
+                TestStrings True c (map TE.encodeUtf8 alts)
+          _
+            | "!" `T.isSuffixOf` name -> TestAlwaysPass
+            | otherwise -> TestAlwaysFail
+      isRight e = case e of
+        Right _ -> True
+        Left _ -> False
+      rightBytes e = case e of
+        Right str -> Just (TE.encodeUtf8 str)
+        Left _ -> Nothing
+  in case steps of
+       ((2, nameId) : rest) -> do
+         name <- stringValue query nameId
+         args <- mapM stepValue rest
+         pure (buildPred name args)
+       _ -> pure TestAlwaysFail
+
+simpleAlternation :: Text -> Maybe [Text]
+simpleAlternation rx = do
+  inner <- T.stripSuffix ")$" =<< T.stripPrefix "^(" rx
+  let alts = T.splitOn "|" inner
+      literal t =
+        not (T.null t)
+          && T.all (\c -> isAlphaNum c || c == '_' || c == '\'') t
+  if not (null alts) && all literal alts
+    then Just alts
+    else Nothing
+
+stringValue :: Ptr CQuery -> Word32 -> IO Text
+stringValue query sid =
+  alloca $ \lenP -> do
+    p <- c_query_string_value query sid lenP
+    len <- peek lenP
+    T.pack <$> peekCStringLen (p, fromIntegral len)
+
+highlighterFor :: [([String], Highlighter)] -> FilePath -> Maybe Highlighter
+highlighterFor table path =
+  let claims (exts, _) = takeExtension path `elem` exts
+  in fmap snd (find claims table)
+
+parseBudgetMicros :: Word64
+parseBudgetMicros = 300000
+
+-- Painting and rendering walk every capture the query produced; on a
+-- huge generated file that is hundreds of thousands of captures and
+-- seconds of work, so it runs under its own wall-clock budget.
+tokenizeBudgetMicros :: Int
+tokenizeBudgetMicros = 800000
+
+-- Files past this size render plain without trying: they are almost
+-- always generated, and even a successful highlight of one costs more
+-- than it is worth.
+maxHighlightLines :: Int
+maxHighlightLines = 10000
+
+maxCapturesPerMatch :: Int
+maxCapturesPerMatch = 32
+
+-- Highlight whole lines: each returned line is a list of (scope, text)
+-- runs, "" for unstyled stretches. Nothing when the parse failed or blew
+-- its budget, so the caller can fall back.
+tsHighlight :: Highlighter -> [Text] -> IO (Maybe [[(Text, Text)]])
+tsHighlight hl ls
+  | length ls > maxHighlightLines = pure Nothing
+  | otherwise = do
+      parser <- c_parser_new
+      ok <- c_parser_set_language parser (hlLang hl)
+      if ok == CBool 0
+        then do
+          c_parser_delete parser
+          pure Nothing
+        else do
+          c_parser_set_timeout parser parseBudgetMicros
+          let bs = TE.encodeUtf8 (T.unlines ls)
+          tree <-
+            BS.useAsCStringLen bs $ \(p, len) ->
+              c_parser_parse_string parser nullPtr p (fromIntegral len)
+          if tree == nullPtr
+            then do
+              c_parser_delete parser
+              pure Nothing
+            else do
+              root <- c_root_node tree
+              cursor <- c_query_cursor_new
+              c_cursor_exec cursor (hlQuery hl) root
+              -- capture id + 1 per byte; later matches overwrite earlier,
+              -- which is how query files layer general-to-specific
+              arr <-
+                newArray (0, max 0 (BS.length bs - 1)) 0 :: IO (IOUArray Int Word16)
+              -- the paint and render walk runs under the tokenize
+              -- budget; the result is forced inside it so no work
+              -- escapes as thunks to be paid for later
+              rendered <- timeout tokenizeBudgetMicros $ do
+                paintMatches hl bs cursor arr
+                out <- renderLines arr (hlNames hl) ls
+                let forceSeg (a, b) r = T.length a `seq` T.length b `seq` r
+                    forceLine line r = foldr forceSeg () line `seq` r
+                foldr forceLine () out `seq` pure out
+              c_query_cursor_delete cursor
+              c_node_free root
+              c_tree_delete tree
+              c_parser_delete parser
+              pure rendered
+
+-- Collect every predicate-passing capture, then paint widest spans first
+-- so narrower (deeper) captures overwrite them — the innermost-node-wins
+-- rule real highlight engines follow. Equal spans are settled by pattern
+-- index: query files put general patterns first and specific ones later,
+-- so the later (higher-index) pattern paints last and wins.
+paintMatches
+  :: Highlighter -> BS.ByteString -> Ptr CQueryCursor -> IOUArray Int Word16 -> IO ()
+paintMatches hl source cursor arr = do
+  caps <- collectMatches hl source cursor
+  let total = BS.length source
+      ordered =
+        sortBy (comparing (\(s, e, _, pix) -> (negate (e - s), pix))) caps
+      fillRange :: Word16 -> Int -> Int -> IO ()
+      fillRange code b limit =
+        unless (b >= limit || b >= total) $ do
+          writeArray arr b code
+          fillRange code (b + 1) limit
+  mapM_
+    (\(s, e, cid, _) -> fillRange (fromIntegral cid + 1) (max 0 s) (min e total))
+    ordered
+
+collectMatches
+  :: Highlighter -> BS.ByteString -> Ptr CQueryCursor -> IO [(Int, Int, Word32, Int)]
+collectMatches hl source cursor =
+  alloca $ \pixP ->
+    alloca $ \countP ->
+      allocaArray maxCapturesPerMatch $ \startsP ->
+        allocaArray maxCapturesPerMatch $ \endsP ->
+          allocaArray maxCapturesPerMatch $ \idsP -> do
+            let scopeAt cid = case drop (fromIntegral cid) (hlNames hl) of
+                  (nm : _) -> nm
+                  [] -> ""
+                loop acc = do
+                  more <-
+                    c_next_match
+                      cursor pixP startsP endsP idsP
+                      (fromIntegral maxCapturesPerMatch) countP
+                  if more == 0
+                    then pure (reverse acc)
+                    else do
+                      pix <- fromIntegral <$> peek pixP
+                      n <- fromIntegral <$> peek countP
+                      caps <-
+                        forM [0 .. n - 1] $ \i -> do
+                          s <- peekElemOff startsP i
+                          e <- peekElemOff endsP i
+                          cid <- peekElemOff idsP i
+                          pure (fromIntegral s, fromIntegral e, cid)
+                      let preds = case drop pix (hlPreds hl) of
+                            (p : _) -> p
+                            [] -> []
+                          withPattern (s, e, cid) = (s, e, cid, pix)
+                          paintable (_, _, cid) = scopeAt cid /= ""
+                          kept =
+                            if all (evalPred source caps) preds
+                              then map withPattern (filter paintable caps)
+                              else []
+                      loop (reverse kept ++ acc)
+            loop []
+
+evalPred :: BS.ByteString -> [(Int, Int, Word32)] -> PredTest -> Bool
+evalPred source caps predTest =
+  let captureText cid =
+        let isCapture (_, _, c) = c == cid
+            slice (s, e, _) = BS.take (e - s) (BS.drop s source)
+        in fmap slice (find isCapture caps)
+  in case predTest of
+       TestAlwaysPass -> True
+       TestAlwaysFail -> False
+       TestStrings negated cid candidates ->
+         case captureText cid of
+           Nothing -> False
+           Just t -> (t `elem` candidates) /= negated
+       TestCaptures negated a b ->
+         case (captureText a, captureText b) of
+           (Just ta, Just tb) -> (ta == tb) /= negated
+           _ -> False
+
+-- Walk each line char by char (tree-sitter speaks UTF-8 bytes, the buffer
+-- speaks Text chars), grouping consecutive chars with the same capture.
+renderLines :: IOUArray Int Word16 -> [Text] -> [Text] -> IO [[(Text, Text)]]
+renderLines arr names ls =
+  let scopeOf code =
+        if code == 0
+          then ""
+          else case drop (fromIntegral code - 1) names of
+            (n : _) -> n
+            [] -> ""
+      go _ [] = pure []
+      go offset (l : rest) = do
+        segs <- lineSegs offset l
+        later <- go (offset + BS.length (TE.encodeUtf8 l) + 1) rest
+        pure (segs : later)
+      lineSegs offset l = do
+        let chars = T.unpack l
+            step
+              :: (Int, String, Text, [(Text, String)])
+              -> Char
+              -> IO (Int, String, Text, [(Text, String)])
+            step (byte, cur, curScope, acc) ch = do
+              code <- readArray arr byte
+              let scope = scopeOf code
+                  width = utf8Width ch
+              if scope == curScope
+                then pure (byte + width, ch : cur, curScope, acc)
+                else
+                  pure
+                    ( byte + width
+                    , [ch]
+                    , scope
+                    , if null cur then acc else (curScope, reverse cur) : acc
+                    )
+        (_, cur, curScope, acc) <-
+          foldM step (offset, [], "", []) chars
+        let final = if null cur then acc else (curScope, reverse cur) : acc
+            toSeg (sc, cs) = (sc, T.pack cs)
+        pure (map toSeg (reverse final))
+  in go 0 ls
+
+utf8Width :: Char -> Int
+utf8Width c
+  | fromEnum c < 0x80 = 1
+  | fromEnum c < 0x800 = 2
+  | fromEnum c < 0x10000 = 3
+  | otherwise = 4

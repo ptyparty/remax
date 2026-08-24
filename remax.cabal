@@ -1,0 +1,82 @@
+cabal-version:      3.0
+name:               remax
+version:            0.1.0.0
+synopsis:           Hunk review with tracked verdicts and in-place editing
+description:
+  A full-editing port of `dev review`: walk the change set with the whole
+  file on screen, hunks decorated in place by a live diff, edit anywhere
+  with helix-flavored modal keys, and record per-line content-keyed
+  verdicts (reviewed / flagged / questioned) that survive rebases.
+build-type:         Simple
+
+executable remax
+  main-is:          Main.hs
+  hs-source-dirs:   app, src
+  autogen-modules:  Paths_remax
+  other-modules:
+    Paths_remax
+    Remax.Config
+    Remax.DiffModel
+    Remax.Git
+    Remax.Highlight
+    Remax.Key
+    Remax.Modal
+    Remax.Store
+    Remax.Theme
+    Remax.Zipper
+    Remax.TreeSitter
+    Remax.UI
+  c-sources:
+    cbits/shim.c
+    vendor/tree-sitter/src/lib.c
+    vendor/grammars/haskell/src/parser.c
+    vendor/grammars/haskell/src/scanner.c
+    vendor/grammars/purescript/src/parser.c
+    vendor/grammars/purescript/src/scanner.c
+    vendor/grammars/yaml/src/parser.c
+    vendor/grammars/json/src/parser.c
+    vendor/grammars/toml/src/parser.c
+    vendor/grammars/toml/src/scanner.c
+    vendor/grammars/hcl/src/parser.c
+    vendor/grammars/hcl/src/scanner.c
+    vendor/grammars/sql/src/parser.c
+    vendor/grammars/sql/src/scanner.c
+    vendor/grammars/bash/src/parser.c
+    vendor/grammars/bash/src/scanner.c
+    vendor/grammars/nu/src/parser.c
+    vendor/grammars/nu/src/scanner.c
+    vendor/grammars/markdown/src/parser.c
+    vendor/grammars/markdown/src/scanner.c
+
+  cxx-sources:      vendor/grammars/yaml/src/scanner.cc
+  extra-libraries:  stdc++
+  -- Grammar sources find their own headers via quote-includes (the
+  -- vendored files are patched from angle to quote form), so only the
+  -- runtime's directories are on the global include path — a global
+  -- grammar dir would let one grammar's ABI-versioned parser.h shadow
+  -- another's.
+  include-dirs:
+    vendor/tree-sitter/include
+    vendor/tree-sitter/src
+
+  cc-options:       -O1 -std=gnu11 -D_DEFAULT_SOURCE -D_BSD_SOURCE
+  build-depends:
+    , array
+    , base          >=4.17 && <5
+    , brick         >=2.0
+    , bytestring
+    , file-embed
+    , containers
+    , Diff
+    , directory
+    , filepath
+    , fsnotify
+    , mtl
+    , process
+    , SHA
+    , sqlite-simple
+    , text
+    , vty           >=6.0
+    , vty-crossplatform
+  default-language: Haskell2010
+  ghc-options:      -Wall -threaded
