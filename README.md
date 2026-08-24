@@ -25,6 +25,17 @@ file — so the mode picks the *base* the diff decorates against. (There is
 deliberately no index-vs-HEAD mode: with a directly editable buffer,
 reviewing an index that differs from the worktree isn't coherent.)
 
+## Push policy
+
+Currently **"PR-less, except where polite."** New features may be pushed
+to main at will, with the shared understanding that:
+
+- **a)** we might decide to remove them,
+- **b)** the workflow is in a high state of flux and experimentation, and
+- **c)** if your new feature will significantly disrupt other users of
+  the tool, experiment with it on a branch, discuss it in person, and
+  possibly open a PR if that makes sense.
+
 ## Persistent by design
 
 remax is built to be left open all day in a pane. The change set follows
@@ -324,17 +335,6 @@ tree-sitter, no helix installation, and **no GPL anywhere in the
 dependency tree**. Languages without a vendored grammar render plain —
 vendoring another is copying its sources under vendor/grammars and adding
 one table entry.
-
-## Push policy
-
-Currently **"PR-less, except where polite."** New features may be pushed
-to main at will, with the shared understanding that:
-
-- **a)** we might decide to remove them,
-- **b)** the workflow is in a high state of flux and experimentation, and
-- **c)** if your new feature will significantly disrupt other users of
-  the tool, experiment with it on a branch, discuss it in person, and
-  possibly open a PR if that makes sense.
 
 ## Development
 
