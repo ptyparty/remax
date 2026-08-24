@@ -168,7 +168,11 @@ recordVerdicts conn repo passId v mCommit rows =
         \   verdict = excluded.verdict, pass_id = excluded.pass_id,\
         \   commit_sha = excluded.commit_sha,\
         \   commit_subject = excluded.commit_subject,\
-        \   updated_at = excluded.updated_at"
+        \   updated_at = excluded.updated_at,\
+        \   note = CASE WHEN excluded.verdict = 'reviewed'\
+        \     THEN NULL ELSE line_verdict.note END,\
+        \   reply = CASE WHEN excluded.verdict = 'reviewed'\
+        \     THEN NULL ELSE line_verdict.reply END"
         (map toParams rows)
 
 -- Attach a reviewer note to lines that already carry verdicts. Returns

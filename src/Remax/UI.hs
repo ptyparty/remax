@@ -652,6 +652,7 @@ spaceMenu =
       , txt " n  note popup"
       , txt " e  $EDITOR here"
       , txt " p  pending filter"
+      , txt " u  resolve note here"
       ]
 
 -- The persistent session's resting state: nothing to review, but the
@@ -1185,6 +1186,7 @@ handleSpaceKey ev = do
     V.EvKey (V.KChar 'n') [] -> openNotePopup
     V.EvKey (V.KChar 'e') [] -> editCurrent
     V.EvKey (V.KChar 'p') [] -> togglePendingOnly
+    V.EvKey (V.KChar 'u') [] -> unnoteCmd
     _ -> pure ()
 
 togglePendingOnly :: EventM Name St ()
@@ -1325,6 +1327,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar '[') [] -> switchRun (-1)
         V.EvKey (V.KChar 'x') [] -> selectCurrentHunk
         V.EvKey (V.KChar 'p') [] -> togglePendingOnly
+        V.EvKey (V.KChar 'u') [] -> unnoteCmd
         V.EvKey (V.KChar '\'') [] -> parkM (stCurF st) (stCurH st)
         V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
         V.EvKey (V.KChar 'n') [] ->
@@ -1852,6 +1855,7 @@ applyVerdictHunk v = do
         rows = map storeRow (runChanges fv (clampH rs (stCurH st)))
       mCommit <- verdictCommitContext
       liftIO (recordVerdicts (stConn st) (repoText st) (stPassId st) v mCommit rows)
+      when (v == Reviewed) (resolveNotesInMemory (runKeys r))
       modify $ \s ->
         s
           { stVerdicts =
@@ -1894,6 +1898,7 @@ applyVerdictLines v = do
             mCommit
             (map storeRow picks)
         )
+      when (v == Reviewed) (resolveNotesInMemory (map (\(k, _, _) -> k) picks))
       modify $ \s ->
         s
           { stVerdicts =
@@ -2669,6 +2674,16 @@ amendHead = do
 
 -- Attach a reviewer note to the selection's lines (or the current hunk),
 -- so a ! or ? carries its reason into `remax list`.
+-- Acceptance closes the note conversation; the store upsert already
+-- cleared the rows, this keeps the inline display in step.
+resolveNotesInMemory :: [Text] -> EventM Name St ()
+resolveNotesInMemory keys =
+  modify $ \s ->
+    s
+      { stNotes = foldr Map.delete (stNotes s) keys
+      , stReplies = foldr Map.delete (stReplies s) keys
+      }
+
 -- What a note applies to: an active selection wins; then the line under
 -- the cursor, when it already carries a verdict or a note (sitting on a
 -- noted line and typing :note must open THAT note — a noted line's
@@ -2949,6 +2964,7 @@ acceptPath rawPath = do
             mCommit
             rows
         )
+      resolveNotesInMemory keys
       modify $ \s ->
         s
           { stVerdicts =
