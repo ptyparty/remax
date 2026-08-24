@@ -10,10 +10,10 @@ content-keyed verdicts that survive rebases.
 
 ![remax reviewing a commit mid-rebase](hero.png)
 
-*A `:rebase` review paused on a conflict: the commit bar names the
-commit under review, the tray lists hunks by enclosing function, and a
-reviewer note sits inline between the removed lines and what replaced
-them.* Runs in a plain terminal (zellij-friendly).
+*A commit-by-commit `:rebase` review in progress: the header tracks the
+rebase (commit 1/4) and the pending counts, the tray lists hunks by file
+with their verdicts and notes, and removed lines float inline beside
+what replaced them.*
 
 Prebuilt Linux binaries: every push to main updates the rolling
 [`latest` release](../../releases/tag/latest) — download
