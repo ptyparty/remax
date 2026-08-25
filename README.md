@@ -208,6 +208,7 @@ note popup keeps its modal keys in either keymap.
 
 | command | action |
 |---|---|
+| `:base` | pick the base out of the history: a picker over recent commits (short sha, how long ago, subject) with `HEAD` and `branch` on top. Type to filter on subject or sha, `⏎` reviews the working tree against the row you land on, and whatever you're reviewing against now is marked `← current` |
 | `:base REF` | review the working tree against REF (any commit-ish) |
 | `:base branch` / `:branch` | against the merge-base with the mainline — the whole branch diff, fixes land at the tip |
 | `:mode head` / `:mode unstaged` / `:mode untracked` | the classic change sets |

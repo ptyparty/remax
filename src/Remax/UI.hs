@@ -130,6 +130,7 @@ import Remax.Git
   , looksBinary
   , modeLabel
   , rebaseStatus
+  , recentCommits
   , refExists
   , runGit
   , trackedChanges
@@ -151,7 +152,7 @@ data Prompt = SearchPrompt Text | CmdPrompt Text
 -- The finder overlay: fuzzy file picking, or project-wide grep. Each
 -- display row is aligned with a jump target (file, and a 1-based line
 -- for grep hits; 0 = just open the file).
-data PickerMode = PickFiles | PickGrep
+data PickerMode = PickFiles | PickGrep | PickBase
 
 data Picker = Picker
   { pkMode :: PickerMode
@@ -2859,7 +2860,7 @@ data ArgKind = NoArg | ArgRef | ArgMode | ArgPath | ArgDir | ArgText | ArgSet
 
 commandTable :: [(Text, ArgKind, Text)]
 commandTable =
-  [ ("base", ArgRef, "diff against REF ('branch' = the merge-base)")
+  [ ("base", ArgRef, "diff against REF; bare :base picks from history")
   , ("branch", NoArg, "whole-branch view (merge-base base)")
   , ("mode", ArgMode, "head | unstaged | untracked")
   , ("rebase", ArgRef, "commit-by-commit review pass")
@@ -3036,6 +3037,7 @@ runCommand input =
   case T.words input of
     [] -> pure ()
     ["q"] -> halt
+    ["base"] -> openBasePicker
     ["base", "branch"] -> setBaseBranch
     ["branch"] -> setBaseBranch
     ["base", ref] -> setBase (VsRef ref)
@@ -4035,6 +4037,62 @@ openBufferPicker = do
           Just (refreshPicker (Picker PickFiles "" (map fvPath (stFiles st)) [] [] 0))
       }
 
+-- Pick a base out of the history instead of spelling one: bare :base.
+-- Rows are "ref  when  subject", and the ref is the first word of the
+-- row, so filtering and selection work on one list.
+openBasePicker :: EventM Name St ()
+openBasePicker = do
+  st <- get
+  commits <- liftIO (recentCommits 300 (stRoot st))
+  let
+    here ref = case stMode st of
+      VsRef cur | cur == ref -> "  \8592 current"
+      _ -> ""
+    pad n t = T.justifyLeft n ' ' t
+    commitRow (sha, ago, subject) =
+      pad 10 sha <> pad 16 (T.take 15 ago) <> subject <> here sha
+    rows =
+      [ pad 10 "HEAD" <> pad 16 "" <> "uncommitted changes" <> here "HEAD"
+      , pad 10 "branch"
+          <> pad 16 ""
+          <> "the whole branch \8212 merge-base with the mainline"
+      ]
+        ++ map commitRow commits
+  modify $ \s ->
+    s
+      { stPicker =
+          Just
+            ( refreshBasePicker
+                (Picker PickBase "" (map T.unpack rows) [] [] 0)
+            )
+      }
+
+-- History order carries meaning, so rank on match quality alone and let
+-- the sort's stability keep newest-first within a tier. (refreshPicker's
+-- third component is path length, which would scramble it.)
+refreshBasePicker :: Picker -> Picker
+refreshBasePicker pk =
+  let
+    q = pkInput pk
+    quality row = fmap (\(a, b, _) -> (a, b)) (fuzzyScore q row)
+    scored = mapMaybe (\row -> fmap (\sc -> (sc, row)) (quality row)) (pkAll pk)
+    ranked = map snd (sortOn fst scored)
+  in
+    pk
+      { pkMatches = map T.pack ranked
+      , pkTargets = map (\row -> (row, 0)) ranked
+      , pkSel = 0
+      }
+
+-- The row's first word is the ref; 'branch' means the merge-base, the
+-- same word :base already takes.
+applyBaseChoice :: Text -> EventM Name St ()
+applyBaseChoice row =
+  case T.words row of
+    [] -> pure ()
+    ("branch" : _) -> setBaseBranch
+    (ref : _) -> setBase (VsRef ref)
+
 -- Project-wide search: git grep behind the same overlay, Enter jumping
 -- straight to the hit.
 openGrepPicker :: Text -> EventM Name St ()
@@ -4189,6 +4247,9 @@ handlePickerKey ev pk =
         PickFiles ->
           modify
             (\s -> s {stPicker = Just (refreshPicker pk {pkInput = q})})
+        PickBase ->
+          modify
+            (\s -> s {stPicker = Just (refreshBasePicker pk {pkInput = q})})
         PickGrep -> do
           st <- get
           (matches, targets) <- liftIO (grepRepo (stRoot st) q)
@@ -4208,13 +4269,18 @@ handlePickerKey ev pk =
       V.EvKey V.KEsc [] -> modify (\s -> s {stPicker = Nothing})
       V.EvKey V.KEnter [] -> do
         modify (\s -> s {stPicker = Nothing})
-        case safeIdx (pkTargets pk) (pkSel pk) of
-          Just (path, 0) -> openFilePath (T.pack path)
-          Just (path, line) -> do
-            modify $ \s ->
-              s {stGrepNav = Just (pkInput pk, pkTargets pk, pkSel pk)}
-            openGrepHit path line (pkInput pk)
-          Nothing -> pure ()
+        case pkMode pk of
+          PickBase ->
+            case safeIdx (pkTargets pk) (pkSel pk) of
+              Just (row, _) -> applyBaseChoice (T.pack row)
+              Nothing -> pure ()
+          _ -> case safeIdx (pkTargets pk) (pkSel pk) of
+            Just (path, 0) -> openFilePath (T.pack path)
+            Just (path, line) -> do
+              modify $ \s ->
+                s {stGrepNav = Just (pkInput pk, pkTargets pk, pkSel pk)}
+              openGrepHit path line (pkInput pk)
+            Nothing -> pure ()
       V.EvKey V.KUp [] -> move (-1)
       V.EvKey (V.KChar 'p') [V.MCtrl] -> move (-1)
       V.EvKey V.KDown [] -> move 1
@@ -4239,6 +4305,7 @@ pickerLayer pk =
           shownText = T.take (boxWidth - 4) display
           content = case pkMode pk of
             PickFiles -> highlightSubseq (pkInput pk) shownText
+            PickBase -> highlightSubseq (pkInput pk) shownText
             PickGrep -> highlightInfix (pkInput pk) shownText
           line = padRight Max (txt " " <+> content)
         in
@@ -4250,9 +4317,12 @@ pickerLayer pk =
       counter = case pkMode pk of
         PickFiles ->
           tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
+        PickBase ->
+          tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
         PickGrep -> tshow (length (pkMatches pk)) <> " hits"
       title = case pkMode pk of
         PickFiles -> "files"
+        PickBase -> "base"
         PickGrep -> "grep"
       inputRow =
         hBox
@@ -4266,8 +4336,11 @@ pickerLayer pk =
           else
             map matchRow shown
               ++ replicate (visibleCount - length shown) (txt " ")
+      pickerHint = case pkMode pk of
+        PickBase -> "\8593\8595 move · \9166 review against this · esc closes"
+        _ -> "\8593\8595 move · \9166 open · esc closes"
     render $
-      floatFrame title "\8593\8595 move · \9166 open · esc closes" $
+      floatFrame title pickerHint $
         hLimit boxWidth (vBox (inputRow : txt " " : matchRows))
 
 -- Where each query character lands in the shown text (greedy,

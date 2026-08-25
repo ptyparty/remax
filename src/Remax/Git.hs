@@ -20,6 +20,7 @@ module Remax.Git
   , commitMessage
   , gitStateWatchDirs
   , headCommit
+  , recentCommits
   , runGit
   ) where
 
@@ -354,6 +355,27 @@ commitMessage root ref = do
 
 -- The short sha and subject of HEAD — during a rebase stop, that is the
 -- commit under review, so verdicts can carry their commit.
+-- Recent history for the base picker: short sha, how long ago, subject.
+-- Newest first, which is the order the picker keeps when nothing is
+-- typed.
+recentCommits :: Int -> FilePath -> IO [(Text, Text, Text)]
+recentCommits n root = do
+  (code, out, _) <-
+    readProcessWithExitCode
+      "git"
+      ["-C", root, "log", "--format=%h%x09%ar%x09%s", "-n", show n]
+      ""
+  pure $ case code of
+    ExitFailure _ -> []
+    ExitSuccess -> mapMaybe commitRow (T.lines (T.pack out))
+
+commitRow :: Text -> Maybe (Text, Text, Text)
+commitRow line =
+  case T.splitOn "\t" line of
+    (sha : ago : rest)
+      | not (T.null sha) -> Just (sha, ago, T.intercalate "\t" rest)
+    _ -> Nothing
+
 headCommit :: FilePath -> IO (Maybe (Text, Text))
 headCommit root = do
   (code, out, _) <-
