@@ -15,6 +15,7 @@ module Remax.Modal
   , bufferLines
   , cursorRC
   , plainMove
+  , greedyWrap
   , selectionRows
   , charSelection
   , hasPending

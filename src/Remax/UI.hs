@@ -792,7 +792,7 @@ draw st =
         else [body]
     overlays =
       catMaybes
-        [ fmap notePopupLayer (stNotePopup st)
+        [ fmap (notePopupLayer st) (stNotePopup st)
         , fmap pickerLayer (stPicker st)
         , if stSpace st then Just spaceMenu else Nothing
         ]
@@ -3604,8 +3604,58 @@ wrapNoteLine noteWrapCol ed =
                 else (row, col)
           in
             ed {edZipper = Z.moveCursor cursor (Z.textZipper wrapped Nothing)}
-notePopupLayer :: NotePopup -> Widget Name
-notePopupLayer np =
+
+-- What the popup is about to do. The old chrome never said: a fresh
+-- note, a rewrite of your own latest post, and a follow-up to somebody
+-- else's answer all looked exactly alike.
+data NoteAct = NoteNew | NoteEdit | NoteReply Text
+
+noteAct :: [Post] -> NoteAct
+noteAct thread =
+  case reverse thread of
+    [] -> NoteNew
+    (Post author _ : _)
+      | author == "reviewer" -> NoteEdit
+      | otherwise -> NoteReply author
+
+-- The posts to show above the editor. The whole conversation, except
+-- that when you are rewriting your own latest post that post is already
+-- in the editor and would otherwise appear twice.
+transcriptPosts :: [Post] -> [Post]
+transcriptPosts thread =
+  case noteAct thread of
+    NoteEdit -> init thread
+    _ -> thread
+
+-- One post as rendered transcript rows: the same glyphs the inline
+-- conversation uses, wrapped to the popup, continuations indented under
+-- the text so the authorship stays scannable down the left edge.
+postRows :: Int -> Post -> [Widget Name]
+postRows width post =
+  let
+    mine = postAuthor post == "reviewer"
+    lead =
+      if mine
+        then "\8801 you \183 "
+        else "\8618 " <> postAuthor post <> " \183 "
+    attr = if mine then noteInlineAttr else replyInlineAttr
+    -- a stored post keeps the reviewer's own line breaks; the transcript
+    -- is a quotation, so re-wrap it to whatever width the popup got
+    packed =
+      case greedyWrap
+        (max 12 (width - T.length lead))
+        (T.words (T.unwords (T.lines (postBody post)))) of
+        [] -> [""]
+        wss -> map T.unwords wss
+  in
+    case packed of
+      [] -> []
+      (first : rest) ->
+        withAttr attr (txt (lead <> first))
+          : map (\l -> withAttr attr (txt ("  " <> l))) rest
+
+notePopupLayer :: St -> NotePopup -> Widget Name
+notePopupLayer st np =
   let
     ed = npEd np
     (row, col) = cursorRC ed
@@ -3613,12 +3663,42 @@ notePopupLayer np =
     modeTag = case edMode ed of
       Insert -> "ins"
       Normal -> "nor"
+    thread = case npPurpose np of
+      AmendMessage -> []
+      NoteFor keys ->
+        case mapMaybe (`Map.lookup` stThreads st) keys of
+          (t : _) -> t
+          [] -> []
+    act = noteAct thread
     popupName = case npPurpose np of
-      NoteFor _ -> "note"
       AmendMessage -> "amend"
+      NoteFor _ -> case act of
+        NoteNew -> "note"
+        NoteEdit -> "note \183 editing yours"
+        NoteReply who -> "note \183 reply to " <> who
     popupHint = case npPurpose np of
-      NoteFor _ -> "\9166 save (nor) · C-c discard · empty note clears"
-      AmendMessage -> "\9166 amend (nor) · C-c cancel"
+      AmendMessage -> "\9166 amend (nor) \183 C-c cancel"
+      NoteFor _ -> case act of
+        NoteReply _ ->
+          "\9166 post (nor) \183 C-c discard \183 empty clears the thread"
+        _ -> "\9166 save (nor) \183 C-c discard \183 empty note clears"
+    -- which line the conversation is about; the popup never used to say
+    targetRows = case npPurpose np of
+      AmendMessage -> []
+      NoteFor _ -> case currentFileMay st of
+        Nothing -> []
+        Just fv ->
+          let
+            cur = fst (cursorRC (fvEd fv))
+            decl = case declAt (bufferLines (fvEd fv)) cur of
+              Just d -> " \183 " <> declName d
+              Nothing -> ""
+          in
+            [ withAttr
+                hintAttr
+                (txt (T.pack (fvPath fv) <> ":" <> tshow (cur + 1) <> decl))
+            , txt " "
+            ]
     -- selections paint here the same way they do in the main buffer:
     -- whole rows for x, column spans for v
     lineSel = selectionRows ed
@@ -3659,9 +3739,49 @@ notePopupLayer np =
       let
         boxWidth = min 90 (max 50 (availWidth ctx - 20))
         bodyRows = max 6 (availHeight ctx - 14)
+        posts = transcriptPosts thread
+        rowsFor = concatMap (postRows (boxWidth - 2))
+        -- the editor keeps its room first; the transcript takes what is
+        -- left, and gives up its oldest posts to fit rather than
+        -- squeezing the box you are typing in
+        editorRows = max 3 (min 10 (length ls + 1))
+        budget = bodyRows - editorRows - length targetRows - 1
+        (shownRows, elided)
+          | null posts = ([], 0 :: Int)
+          | length (rowsFor posts) <= budget = (rowsFor posts, 0)
+          | otherwise =
+              let
+                drops ps
+                  | null ps = ([], length posts)
+                  | length (rowsFor ps) <= budget - 1 =
+                      (rowsFor ps, length posts - length ps)
+                  | otherwise = drops (drop 1 ps)
+              in
+                drops posts
+        markerRows =
+          if elided > 0
+            then
+              [ withAttr
+                  hintAttr
+                  ( txt
+                      ( "\8230 "
+                          <> tshow elided
+                          <> " earlier post"
+                          <> (if elided == 1 then "" else "s")
+                      )
+                  )
+              ]
+            else []
+        ruleRows =
+          if null shownRows && elided == 0
+            then []
+            else [withAttr hairAttr (vLimit 1 (fill '\9472'))]
       render $
-        floatFrame (popupName <> " · " <> modeTag) popupHint $
-          hLimit boxWidth (padRight Max (vLimit bodyRows bodyW))
+        floatFrame (popupName <> " \183 " <> modeTag) popupHint $
+          hLimit boxWidth $
+            padRight Max $
+              vLimit bodyRows $
+                vBox (targetRows ++ markerRows ++ shownRows ++ ruleRows ++ [bodyW])
 
 -- Accept everything under a directory (or one file) as reviewed — the
 -- bulk verb for generated code nobody reads line by line. Matching is
