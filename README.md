@@ -10,10 +10,10 @@ content-keyed verdicts that survive rebases.
 
 ![remax reviewing a commit mid-rebase](hero.png)
 
-*A commit-by-commit `:rebase` review in progress: the header tracks the
-rebase (commit 1/4) and the pending counts, the tray lists hunks by file
-with their verdicts and notes, and removed lines float inline beside
-what replaced them.*
+*A commit-by-commit `:rebase` review in progress: the bar under the
+header tracks the rebase and the commit under review, the tray lists
+hunks by file with their verdicts, notes, and progress meters, and
+removed lines float inline beside what replaced them.*
 
 Prebuilt Linux binaries: every push to main updates the rolling
 [`latest` release](../../releases/tag/latest) — download
@@ -64,7 +64,8 @@ line that changes after being reviewed comes back as pending by itself.
 - Tray (left, `Tab` collapses): hunks grouped by file, with per-hunk
   marks — `·` pending, `✓` reviewed, `!` flagged, `?` questioned. The
   tool starts in **pending-only** mode: fully *reviewed* hunks fold under
-  their file line as a dim `·N✓` count and `]`/`[` skip them; flagged and
+  their file line — the file's progress meter (`▰▰▱ 2/3`) keeps the
+  count — and `]`/`[` skip them; flagged and
   questioned hunks still count as pending — they need another look — so
   they stay listed and navigable. `Space p` switches to showing (and walking)
   every hunk. The current hunk always shows either
@@ -76,9 +77,9 @@ line that changes after being reviewed comes back as pending by itself.
   the current hunk's rows it widens to a half-block `▌` in the highlight
   color, so the hunk's extent reads at a glance. Next to it, a status
   column (`!` flagged, `?` questioned, `✓` reviewed, `•` pending — the
-  cursor's row paints this cell's background yellow and renders the
-  glyph in black over it, so the line you're on still shows its own
-  verdict at full contrast) and absolute line numbers — position and review state are always both
+  cursor's row washes this cell's background dark gold while the glyph
+  keeps its own color, so the line you're on still shows its verdict)
+  and absolute line numbers — position and review state are always both
   visible. Removed lines have no number, keeping the numbering honestly
   absolute.
 - Body: the whole file, scrollable, syntax-highlighted by **tree-sitter**
@@ -91,13 +92,13 @@ line that changes after being reviewed comes back as pending by itself.
   theme directories. Colors render as exact 24-bit values when
   `COLORTERM` says the terminal can (the same signal helix trusts) —
   otherwise the terminal's palette approximation applies. Hunks are decorated in place by a live diff
-  against the base: removed lines float inline, and reviewed lines keep
-  their syntax colors under a dim style (plus a gutter mark), so the
-  unreviewed lines still pop when a hunk comes back — without flattening
-  the reviewed code to gray.
-- Status line: mode chip (NOR/INS), the top-level declaration the
-  cursor is inside, messages, key hints — styled by your
-  `ui.statusline` theme scopes. The tray shows each hunk's enclosing
+  against the base: removed lines float inline in a muted rose, and
+  reviewed lines keep their full syntax colors — the gutter column and
+  the tray meters carry the review state, so settled code never turns
+  murky.
+- Status line: a quiet mode chip (`● nor` / `● ins`), the top-level
+  declaration the cursor is inside, the overall progress meter
+  (`▰▰▰▰▱▱▱▱▱ 4/9`), transient messages, and a short hint. The tray shows each hunk's enclosing
   declaration next to its line number, so hunks read as "which
   function", not just "which line". (Both use the column-zero heuristic
   the hunk splitter trusts; a tree-sitter-exact version can come later.)
@@ -369,6 +370,19 @@ builds in the `haskell-tools` dev container (`compose.yaml`), and
 `./scripts/build` formats with fourmolu first. `package.yaml` is the
 source of truth — `remax.cabal` is hpack-generated. Plain `cabal build`
 also works outside the container.
+
+### The hero screenshot
+
+`scripts/hero-shot` regenerates `hero.png` with no human at a
+terminal: it builds the standard state with `scripts/hero --no-launch`
+(a scratch repo at `/tmp/remax-hero` mid-rebase, stopped on its first
+commit, seeded with accepted files, a flagged hunk and a questioned
+hunk with notes, and the current file's hunks left pending — store and
+config sandboxed under the scratch directory), captures the remax frame
+through a pty, and renders it to a 2x PNG via pyte and headless Chrome.
+It needs `python3` and Chrome or Chromium; pyte and pillow install into
+a scratch venv on first run. To eyeball or restage the state by hand,
+`scripts/hero` builds the same state and launches remax in it.
 
 ## Known v1 edges
 

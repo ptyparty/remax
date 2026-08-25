@@ -1,0 +1,365 @@
+#!/bin/bash
+
+# Build the standard hero-screenshot state and open remax in it.
+#
+# Creates a scratch repo at /tmp/remax-hero (fresh every run), starts a
+# commit-by-commit rebase stopped on its first commit, seeds a mix of
+# verdicts — accepted, pending, question and flag with notes — through
+# remax itself, and then launches remax for the screenshot. State lives
+# under the scratch directory, so your real review store and config are
+# never touched.
+#
+#   scripts/hero               build, seed, and launch
+#   scripts/hero --no-launch   build and seed only
+
+set -e
+
+HERO_DIR="${HERO_DIR:-/tmp/remax-hero}"
+REMAX_BIN="${REMAX_BIN:-remax}"
+REPO="$HERO_DIR/repo"
+
+command -v "$REMAX_BIN" > /dev/null || {
+  echo "remax is not on PATH (set REMAX_BIN to the binary)" >&2
+  exit 1
+}
+
+rm -rf "$HERO_DIR"
+mkdir -p "$REPO"
+
+export XDG_STATE_HOME="$HERO_DIR/state"
+export XDG_CONFIG_HOME="$HERO_DIR/config"
+
+git -C "$REPO" init -q -b main
+git -C "$REPO" config user.email "demo@example.com"
+git -C "$REPO" config user.name "Demo"
+
+mkdir -p "$REPO/src"
+
+cat > "$REPO/src/Config.hs" << 'EOF'
+module Config
+  ( Config (..)
+  , parseConfig
+  ) where
+
+import qualified Data.Text as T
+import qualified Data.Text.Read as TR
+
+data Config = Config
+  { configHost :: T.Text
+  , configPort :: Int
+  , configVerbose :: Bool
+  }
+
+parseConfig :: [(T.Text, T.Text)] -> Either T.Text Config
+parseConfig entries =
+  case lookup "host" entries of
+    Nothing -> Left "missing host"
+    Just host ->
+      Right
+        Config
+          { configHost = host
+          , configPort = intOr 8080 "port" entries
+          , configVerbose = lookup "verbose" entries == Just "true"
+          }
+
+intOr :: Int -> T.Text -> [(T.Text, T.Text)] -> Int
+intOr fallback key entries =
+  case fmap TR.decimal (lookup key entries) of
+    Just (Right (v, rest)) | T.null rest -> v
+    _ -> fallback
+EOF
+
+cat > "$REPO/src/Log.hs" << 'EOF'
+module Log
+  ( Severity (..)
+  , renderSeverity
+  ) where
+
+import qualified Data.Text as T
+
+data Severity = Debug | Info | Warn | Error
+  deriving (Eq, Ord, Show)
+
+renderSeverity :: Severity -> T.Text
+renderSeverity sev =
+  case sev of
+    Debug -> "debug"
+    Info -> "info"
+    Warn -> "warn"
+    Error -> "error"
+EOF
+
+cat > "$REPO/src/Queue.hs" << 'EOF'
+module Queue
+  ( Queue
+  , empty
+  , push
+  , pop
+  ) where
+
+data Queue a = Queue [a] [a]
+
+empty :: Queue a
+empty = Queue [] []
+
+push :: a -> Queue a -> Queue a
+push x (Queue front back) = Queue front (x : back)
+
+pop :: Queue a -> Maybe (a, Queue a)
+pop q =
+  case q of
+    Queue [] [] -> Nothing
+    Queue [] back -> pop (Queue (reverse back) [])
+    Queue (x : front) back -> Just (x, Queue front back)
+EOF
+
+cat > "$REPO/src/Retry.hs" << 'EOF'
+module Retry
+  ( RetryPolicy (..)
+  , RetryDecision (..)
+  , delaysFor
+  , decide
+  , describeDecision
+  ) where
+
+import qualified Data.Text as T
+
+data RetryPolicy = RetryPolicy
+  { retryLimit :: Int
+  , retryBaseMs :: Int
+  }
+
+data RetryDecision
+  = RetryAfterMs Int
+  | GiveUp T.Text
+
+delaysFor :: RetryPolicy -> [Int]
+delaysFor policy =
+  replicate (retryLimit policy) (retryBaseMs policy)
+
+decide :: RetryPolicy -> Int -> RetryDecision
+decide policy attempt =
+  case drop attempt (delaysFor policy) of
+    (delayMs : _) -> RetryAfterMs delayMs
+    [] -> GiveUp "retry limit reached"
+
+describeDecision :: RetryDecision -> T.Text
+describeDecision decision =
+  case decision of
+    RetryAfterMs ms ->
+      "retry in " <> T.pack (show ms) <> "ms"
+    GiveUp reason ->
+      "giving up: " <> reason
+EOF
+
+git -C "$REPO" add -A
+git -C "$REPO" commit -qm "Base service utilities"
+
+git -C "$REPO" checkout -qb exp-backoff
+
+cat > "$REPO/src/Config.hs" << 'EOF'
+module Config
+  ( Config (..)
+  , parseConfig
+  ) where
+
+import qualified Data.Text as T
+import qualified Data.Text.Read as TR
+
+data Config = Config
+  { configHost :: T.Text
+  , configPort :: Int
+  , configVerbose :: Bool
+  , configRetryLimit :: Int
+  , configBackoffMs :: Int
+  }
+
+parseConfig :: [(T.Text, T.Text)] -> Either T.Text Config
+parseConfig entries =
+  case lookup "host" entries of
+    Nothing -> Left "missing host"
+    Just host ->
+      Right
+        Config
+          { configHost = host
+          , configPort = intOr 8080 "port" entries
+          , configVerbose = lookup "verbose" entries == Just "true"
+          , configRetryLimit = intOr 5 "retry-limit" entries
+          , configBackoffMs = intOr 200 "backoff-ms" entries
+          }
+
+intOr :: Int -> T.Text -> [(T.Text, T.Text)] -> Int
+intOr fallback key entries =
+  case fmap TR.decimal (lookup key entries) of
+    Just (Right (v, rest)) | T.null rest -> v
+    _ -> fallback
+EOF
+
+cat > "$REPO/src/Log.hs" << 'EOF'
+module Log
+  ( Severity (..)
+  , renderSeverity
+  , retryLine
+  ) where
+
+import qualified Data.Text as T
+
+data Severity = Debug | Info | Warn | Error
+  deriving (Eq, Ord, Show)
+
+renderSeverity :: Severity -> T.Text
+renderSeverity sev =
+  case sev of
+    Debug -> "debug"
+    Info -> "info"
+    Warn -> "warn"
+    Error -> "error"
+
+retryLine :: Int -> Int -> T.Text
+retryLine attempt delayMs =
+  "retrying (attempt "
+    <> T.pack (show attempt)
+    <> ") in "
+    <> T.pack (show delayMs)
+    <> "ms"
+EOF
+
+cat > "$REPO/src/Queue.hs" << 'EOF'
+module Queue
+  ( Queue
+  , empty
+  , push
+  , pop
+  , size
+  , isFull
+  ) where
+
+data Queue a = Queue [a] [a]
+
+empty :: Queue a
+empty = Queue [] []
+
+push :: a -> Queue a -> Queue a
+push x (Queue front back) = Queue front (x : back)
+
+pop :: Queue a -> Maybe (a, Queue a)
+pop q =
+  case q of
+    Queue [] [] -> Nothing
+    Queue [] back -> pop (Queue (reverse back) [])
+    Queue (x : front) back -> Just (x, Queue front back)
+
+size :: Queue a -> Int
+size (Queue front back) = length front + length back
+
+isFull :: Int -> Queue a -> Bool
+isFull limit q = size q >= limit
+EOF
+
+cat > "$REPO/src/Retry.hs" << 'EOF'
+module Retry
+  ( RetryPolicy (..)
+  , RetryDecision (..)
+  , delaysFor
+  , decide
+  , describeDecision
+  ) where
+
+import qualified Data.Text as T
+
+data RetryPolicy = RetryPolicy
+  { retryLimit :: Int
+  , retryBaseMs :: Int
+  , retryCapMs :: Int
+  }
+
+data RetryDecision
+  = RetryAfterMs Int
+  | GiveUp T.Text
+
+delaysFor :: RetryPolicy -> [Int]
+delaysFor policy =
+  let
+    grow attempt = retryBaseMs policy * (2 ^ attempt)
+    capped ms = min (retryCapMs policy) ms
+  in
+    map (capped . grow) [0 .. retryLimit policy - 1]
+
+decide :: RetryPolicy -> Int -> RetryDecision
+decide policy attempt =
+  case drop attempt (delaysFor policy) of
+    (delayMs : _) -> RetryAfterMs delayMs
+    [] ->
+      GiveUp
+        ("no attempts left of " <> T.pack (show (retryLimit policy)))
+
+describeDecision :: RetryDecision -> T.Text
+describeDecision decision =
+  case decision of
+    RetryAfterMs ms ->
+      "retry in " <> T.pack (show ms) <> "ms"
+    GiveUp reason ->
+      "giving up: " <> reason
+EOF
+
+git -C "$REPO" commit -qam "Add exponential backoff to retry delays"
+
+sed -i 's/map (capped . grow)/map (jitter . capped . grow)/' "$REPO/src/Retry.hs"
+sed -i 's/    capped ms = min (retryCapMs policy) ms/    capped ms = min (retryCapMs policy) ms\n    jitter ms = ms + mod (ms * 7) 43/' \
+  "$REPO/src/Retry.hs"
+git -C "$REPO" commit -qam "Add deterministic jitter to backoff delays"
+
+sed -i 's/Warn -> "warn"/Warn -> "warning"/' "$REPO/src/Log.hs"
+git -C "$REPO" commit -qam "Spell out the warning severity"
+
+# a rebase over the same base still replays every pick with --exec, and
+# the failing exec stops it on the first commit — remax's review point
+git -C "$REPO" rebase -q --force-rebase --exec false main > /dev/null 2>&1 || true
+
+# Seed the verdict mix by driving remax through a pty. Hunks arrive
+# file by file (Config, Log, Queue, Retry); accepts auto-advance, and
+# note saves advance too, so this walks the whole set and leaves the
+# Retry hunks pending — remax then opens on them for the screenshot.
+seed_keys() {
+  sleep 3.0
+  printf 'X\r'
+  sleep 0.6 # accept Config: data fields
+  printf 'X\r'
+  sleep 0.6 # accept Config: parse entries
+  printf 'X\r'
+  sleep 0.6 # accept Log: export list
+  printf '!'
+  sleep 1.0 # flag Log: retryLine; the note popup opens
+  printf 'todo: thread the attempt count from the caller'
+  sleep 0.4
+  printf '\033'
+  sleep 0.4
+  printf '\r'
+  sleep 1.0 # save, advance
+  printf 'X\r'
+  sleep 0.6 # accept Queue: export list
+  printf '?'
+  sleep 1.0 # question Queue: size/isFull; note popup again
+  printf 'should the queue cap live here or in Config?'
+  sleep 0.4
+  printf '\033'
+  sleep 0.4
+  printf '\r'
+  sleep 1.0
+  printf ':q\r'
+  sleep 1.0
+}
+
+(
+  cd "$REPO"
+  seed_keys | script -qec "$REMAX_BIN" /dev/null > /dev/null 2>&1
+)
+
+echo "hero state ready in $REPO"
+
+if [ "${1:-}" = "--no-launch" ]; then
+  exit 0
+fi
+
+cd "$REPO"
+exec env XDG_STATE_HOME="$XDG_STATE_HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" "$REMAX_BIN"
