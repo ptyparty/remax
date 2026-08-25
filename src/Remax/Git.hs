@@ -274,8 +274,8 @@ rebaseStatus root = do
       let
         pickWords = ["pick", "p", "edit", "e", "reword", "r", "fixup", "f", "squash", "s"]
         pickOf l = case T.words l of
-          (verb : sha : rest)
-            | verb `elem` pickWords -> Just (sha, T.unwords rest)
+          (verb : pickSha : rest)
+            | verb `elem` pickWords -> Just (pickSha, T.unwords rest)
           _ -> Nothing
         donePicks = mapMaybe pickOf (T.lines done)
         todoPicks = mapMaybe pickOf (T.lines todo)

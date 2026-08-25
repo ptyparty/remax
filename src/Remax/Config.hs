@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- User-tunable knobs, read from ~/.config/remax/config.toml. The format
+-- User-tunable knobs, read from the XDG config directory (usually
+-- ~/.config/remax/config.toml). The format
 -- is a flat `key = number` list ('#' comments allowed); unknown keys and
 -- unparsable lines are skipped, and a missing file means the defaults —
 -- the same tolerance the theme loader practices.
@@ -20,7 +21,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Read as TR
-import System.Directory (createDirectoryIfMissing, getHomeDirectory)
+import System.Directory (XdgDirectory (XdgConfig), createDirectoryIfMissing, getXdgDirectory)
 import System.FilePath (takeDirectory, (</>))
 
 import Data.List (isPrefixOf)
@@ -53,8 +54,8 @@ defaultConfig =
 
 configPath :: IO FilePath
 configPath = do
-  home <- getHomeDirectory
-  pure (home </> ".config" </> "remax" </> "config.toml")
+  dir <- getXdgDirectory XdgConfig "remax"
+  pure (dir </> "config.toml")
 
 loadConfig :: IO Config
 loadConfig = do

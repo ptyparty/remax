@@ -122,6 +122,7 @@ pushUndo :: EdState -> EdState
 pushUndo ed =
   ed
     { edUndo = take 100 (edZipper ed : edUndo ed)
+    , edRedo = []
     , edTouched = True
     }
 
@@ -131,7 +132,12 @@ undoOnce ed =
     [] -> ed
     (z : rest) ->
       breakInsertRun
-        ed {edZipper = z, edUndo = rest, edSelAnchor = Nothing}
+        ed
+          { edZipper = z
+          , edUndo = rest
+          , edRedo = take 100 (edZipper ed : edRedo ed)
+          , edSelAnchor = Nothing
+          }
 
 -- C-k: kill to end of line, or the newline itself when already there.
 killToEOL :: EdState -> EdState

@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- Where verdicts are remembered: ~/.local/state/remax/review.db.
+-- Where verdicts are remembered: the XDG state directory (usually
+-- ~/.local/state/remax/review.db).
 -- One row per changed line, keyed by content (see Remax.Key), with the
 -- verdict it was given, the pass that gave it, an optional reviewer note,
 -- and the line's position at the time (advisory — content keys are the
@@ -37,7 +38,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Database.SQLite.Simple
-import System.Directory (createDirectoryIfMissing, getHomeDirectory)
+import System.Directory (XdgDirectory (XdgState), createDirectoryIfMissing, getXdgDirectory)
 import System.FilePath ((</>))
 
 data Verdict = Reviewed | Flagged | Questioned
@@ -55,9 +56,7 @@ parseVerdict "questioned" = Just Questioned
 parseVerdict _ = Nothing
 
 storeDirectory :: IO FilePath
-storeDirectory = do
-  home <- getHomeDirectory
-  pure (home </> ".local" </> "state" </> "remax")
+storeDirectory = getXdgDirectory XdgState "remax"
 
 openStore :: IO Connection
 openStore = do

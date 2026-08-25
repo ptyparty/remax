@@ -66,6 +66,7 @@ data EdState = EdState
   , edPending :: Pending
   , edKill :: Text -- the kill slot (emacs C-k/C-w/M-w; future helix yank)
   , edUndo :: [Z.TextZipper Text]
+  , edRedo :: [Z.TextZipper Text] -- what undo stepped back over; edits clear it
   , edTouched :: Bool -- something was actually changed at least once
   , edInsertEntry :: Maybe InsertEntry -- how the open insert session began
   , edRecording :: [V.Event] -- keys of the open insert session, reversed
@@ -98,6 +99,7 @@ newEdState row ls =
     , edPending = NoPending
     , edKill = T.empty
     , edUndo = []
+    , edRedo = []
     , edTouched = False
     , edInsertEntry = Nothing
     , edRecording = []
@@ -141,7 +143,12 @@ snapshot st = take undoDepth (edZipper st : edUndo st)
 
 withUndo :: (Z.TextZipper Text -> Z.TextZipper Text) -> EdState -> EdState
 withUndo f st =
-  st {edZipper = f (edZipper st), edUndo = snapshot st, edTouched = True}
+  st
+    { edZipper = f (edZipper st)
+    , edUndo = snapshot st
+    , edRedo = []
+    , edTouched = True
+    }
 
 -- Nothing means the key is not an editing key and the caller may use it
 -- for review-level commands.
@@ -200,6 +207,7 @@ handlePlain ev st =
       V.EvKey (V.KChar 'P') [] -> Just (pasteSel 0 st)
       V.EvKey (V.KChar '.') [] -> Just (repeatInsert st)
       V.EvKey (V.KChar 'u') [] -> Just (undo st)
+      V.EvKey (V.KChar 'U') [] -> Just (redo st)
       V.EvKey V.KEsc [] -> Just (collapse st)
       _ -> Nothing
 
@@ -266,6 +274,7 @@ pasteSel offset st =
                       (at + length newRows - 1, 0)
                       (Z.textZipper ls2 Nothing)
                 , edUndo = snapshot st
+                , edRedo = []
                 , edTouched = True
                 , edSelAnchor = Just (at, 0)
                 , edSelKind = LineSel
@@ -283,6 +292,7 @@ pasteSel offset st =
               st
                 { edZipper = z1
                 , edUndo = snapshot st
+                , edRedo = []
                 , edTouched = True
                 , edSelAnchor = Just start
                 , edSelKind = CharSel
@@ -365,6 +375,7 @@ replaceSel c st =
     st
       { edZipper = Z.moveCursor (cr, cc) (Z.textZipper newLs Nothing)
       , edUndo = snapshot st
+      , edRedo = []
       , edTouched = True
       }
 
@@ -518,6 +529,7 @@ beginInsert entry st =
     , edInsertEntry = Just entry
     , edRecording = []
     , edUndo = snapshot st
+    , edRedo = []
     , edTouched = True
     }
 
@@ -595,6 +607,7 @@ deleteCharRange (lr, lc) (hr, hc) st =
     (collapse st)
       { edZipper = Z.moveCursor (row, col) (Z.textZipper kept Nothing)
       , edUndo = snapshot st
+      , edRedo = []
       , edTouched = True
       }
 
@@ -611,6 +624,7 @@ replaceRows a b repl st =
     (collapse st)
       { edZipper = Z.moveCursor (row, 0) (Z.textZipper kept Nothing)
       , edUndo = snapshot st
+      , edRedo = []
       , edTouched = True
       }
 
@@ -673,6 +687,7 @@ joinLines st =
         (collapse st)
           { edZipper = Z.moveCursor (lo, col) (Z.textZipper kept Nothing)
           , edUndo = snapshot st
+          , edRedo = []
           , edTouched = True
           }
 
@@ -701,6 +716,7 @@ indentLines dir st =
     st
       { edZipper = Z.moveCursor (cr, newCol) (Z.textZipper kept Nothing)
       , edUndo = snapshot st
+      , edRedo = []
       , edTouched = True
       }
 
@@ -759,6 +775,7 @@ reflow st =
     (collapse st)
       { edZipper = Z.moveCursor (lo, 0) (Z.textZipper kept Nothing)
       , edUndo = snapshot st
+      , edRedo = []
       , edTouched = True
       }
 
@@ -835,6 +852,7 @@ toggleCase st =
     st
       { edZipper = Z.moveCursor (cr, cc) (Z.textZipper newLs Nothing)
       , edUndo = snapshot st
+      , edRedo = []
       , edTouched = True
       }
 
@@ -842,7 +860,23 @@ undo :: EdState -> EdState
 undo st =
   case edUndo st of
     [] -> st
-    z : zs -> (collapse st) {edZipper = z, edUndo = zs}
+    z : zs ->
+      (collapse st)
+        { edZipper = z
+        , edUndo = zs
+        , edRedo = take undoDepth (edZipper st : edRedo st)
+        }
+
+redo :: EdState -> EdState
+redo st =
+  case edRedo st of
+    [] -> st
+    z : zs ->
+      (collapse st)
+        { edZipper = z
+        , edRedo = zs
+        , edUndo = take undoDepth (edZipper st : edUndo st)
+        }
 
 data InsertResult
   = InsertHandled EdState

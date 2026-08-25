@@ -24,6 +24,7 @@ import Brick
   , attrMap
   , attrName
   , customMain
+  , fill
   , getVtyHandle
   , hBox
   , hLimit
@@ -46,13 +47,15 @@ import Brick
   , viewportScroll
   , visibleRegion
   , withAttr
+  , withBorderStyle
   , withDefAttr
   , (<+>)
   )
 import Brick.BChan (BChan, newBChan, writeBChanNonBlocking)
-import Brick.Types (Context, Size (Fixed, Greedy), Widget (Widget), availWidth, getContext, render)
-import Brick.Util (fg, on)
+import Brick.Types (Context, Size (Fixed, Greedy), Widget (Widget), availHeight, availWidth, getContext, render)
+import Brick.Util (fg)
 import qualified Brick.Widgets.Border as B
+import qualified Brick.Widgets.Border.Style as BS
 import qualified Brick.Widgets.Center as C
 import Control.Applicative ((<|>))
 import Control.Concurrent
@@ -72,7 +75,7 @@ import Control.Monad.State (get, modify, put)
 import Data.Char (isAlphaNum, isSpace, toLower)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
-import Data.List (find, findIndex, isPrefixOf, maximumBy, sortOn)
+import Data.List (find, findIndex, groupBy, isPrefixOf, maximumBy, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
 import Data.Ord (comparing)
@@ -725,7 +728,7 @@ draw st =
       Just rb -> [rebaseBar rb]
       Nothing -> []
     infoRows = case stInfoPopup st of
-      Just (title, body) -> [infoPopupLayer title body]
+      Just (title, infoBody) -> [infoPopupLayer title infoBody]
       Nothing -> []
   in
     infoRows
@@ -733,11 +736,16 @@ draw st =
       ++ [ vBox
              ( [headerBar st]
                  ++ rebaseRows
-                 ++ [hBox panes]
+                 ++ [hairline, hBox panes, hairline]
                  ++ menuRows
                  ++ [statusBar st]
              )
          ]
+
+-- A quiet full-width rule; the chrome's only horizontal structure now
+-- that the reverse-video slabs are gone.
+hairline :: Widget Name
+hairline = vLimit 1 (withAttr hairAttr (fill '\9472'))
 
 -- The commit under review gets its own full-width bar during a rebase:
 -- step, sha, and the whole subject line. Space c shows the full
@@ -745,53 +753,85 @@ draw st =
 rebaseBar :: RebaseStatus -> Widget Name
 rebaseBar rb =
   let
-    conflictNote = if rebaseConflicted rb then "  · CONFLICT" else ""
-    shaNote = if T.null (rebaseSha rb) then "" else rebaseSha rb <> "  "
+    conflictNote =
+      if rebaseConflicted rb
+        then withAttr conflictAttr (txt "  · conflict")
+        else txt ""
+    shaNote =
+      if T.null (rebaseSha rb)
+        then txt ""
+        else withAttr rebaseShaAttr (txt (rebaseSha rb)) <+> txt "  "
   in
     withDefAttr headerRebaseAttr . padRight Max $
-      txt
-        ( " \10227 commit "
-            <> tshow (rebaseStep rb)
-            <> "/"
-            <> tshow (rebaseTotal rb)
-            <> "  "
-            <> shaNote
-            <> rebaseSubject rb
-            <> conflictNote
-            <> "   (\9251c full message)"
-        )
+      hBox
+        [ withAttr headerAttr $
+            txt
+              ( " \10227 commit "
+                  <> tshow (rebaseStep rb)
+                  <> "/"
+                  <> tshow (rebaseTotal rb)
+                  <> "  "
+              )
+        , shaNote
+        , txt (rebaseSubject rb)
+        , conflictNote
+        , withAttr hintAttr (txt "   \9251c full message")
+        ]
+
+-- Shared float chrome: rounded frame with the title in the border, an
+-- elevated surface, inner breathing room, and a dim hint as the last
+-- interior row.
+floatFrame :: Text -> Text -> Widget Name -> Widget Name
+floatFrame title hint body =
+  C.centerLayer
+    . withDefAttr floatAttr
+    . withBorderStyle BS.unicodeRounded
+    . B.borderWithLabel (withAttr floatTitleAttr (txt (" " <> title <> " ")))
+    . padTop (Pad 1)
+    . padLeft (Pad 2)
+    . padRight (Pad 2)
+    $ vBox
+      [ body
+      , padTop (Pad 1) (withAttr hintAttr (txt hint))
+      ]
 
 -- A read-only text popup (full commit messages and kin); any key closes.
 infoPopupLayer :: Text -> Text -> Widget Name
 infoPopupLayer title body =
-  C.centerLayer . B.border . hLimit 78 $
-    vBox
-      [ withDefAttr statusAttr (padRight Max (txt (" " <> title)))
-      , padTop (Pad 1) . padBottom (Pad 1) . padLeft (Pad 2) . padRight (Pad 2) $
-          vLimit 24 (txtWrap (padT body))
-      , withAttr hintAttr (txt " any key closes ")
-      ]
+  Widget Greedy Greedy $ do
+    ctx <- getContext
+    let
+      boxWidth = min 100 (max 50 (availWidth ctx - 20))
+      bodyRows = max 4 (availHeight ctx - 14)
+    render $
+      floatFrame title "any key closes" $
+        hLimit boxWidth (padRight Max (vLimit bodyRows (txtWrap (padT body))))
 
 -- The pending-space infobox, helix style: bottom-right, listing what the
 -- menu offers.
 spaceMenu :: Widget Name
 spaceMenu =
-  C.centerLayer
-    . B.border
-    . hLimit 24
-    $ vBox
-      [ withDefAttr statusAttr (padRight Max (txt " space "))
-      , txt " f  file picker"
-      , txt " b  open files"
-      , txt " n  note popup"
-      , txt " e  $EDITOR here"
-      , txt " p  pending filter"
-      , txt " u  resolve note here"
-      , txt " h  adopt hunk here"
-      , txt " a  alternate file"
-      , txt " /  project search"
-      , txt " c  commit message"
-      ]
+  let
+    item key label =
+      hBox
+        [ withAttr noteInlineAttr (txt (" " <> key))
+        , withAttr statusAttr (txt ("  " <> label))
+        ]
+  in
+    floatFrame "space" "any other key cancels" . hLimit 26 . padRight Max $
+      vBox
+        [ item "f" "file picker"
+        , item "b" "open files"
+        , item "n" "note popup"
+        , item "e" "$EDITOR here"
+        , item "p" "pending filter"
+        , item "u" "resolve note here"
+        , item "h" "adopt hunk here"
+        , item "r" "revert hunk to base"
+        , item "a" "alternate file"
+        , item "/" "project search"
+        , item "c" "commit message"
+        ]
 
 -- The persistent session's resting state: nothing to review, but the
 -- watcher is live and new work will wake the screen on its own.
@@ -845,9 +885,20 @@ headerBar st =
             hBox
               [ txt lead
               , withAttr headerFileAttr (txt (T.pack (fvPath fv)))
-              , txt ("  ·  file " <> tshow (stCurF st + 1) <> "/" <> tshow (length (stFiles st)))
-              , txt ("  ·  hunk " <> tshow shownH <> "/" <> tshow (length rs))
-              , txt pendingSeg
+              , withAttr
+                  headerCountAttr
+                  ( txt
+                      ( "  ·  file "
+                          <> tshow (stCurF st + 1)
+                          <> "/"
+                          <> tshow (length (stFiles st))
+                          <> "  ·  hunk "
+                          <> tshow shownH
+                          <> "/"
+                          <> tshow (length rs)
+                          <> pendingSeg
+                      )
+                  )
               , doneBadge
               , rebaseSeg
               ]
@@ -886,30 +937,32 @@ trayEntries st =
     concatMap fileGroup (zip [0 ..] (stFiles st))
 
 trayWidth :: Int
-trayWidth = 26
+trayWidth = 32
 
 tray :: St -> Widget Name
 tray st =
   let
     entryWidget entry = case entry of
-      TrayFile fi hidden ->
+      TrayFile fi _hidden ->
         let
+          fv = stFiles st !! fi
+          total = length (fvRuns fv)
+          done =
+            length
+              (filter (not . runPending (stVerdicts st)) (fvRuns fv))
+          meterCols = meterTextWidth done total
           name =
             shortPath
-              (trayWidth - 2 - (if hidden > 0 then 4 else 0))
-              (T.pack (fvPath (stFiles st !! fi)))
-          suffix =
-            if hidden > 0
-              then withAttr doneMarkAttr (txt (" \183" <> tshow hidden <> "\10003"))
-              else txt ""
+              (trayWidth - 3 - meterCols)
+              (T.pack (fvPath fv))
         in
-          padRight
-            Max
-            ( withAttr
+          hBox
+            [ withAttr
                 (if fi == stCurF st then trayFileCurAttr else trayFileAttr)
                 (txt (padT name))
-                <+> suffix
-            )
+            , padLeft Max (meterW done total)
+            , txt " "
+            ]
       TrayHunk fi hi ->
         let
           fv = stFiles st !! fi
@@ -925,16 +978,20 @@ tray st =
           mark = runMark (stVerdicts st) r
           noteMark =
             if any (`Map.member` stNotes st) (runKeys r)
-              then withAttr hintAttr (txt " \8801")
+              then withAttr noteInlineAttr (txt " \8801")
               else txt ""
           markAttr = case mark of
             '!' -> flagMarkAttr
             '?' -> questionMarkAttr
             '\10003' -> doneMarkAttr
             _ -> pendingMarkAttr
+          lead =
+            if current
+              then withAttr floatSelBarAttr (txt "\9614 ")
+              else txt "  "
           line =
             hBox
-              [ txt "  "
+              [ lead
               , withAttr markAttr (str [mark])
               , txt (" :" <> tshow (runAnchor r + 1))
               , withAttr trayDeclAttr (txt decl)
@@ -942,11 +999,12 @@ tray st =
               ]
           w = padRight Max line
         in
-          if current then withDefAttr selAttr w else w
+          if current then withDefAttr floatSelAttr w else w
+    rows = map entryWidget (trayEntries st)
   in
     hLimit trayWidth $
       padRight (Pad 1) $
-        viewport TrayVP Vertical (vBox (map entryWidget (trayEntries st)))
+        viewport TrayVP Vertical (vBox rows)
 
 -- Long paths compress like s/R/Quote.hs: every directory shrinks to its
 -- first character, the file name stays whole, and if even that is too
@@ -1076,7 +1134,8 @@ renderFile st fv =
               Just _ -> Just ('\8226', pendingMarkAttr)
               Nothing -> Nothing
         statusCol = case (isCursor, statusPick) of
-          (True, Just (c, _)) -> withAttr cursorMarkAttr (str [c])
+          (True, Just (c, a)) ->
+            withDefAttr cursorMarkAttr (withAttr a (str [c]))
           (True, Nothing) -> withAttr cursorMarkAttr (str " ")
           (False, Just (c, a)) -> withAttr a (str [c])
           (False, Nothing) -> str " "
@@ -1118,19 +1177,12 @@ renderFile st fv =
                       [] -> txt " "
                       filled ->
                         hBox (map (\(a, t) -> withAttr a (txt t)) filled)
-        -- reviewed lines keep their syntax colors but pick up a dim
-        -- style, so "already answered for" stays visible without
-        -- flattening the code to gray; under a selection the dim
-        -- variant also carries the selection background
+        -- reviewed lines keep their full syntax colors; the gutter dot
+        -- and the tray checkmark already say "answered for", and dimming
+        -- whole regions made the buffer feel murky
         buildLine hOff =
           let
-            body0 = markW <+> contentFor hOff
-            body1 = case verdict of
-              Just Reviewed ->
-                withDefAttr
-                  (if inSel then selDimAttr else reviewedDimAttr)
-                  body0
-              _ -> body0
+            body1 = markW <+> contentFor hOff
             lineW0 = curBar <+> statusCol <+> numCol <+> body1
             lineW = if inSel then withDefAttr selAttr lineW0 else lineW0
           in
@@ -1150,7 +1202,7 @@ renderFile st fv =
         noteRowW (isReply, n) =
           let
             glyph = if isReply then "\8618 " else "\9492 \8801 "
-            noteAttr = if isReply then questionMarkAttr else hintAttr
+            noteAttr = if isReply then replyInlineAttr else noteInlineAttr
           in
             curBar
               <+> withAttr
@@ -1246,21 +1298,27 @@ statusBar st =
       Just (SearchPrompt input) -> txt ("/" <> input <> "\9612")
       Just (CmdPrompt input) -> txt (":" <> input <> "\9612")
       Nothing -> withAttr msgAttr (txt (padT (stMsg st)))
+    chip dotAttr label =
+      hBox
+        [ txt " "
+        , withAttr dotAttr (txt "\9679")
+        , withAttr statusAttr (txt (" " <> label <> " "))
+        ]
     modeChip =
       if stSpace st
-        then withAttr norAttr (txt " SPC\8230 ")
+        then chip modeDotNorAttr "spc\8230"
         else case stEmacsPrefix st of
-          Just pfx -> withAttr norAttr (txt (" C-" <> T.singleton pfx <> "\8230 "))
+          Just pfx -> chip modeDotNorAttr ("C-" <> T.singleton pfx <> "\8230")
           Nothing ->
             if cfgKeys (stConfig st) == KeysEmacs
-              then withAttr norAttr (txt " EMX ")
+              then chip modeDotNorAttr "emx"
               else case currentFileMay st of
-                Nothing -> withAttr norAttr (txt " NOR ")
+                Nothing -> chip modeDotNorAttr "nor"
                 Just fv -> case edMode (fvEd fv) of
-                  Insert -> withAttr insAttr (txt " INS ")
+                  Insert -> chip modeDotInsAttr "ins"
                   Normal -> case pendingLabel (fvEd fv) of
-                    Just p -> withAttr norAttr (txt (" " <> p <> "\8230  "))
-                    Nothing -> withAttr norAttr (txt " NOR ")
+                    Just p -> chip modeDotNorAttr (p <> "\8230")
+                    Nothing -> chip modeDotNorAttr "nor"
     declSeg = case currentFileMay st of
       Just fv ->
         case declAt (bufferLines (fvEd fv)) (fst (cursorRC (fvEd fv))) of
@@ -1269,20 +1327,54 @@ statusBar st =
           Nothing -> txt ""
       Nothing -> txt ""
     hint = case currentFileMay st of
-      Nothing -> ": command  :q quit "
+      Nothing -> ": command · :q quit "
       Just fv ->
-        (if fvStale fv then "· hunks refresh on Esc " else "")
-          <> "X\9166 accept  !/? flag  R unmark  ]/[ hunk  \9251p pending  :q quit "
+        (if fvStale fv then "hunks refresh on Esc · " else "")
+          <> "\9166 accept · \9251 menu "
+    meterSeg =
+      let
+        pairs = allRunPairs st
+        total = length pairs
+        pending = length (filter (pairPending st) pairs)
+      in
+        if total == 0
+          then txt ""
+          else txt "  " <+> meterW (total - pending) total
   in
     withDefAttr statusAttr $
       modeChip
         <+> declSeg
-        <+> txt " "
+        <+> meterSeg
+        <+> txt "  "
         <+> middle
         <+> padLeft Max (withAttr hintAttr (txt hint))
 
 padT :: Text -> Text
 padT t = if T.null t then " " else t
+
+-- Progress as quiet blocks: one cell per hunk up to ten, then scaled.
+-- The filled run only completes when the work does.
+meterW :: Int -> Int -> Widget Name
+meterW done total =
+  let
+    cells = min 10 (max 1 total)
+    filled =
+      if done >= total
+        then cells
+        else min (cells - 1) (div (done * cells) (max 1 total))
+  in
+    hBox
+      [ withAttr meterOnAttr (txt (T.replicate filled "\9648"))
+      , withAttr meterOffAttr (txt (T.replicate (cells - filled) "\9649"))
+      , withAttr hintAttr (txt (" " <> tshow done <> "/" <> tshow total))
+      ]
+
+meterTextWidth :: Int -> Int -> Int
+meterTextWidth done total =
+  min 10 (max 1 total)
+    + 2
+    + T.length (tshow done)
+    + T.length (tshow total)
 
 -- Events --------------------------------------------------------------------------
 
@@ -1299,6 +1391,9 @@ handleEvent brickEvent =
     AppEvent Tick -> scrollHunkIntoView
     VtyEvent ev -> do
       st <- get
+      -- messages are transient: any keystroke clears the old one, and a
+      -- handler that has something new to say sets it afresh
+      modify (\s -> s {stMsg = ""})
       case (stNotePopup st, stPicker st, stPrompt st) of
         _
           | stInfoPopup st /= Nothing ->
@@ -1334,6 +1429,7 @@ handleSpaceKey ev = do
     V.EvKey (V.KChar 'p') [] -> togglePendingOnly
     V.EvKey (V.KChar 'u') [] -> unnoteCmd
     V.EvKey (V.KChar 'h') [] -> adoptHunkUnderCursor
+    V.EvKey (V.KChar 'r') [] -> revertTarget
     V.EvKey (V.KChar 'a') [] -> gotoAltFile
     V.EvKey (V.KChar '/') [] -> openGrepPicker ""
     V.EvKey (V.KChar 'c') [] -> showCommitPopup
@@ -1481,6 +1577,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'p') [] -> togglePendingOnly
         V.EvKey (V.KChar 'u') [] -> unnoteCmd
         V.EvKey (V.KChar 'h') [] -> adoptHunkUnderCursor
+        V.EvKey (V.KChar 'v') [] -> revertTarget
         V.EvKey (V.KChar 'a') [] -> gotoAltFile
         V.EvKey (V.KChar '/') [] -> openGrepPicker ""
         V.EvKey (V.KChar 'c') [] -> showCommitPopup
@@ -1820,9 +1917,12 @@ searchWordUnderCursor = do
     ed = fvEd (currentFile st)
     ls = bufferLines ed
     lineAt r = fromMaybe "" (safeIdx ls r)
+    -- only a deliberate v-extend selection overrides the cursor word;
+    -- the incidental selections that w/e-style motions leave behind drag
+    -- neighboring punctuation along and are not what * means
     selectionNeedle = do
       ((lr, lc), (hr, hc)) <- charSelection ed
-      if (lr, lc) == (hr, hc) || lr /= hr
+      if not (edExtend ed) || (lr, lc) == (hr, hc) || lr /= hr
         then Nothing
         else
           let
@@ -1834,17 +1934,23 @@ searchWordUnderCursor = do
       let
         (row, col) = cursorRC ed
         l = lineAt row
+        -- on punctuation, scan forward to the next word on the line
+        -- (vim's * does the same) rather than giving up
+        effCol =
+          if col < T.length l && isIdent (T.index l col)
+            then Just col
+            else fmap (col +) (T.findIndex isIdent (T.drop col l))
       in
-        if col < T.length l && isIdent (T.index l col)
-          then
+        case effCol of
+          Nothing -> Nothing
+          Just c ->
             let
               start =
-                T.length (T.dropWhileEnd isIdent (T.take col l))
+                T.length (T.dropWhileEnd isIdent (T.take c l))
               len =
                 T.length (T.takeWhile isIdent (T.drop start l))
             in
               Just (T.take len (T.drop start l))
-          else Nothing
   case selectionNeedle <|> wordNeedle of
     Nothing -> modify (\s -> s {stMsg = "no word under cursor"})
     Just needle -> do
@@ -2044,6 +2150,76 @@ jumpToAnchor = do
 -- Space h: adopt the hunk the cursor is standing in as the current one
 -- — the deliberate counterpart of ', which jumps back to the hunk
 -- under review.
+-- :revert / Space r — put the base text back for the hunk under the
+-- cursor, or for every hunk a selection touches. The revert is an
+-- ordinary buffer edit, so u undoes it and the diff re-derives at once.
+revertTarget :: EventM Name St ()
+revertTarget = do
+  st <- get
+  case currentFileMay st of
+    Nothing -> setMsg "no file on screen"
+    Just fv
+      | fvStale fv -> setMsg "hunks are stale — press Esc first"
+      | otherwise ->
+          let
+            ed = fvEd fv
+            lineSpan = selectionRows ed
+            charSpan =
+              fmap (\((lr, _), (hr, _)) -> (lr, hr)) (charSelection ed)
+            touchedBySpan (a, b) =
+              let
+                pick row = case (rRunIx row, rNewRow row) of
+                  (Just ix, Just n)
+                    | n >= a && n <= b -> Just ix
+                  _ -> Nothing
+              in
+                Set.fromList (mapMaybe pick (fvRows fv))
+            targetIxs = case lineSpan <|> charSpan of
+              Just spanRows -> touchedBySpan spanRows
+              Nothing ->
+                maybe Set.empty Set.singleton (hunkUnderCursor st)
+            inTarget row =
+              maybe False (`Set.member` targetIxs) (rRunIx row)
+            emit row =
+              if inTarget row
+                then case rMark row of
+                  '-' -> [rText row]
+                  '+' -> []
+                  _ -> maybe [] (const [rText row]) (rNewRow row)
+                else maybe [] (const [rText row]) (rNewRow row)
+            newLines = concatMap emit (fvRows fv)
+            keptLines = if null newLines then [""] else newLines
+            parkRow =
+              let
+                plusRows = do
+                  row <- fvRows fv
+                  if inTarget row
+                    then maybe [] pure (rNewRow row)
+                    else []
+              in
+                case plusRows of
+                  (r0 : _) -> min r0 (length keptLines - 1)
+                  [] -> min (fst (cursorRC ed)) (length keptLines - 1)
+            edNext =
+              ed
+                { edZipper =
+                    Z.moveCursor
+                      (max 0 parkRow, 0)
+                      (Z.textZipper keptLines Nothing)
+                , edUndo = take 100 (edZipper ed : edUndo ed)
+                , edRedo = []
+                , edTouched = True
+                , edSelAnchor = Nothing
+                , edMode = Normal
+                }
+          in
+            if Set.null targetIxs
+              then setMsg "nothing to revert here"
+              else do
+                rebuildWith (stCurF st) edNext
+                applyToDisk (stCurF st)
+                setMsg "\10226 reverted to base"
+
 adoptHunkUnderCursor :: EventM Name St ()
 adoptHunkUnderCursor = do
   st <- get
@@ -2567,6 +2743,7 @@ commandTable =
   , ("note", ArgText, "note popup (:note TEXT for a one-liner)")
   , ("unnote", NoArg, "remove the note from the target lines")
   , ("resolve", ArgText, "resolve the note here; 'all' sweeps answered ones")
+  , ("revert", NoArg, "revert hunk under cursor (or selection) to base")
   , ("open", ArgPath, "open a file in the session")
   , ("close", NoArg, "drop the current file")
   , ("files", NoArg, "fuzzy file finder")
@@ -2727,6 +2904,7 @@ runCommand input =
     ["note"] -> openNotePopup
     ("note" : rest) -> noteCmd (T.unwords rest)
     ["unnote"] -> unnoteCmd
+    ["revert"] -> revertTarget
     ["resolve"] -> unnoteCmd
     ["resolve", "all"] -> resolveAllAnswered
     ["accept", path] -> acceptPath path
@@ -3249,8 +3427,8 @@ notePopupLayer np =
     (row, col) = cursorRC ed
     ls = bufferLines ed
     modeTag = case edMode ed of
-      Insert -> "INS"
-      Normal -> "NOR"
+      Insert -> "ins"
+      Normal -> "nor"
     -- selections paint here the same way they do in the main buffer:
     -- whole rows for x, column spans for v
     lineSel = selectionRows ed
@@ -3286,13 +3464,14 @@ notePopupLayer np =
         (Location (col, row))
         (vBox (map bodyLine (zip [0 ..] ls)))
   in
-    C.centerLayer . B.border . hLimit 64 $
-      vBox
-        [ withDefAttr statusAttr (padRight Max (txt (" note · " <> modeTag)))
-        , padTop (Pad 1) . padBottom (Pad 1) . padLeft (Pad 2) . padRight (Pad 2) $
-            vLimit 10 bodyW
-        , withAttr hintAttr (txt " NOR \9166 save · C-c discard · empty note clears ")
-        ]
+    Widget Greedy Greedy $ do
+      ctx <- getContext
+      let
+        boxWidth = min 90 (max 50 (availWidth ctx - 20))
+        bodyRows = max 6 (availHeight ctx - 14)
+      render $
+        floatFrame ("note · " <> modeTag) "\9166 save (nor) · C-c discard · empty note clears" $
+          hLimit boxWidth (padRight Max (vLimit bodyRows bodyW))
 
 -- Accept everything under a directory (or one file) as reviewed — the
 -- bulk verb for generated code nobody reads line by line. Matching is
@@ -3681,30 +3860,100 @@ pickerLayer pk =
   Widget Greedy Greedy $ do
     ctx <- getContext
     let
-      boxWidth = min 140 (max 50 (availWidth ctx - 6))
-      visibleCount = 15
+      boxWidth = min 150 (max 50 (availWidth ctx - 16))
+      visibleCount = max 5 (availHeight ctx - 14)
       start = max 0 (pkSel pk - (visibleCount - 1))
       shown = take visibleCount (drop start (zip [0 ..] (pkMatches pk)))
       matchRow (i, display) =
         let
-          line = padRight Max (txt (" " <> T.take (boxWidth - 4) display))
+          shownText = T.take (boxWidth - 4) display
+          content = case pkMode pk of
+            PickFiles -> highlightSubseq (pkInput pk) shownText
+            PickGrep -> highlightInfix (pkInput pk) shownText
+          line = padRight Max (txt " " <+> content)
         in
-          if i == pkSel pk then withDefAttr selAttr line else line
+          if i == pkSel pk
+            then
+              withDefAttr floatSelAttr $
+                withAttr floatSelBarAttr (txt "\9614") <+> line
+            else txt " " <+> line
       counter = case pkMode pk of
         PickFiles ->
           tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
         PickGrep -> tshow (length (pkMatches pk)) <> " hits"
       title = case pkMode pk of
-        PickFiles -> " file: "
-        PickGrep -> " grep: "
+        PickFiles -> "files"
+        PickGrep -> "grep"
+      inputRow =
+        hBox
+          [ withAttr statusAttr (txt (" " <> pkInput pk <> "\9612"))
+          , padLeft Max (withAttr hintAttr (txt (counter <> " ")))
+          ]
+      emptyRow = withAttr hintAttr (txt "  nothing matches")
+      matchRows =
+        if null shown
+          then emptyRow : replicate (visibleCount - 1) (txt " ")
+          else
+            map matchRow shown
+              ++ replicate (visibleCount - length shown) (txt " ")
     render $
-      C.centerLayer . B.border . hLimit boxWidth $
-        vBox
-          ( withDefAttr
-              statusAttr
-              (padRight Max (txt (title <> pkInput pk <> "\9612  " <> counter)))
-              : map matchRow shown
-          )
+      floatFrame title "\8593\8595 move · \9166 open · esc closes" $
+        hLimit boxWidth (vBox (inputRow : txt " " : matchRows))
+
+-- Where each query character lands in the shown text (greedy,
+-- case-insensitive); Nothing when the text no longer contains the
+-- subsequence, as with an elided path.
+subseqPositions :: Text -> Text -> Maybe [Int]
+subseqPositions q t =
+  let
+    walk needle hay acc =
+      case (needle, hay) of
+        ([], _) -> Just (reverse acc)
+        (_, []) -> Nothing
+        (c : cs, (i, h) : hs) ->
+          if toLower c == toLower h
+            then walk cs hs (i : acc)
+            else walk (c : cs) hs acc
+  in
+    walk (T.unpack q) (zip [0 ..] (T.unpack t)) []
+
+highlightSubseq :: Text -> Text -> Widget Name
+highlightSubseq q t =
+  case subseqPositions q t of
+    Just ps
+      | not (null ps) -> highlightAt (Set.fromList ps) t
+    _ -> txt (padT t)
+
+highlightInfix :: Text -> Text -> Widget Name
+highlightInfix q t =
+  let
+    (pre, rest) = T.breakOn q t
+  in
+    if T.null q || T.null rest
+      then txt (padT t)
+      else
+        hBox
+          [ txt pre
+          , withAttr matchCharAttr (txt (T.take (T.length q) rest))
+          , txt (T.drop (T.length q) rest)
+          ]
+
+highlightAt :: Set.Set Int -> Text -> Widget Name
+highlightAt ps t =
+  let
+    marked = zipWith (\i c -> (Set.member i ps, c)) [0 ..] (T.unpack t)
+    groups = groupBy (\a b -> fst a == fst b) marked
+    seg g = case g of
+      [] -> txt ""
+      ((hit, _) : _) ->
+        let
+          segText = T.pack (map snd g)
+        in
+          if hit
+            then withAttr matchCharAttr (txt segText)
+            else txt segText
+  in
+    hBox (map seg groups)
 
 -- The editor escape hatch -----------------------------------------------------------
 
@@ -3765,9 +4014,7 @@ headerAttr
   , ctxMarkAttr
   , removedTextAttr
   , selAttr
-  , selDimAttr
   , dimAttr
-  , reviewedDimAttr
   , curRunAttr
   , norAttr
   , insAttr
@@ -3785,22 +4032,50 @@ headerAttr
   , pendingMarkAttr
   , lineNrDoneAttr
   , headerRebaseAttr
-  , trayDeclAttr ::
+  , trayDeclAttr
+  , headerCountAttr
+  , rebaseShaAttr
+  , conflictAttr
+  , modeDotNorAttr
+  , modeDotInsAttr
+  , noteInlineAttr
+  , replyInlineAttr
+  , floatAttr
+  , floatSelAttr
+  , floatSelBarAttr
+  , floatTitleAttr
+  , matchCharAttr
+  , meterOnAttr
+  , meterOffAttr
+  , hairAttr ::
     AttrName
 headerAttr = attrName "header"
 headerFileAttr = headerAttr <> attrName "file"
 headerOkAttr = headerAttr <> attrName "ok"
 headerRebaseAttr = headerAttr <> attrName "rebase"
 trayDeclAttr = attrName "trayDecl"
+headerCountAttr = headerAttr <> attrName "count"
+rebaseShaAttr = attrName "rebaseSha"
+conflictAttr = attrName "conflict"
+modeDotNorAttr = attrName "modeDotNor"
+modeDotInsAttr = attrName "modeDotIns"
+noteInlineAttr = attrName "noteInline"
+replyInlineAttr = attrName "replyInline"
+floatAttr = attrName "float"
+floatSelAttr = floatAttr <> attrName "sel"
+floatSelBarAttr = floatAttr <> attrName "selBar"
+floatTitleAttr = floatAttr <> attrName "title"
+matchCharAttr = attrName "matchChar"
+meterOnAttr = attrName "meterOn"
+meterOffAttr = attrName "meterOff"
+hairAttr = attrName "hairline"
 cursorMarkAttr = attrName "cursorMark"
 addedMarkAttr = attrName "addedMark"
 removedMarkAttr = attrName "removedMark"
 ctxMarkAttr = attrName "ctxMark"
 removedTextAttr = attrName "removedText"
 selAttr = attrName "selection"
-selDimAttr = attrName "selectionDim"
 dimAttr = attrName "dim"
-reviewedDimAttr = attrName "reviewedDim"
 curRunAttr = attrName "currentRun"
 norAttr = attrName "modeNor"
 insAttr = attrName "modeIns"
@@ -3903,40 +4178,77 @@ mkAttrMap mth =
           { V.attrForeColor = V.attrForeColor fgA
           , V.attrBackColor = V.attrBackColor bgA
           }
-    statusline = scopeAttr mth "ui.statusline" (V.white `on` V.brightBlack)
     selection =
       scopeAttr mth "ui.selection.primary" (V.defAttr `V.withStyle` V.reverseVideo)
     uiPairs =
-      [ (headerAttr, statusline `V.withStyle` V.bold)
-      , (headerRebaseAttr, scopeAttr mth "warning" (fg V.brightYellow) `V.withStyle` V.bold)
-      , (trayDeclAttr, scopeAttr mth "function" (fg V.blue))
-      , (headerFileAttr, scopeAttr mth "markup.heading" (fg V.brightYellow))
-      , (headerOkAttr, scopeAttr mth "diff.plus" (fg V.brightGreen))
-      , (cursorMarkAttr, V.black `on` V.yellow)
-      , (addedMarkAttr, scopeAttr mth "diff.plus" (fg V.green) `V.withStyle` V.bold)
-      , (removedMarkAttr, scopeAttr mth "diff.minus" (fg V.red))
-      , (ctxMarkAttr, scopeAttr mth "comment" (fg V.brightBlack))
-      , (removedTextAttr, scopeAttr mth "diff.minus" (fg V.red))
+      [ (headerAttr, fg inkDim)
+      , (headerRebaseAttr, fg inkText)
+      , (headerCountAttr, fg inkText)
+      , (rebaseShaAttr, fg inkMidBlue)
+      , (conflictAttr, fg inkRose `V.withStyle` V.bold)
+      , (trayDeclAttr, fg inkMidBlue)
+      , (headerFileAttr, fg inkFileGold)
+      , (headerOkAttr, fg inkGreen)
+      , (cursorMarkAttr, V.defAttr `V.withBackColor` cursorWash)
+      , (addedMarkAttr, fg inkGreen)
+      , (removedMarkAttr, fg inkRose)
+      , (ctxMarkAttr, fg inkFaint)
+      , (removedTextAttr, fg inkRose)
       , (selAttr, selection)
-      , (selDimAttr, selection `V.withStyle` V.dim)
-      , (dimAttr, scopeAttr mth "comment" (fg V.brightBlack))
-      , (reviewedDimAttr, V.defAttr `V.withStyle` V.dim)
-      , (curRunAttr, fgOnly (scopeAttr mth "diff.delta" (fg V.brightBlue)))
-      , (norAttr, scopeAttr mth "ui.statusline.normal" ((V.black `on` V.blue) `V.withStyle` V.bold))
-      , (insAttr, scopeAttr mth "ui.statusline.insert" ((V.black `on` V.green) `V.withStyle` V.bold))
-      , (msgAttr, scopeAttr mth "warning" (fg V.yellow))
-      , (hintAttr, scopeAttr mth "comment" (fg V.brightBlack))
-      , (statusAttr, statusline)
+      , (dimAttr, fg inkDim)
+      , (curRunAttr, fg inkMidBlue)
+      , (norAttr, fg inkText)
+      , (insAttr, fg inkText)
+      , (modeDotNorAttr, fg inkLavender)
+      , (modeDotInsAttr, fg inkGreen)
+      , (msgAttr, fg inkText)
+      , (hintAttr, fg inkFaint)
+      , (statusAttr, fg inkText)
       , (lineNrAttr, scopeAttr mth "ui.linenr" (fg V.brightBlack))
       , (lineNrCurAttr, scopeAttr mth "ui.linenr.selected" (fg V.yellow))
       , (lineNrDoneAttr, scopeAttr mth "ui.linenr" (fg V.brightBlack) `V.withStyle` V.dim)
       , (borderAttr, fgOnly (scopeAttr mth "ui.linenr" (fg V.brightBlack)))
-      , (trayFileAttr, scopeAttr mth "markup.heading" (V.defAttr `V.withStyle` V.bold))
-      , (trayFileCurAttr, scopeAttr mth "markup.heading" (fg V.brightYellow) `V.withStyle` V.bold)
-      , (flagMarkAttr, scopeAttr mth "warning" (fg V.brightYellow))
-      , (questionMarkAttr, scopeAttr mth "info" (fg V.brightBlue))
-      , (doneMarkAttr, scopeAttr mth "diff.plus" (fg V.green))
-      , (pendingMarkAttr, scopeAttr mth "warning" (fg V.yellow))
+      , (trayFileAttr, fg trayFileInk `V.withStyle` V.bold)
+      , (trayFileCurAttr, fg inkFileGold `V.withStyle` V.bold)
+      , (flagMarkAttr, fg inkFlag)
+      , (questionMarkAttr, fg inkGold)
+      , (doneMarkAttr, fg inkGreen)
+      , (pendingMarkAttr, fg inkBlue)
+      , (noteInlineAttr, fg inkLavender)
+      , (replyInlineAttr, fg inkMidBlue)
+      , (floatAttr, V.defAttr `V.withBackColor` surfFloat)
+      , (floatSelAttr, V.defAttr `V.withBackColor` surfSel)
+      , (floatSelBarAttr, fg inkLavender `V.withBackColor` surfSel)
+      , (floatTitleAttr, fg inkLavender `V.withBackColor` surfFloat)
+      , (matchCharAttr, fg matchGold)
+      , (meterOnAttr, fg inkGreen)
+      , (meterOffAttr, fg meterRail)
+      , (hairAttr, fg hairInk)
       ]
   in
     attrMap baseAttr (tsPairs ++ uiPairs)
+
+-- The Quiet Ink · Tinted palette: jellybeans-adjacent literals, chosen
+-- in the temperaments mockups. linearColor keeps true 24-bit values;
+-- vty approximates on lesser terminals.
+inkRose, inkBlue, inkGold, inkGreen, inkLavender, inkMidBlue :: V.Color
+inkFileGold, inkDim, inkFaint, inkText, inkFlag, trayFileInk :: V.Color
+surfFloat, surfSel, cursorWash, hairInk, meterRail, matchGold :: V.Color
+inkRose = V.linearColor (0xa2 :: Int) 0x70 0x7c
+inkBlue = V.linearColor (0x7f :: Int) 0x9e 0xc7
+inkGold = V.linearColor (0xd3 :: Int) 0xb0 0x78
+inkGreen = V.linearColor (0x84 :: Int) 0xa7 0x75
+inkLavender = V.linearColor (0xa3 :: Int) 0x90 0xf0
+inkMidBlue = V.linearColor (0x81 :: Int) 0x97 0xbf
+inkFileGold = V.linearColor (0xe8 :: Int) 0xd7 0xa7
+inkDim = V.linearColor (0x8b :: Int) 0x8b 0x84
+inkFaint = V.linearColor (0x6e :: Int) 0x6e 0x68
+inkText = V.linearColor (0xb4 :: Int) 0xb4 0xaa
+inkFlag = V.linearColor (0xcf :: Int) 0x8a 0x6a
+trayFileInk = V.linearColor (0xd8 :: Int) 0xd3 0xc0
+surfFloat = V.linearColor (0x1e :: Int) 0x1e 0x1e
+surfSel = V.linearColor (0x24 :: Int) 0x24 0x30
+cursorWash = V.linearColor (0x3a :: Int) 0x33 0x25
+hairInk = V.linearColor (0x2c :: Int) 0x2c 0x2c
+meterRail = V.linearColor (0x3a :: Int) 0x3f 0x3a
+matchGold = V.linearColor (0xfa :: Int) 0xd0 0x7a
