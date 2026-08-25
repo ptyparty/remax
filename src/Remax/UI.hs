@@ -68,7 +68,7 @@ import Control.Concurrent
   , threadDelay
   , waitQSem
   )
-import Control.Exception (IOException, evaluate, try)
+import Control.Exception (IOException, evaluate, finally, try)
 import Control.Monad (forM, forM_, unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State (get, modify, put)
@@ -90,6 +90,7 @@ import qualified Graphics.Vty as V
 import Graphics.Vty.CrossPlatform (mkVty)
 import qualified Remax.Zipper as Z
 import System.Environment (lookupEnv)
+import System.Exit (die)
 import qualified System.FSNotify as FS
 import System.FilePath
   ( dropTrailingPathSeparator
@@ -228,6 +229,7 @@ data St = St
   , stGrepNav :: Maybe (Text, [(FilePath, Int)], Int) -- grep hits n/N walk
   , stInfoPopup :: Maybe (Text, Text) -- read-only text popup: title, body
   , stKill :: Text -- session-wide kill/yank slot, shared across files
+  , stPolling :: Bool -- the native watcher was refused; polling instead
   }
 
 repoText :: St -> Text
@@ -254,6 +256,72 @@ rebaseEffMode mRebase mode =
 effectiveMode :: St -> ReviewMode
 effectiveMode st = rebaseEffMode (stRebase st) (stMode st)
 
+-- The file watcher ---------------------------------------------------------
+
+-- How often the fallback watcher re-reads the directories it is
+-- watching, in microseconds. A review session cares about "did the file
+-- I am looking at just change", so a second is plenty, and the watch
+-- list is a handful of directories rather than the whole repository.
+pollInterval :: Int
+pollInterval = 1000000
+
+-- The session's watcher, and whether it had to settle for polling.
+--
+-- inotify instances are a scarce per-user kernel resource: stock
+-- fs.inotify.max_user_instances is 128, and a desktop with a few
+-- editors, sync clients and language servers running can hold every one
+-- of them. remax needs exactly one per session -- every directory it
+-- follows is a watch descriptor on that single instance, and those are
+-- capped orders of magnitude higher -- but one is still one more than
+-- the kernel has to spare sometimes. Losing the native watcher is no
+-- reason to refuse to review code, so fall back to polling and let the
+-- caller say so on screen.
+withWatcher :: (FS.WatchManager -> Bool -> IO a) -> IO a
+withWatcher use = do
+  let
+    pollConfig =
+      FS.defaultConfig {FS.confWatchMode = FS.WatchModePoll pollInterval}
+    run mgr polling = use mgr polling `finally` FS.stopManager mgr
+  native <-
+    try (FS.startManagerConf FS.defaultConfig) ::
+      IO (Either IOException FS.WatchManager)
+  case native of
+    Right mgr -> run mgr False
+    Left nativeErr -> do
+      polled <-
+        try (FS.startManagerConf pollConfig) ::
+          IO (Either IOException FS.WatchManager)
+      case polled of
+        Right mgr -> run mgr True
+        Left polledErr -> die (watcherFailure nativeErr polledErr)
+
+-- Shown once, in the status line, when the native watcher was refused.
+-- Polling still notices everything; it just notices it a beat late, so
+-- the message leads with the fix rather than the consequence.
+watchPollWarning :: Text
+watchPollWarning =
+  "\9888 inotify full \8212 polling; sudo sysctl -w fs.inotify.max_user_instances=512"
+
+-- Both watchers refused, which should not happen -- polling asks the
+-- kernel for nothing. Say what was tried and what to do about it,
+-- rather than letting an inotify errno reach the user on its own.
+watcherFailure :: IOException -> IOException -> String
+watcherFailure nativeErr polledErr =
+  unlines
+    [ "remax: no file watcher available."
+    , ""
+    , "  native : " ++ show nativeErr
+    , "  polling: " ++ show polledErr
+    , ""
+    , "If the native error mentions inotify, the kernel is out of inotify"
+    , "instances -- they are a per-user resource and a busy desktop can use"
+    , "every one. Raise the cap:"
+    , ""
+    , "  sudo sysctl -w fs.inotify.max_user_instances=512"
+    , ""
+    , "and put it in /etc/sysctl.d/ so it survives a reboot."
+    ]
+
 -- Entry point ---------------------------------------------------------------
 
 runReview :: ReviewMode -> FilePath -> IO ()
@@ -268,7 +336,7 @@ runReview mode root = do
   passId <- beginPass conn (T.pack root) (modeLabel mode)
   theme <- loadHelixTheme
   chan <- newBChan 64
-  final <- FS.withManager $ \mgr -> do
+  final <- withWatcher $ \mgr polling -> do
     -- Watch only the directories that actually matter: where the
     -- changed files live, plus .git itself for index/HEAD updates.
     -- A recursive watch over the whole repository walks every build
@@ -311,13 +379,16 @@ runReview mode root = do
           , stCurH = 0
           , stVerdicts = verdicts
           , stMsg =
-              if null files
-                then "change set is empty — watching for changes"
+              if polling
+                then watchPollWarning
                 else
-                  tshow pendingCount
-                    <> " of "
-                    <> tshow totalCount
-                    <> " hunks pending"
+                  if null files
+                    then "change set is empty — watching for changes"
+                    else
+                      tshow pendingCount
+                        <> " of "
+                        <> tshow totalCount
+                        <> " hunks pending"
           , stRoot = root
           , stMode = mode
           , stConn = conn
@@ -354,6 +425,7 @@ runReview mode root = do
           , stGrepNav = Nothing
           , stInfoPopup = Nothing
           , stKill = T.empty
+          , stPolling = polling
           }
       st1 = case firstUnrespondedOrPending st0 of
         Just (f, h) ->
@@ -1339,6 +1411,12 @@ statusBar st =
                   Normal -> case pendingLabel (fvEd fv) of
                     Just p -> chip modeDotNorAttr (p <> "\8230")
                     Nothing -> chip modeDotNorAttr "nor"
+    -- the startup warning scrolls away with the next message; this keeps
+    -- "the watcher is a second behind" on screen for the whole session
+    pollChip =
+      if stPolling st
+        then withAttr watchPollAttr (txt " \9888 poll ")
+        else txt ""
     declSeg = case currentFileMay st of
       Just fv ->
         case declAt (bufferLines (fvEd fv)) (fst (cursorRC (fvEd fv))) of
@@ -1363,6 +1441,7 @@ statusBar st =
   in
     withDefAttr statusAttr $
       modeChip
+        <+> pollChip
         <+> declSeg
         <+> meterSeg
         <+> txt "  "
@@ -4147,6 +4226,7 @@ headerAttr
   , headerCountAttr
   , rebaseShaAttr
   , conflictAttr
+  , watchPollAttr
   , modeDotNorAttr
   , modeDotInsAttr
   , noteInlineAttr
@@ -4168,6 +4248,7 @@ trayDeclAttr = attrName "trayDecl"
 headerCountAttr = headerAttr <> attrName "count"
 rebaseShaAttr = attrName "rebaseSha"
 conflictAttr = attrName "conflict"
+watchPollAttr = attrName "watchPoll"
 modeDotNorAttr = attrName "modeDotNor"
 modeDotInsAttr = attrName "modeDotIns"
 noteInlineAttr = attrName "noteInline"
@@ -4297,6 +4378,7 @@ mkAttrMap mth =
       , (headerCountAttr, fg inkText)
       , (rebaseShaAttr, fg inkMidBlue)
       , (conflictAttr, fg inkRose `V.withStyle` V.bold)
+      , (watchPollAttr, fg inkGold)
       , (trayDeclAttr, fg inkMidBlue)
       , (headerFileAttr, fg inkFileGold)
       , (headerOkAttr, fg inkGreen)

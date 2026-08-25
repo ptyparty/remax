@@ -58,6 +58,20 @@ the repository wakes it. The CLI flags above are just starting values —
 keyed by line content, so they survive commits, rebases, and reloads; a
 line that changes after being reviewed comes back as pending by itself.
 
+Watching costs one inotify instance per session, and that is a scarce
+per-user kernel resource — stock `fs.inotify.max_user_instances` is 128,
+and a desktop with a few editors and sync clients running can hold every
+one of them. When there is none left remax does not refuse to start: it
+falls back to polling once a second, carries a `⚠ poll` badge in the
+status line for the rest of the session, and tells you the fix on the way
+in:
+
+```sh
+sudo sysctl -w fs.inotify.max_user_instances=512   # /etc/sysctl.d/ to keep it
+```
+
+Everything still works while polling — it just arrives a beat late.
+
 ## The screen
 
 - Header: mode, current file, file/hunk position, pending count.
