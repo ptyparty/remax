@@ -120,6 +120,7 @@ import Remax.Git
   , baseLines
   , branchRoot
   , changedFiles
+  , commitBody
   , commitMessage
   , gitStateWatchDirs
   , hasStagedChanges
@@ -172,7 +173,10 @@ data NotePopup = NotePopup
 -- some lines, or the amended message of the commit under review.
 data PopupPurpose
   = NoteFor [Text]
-  | AmendMessage
+  | -- the paths that will be staged along with the message, so the popup
+    -- can show them before you commit to them (empty at a rebase stop,
+    -- where :continue owns the folding)
+    AmendMessage [FilePath]
 
 data FileView = FileView
   { fvPath :: FilePath
@@ -2820,7 +2824,13 @@ refreshGit = do
               { stFiles = []
               , stCurF = 0
               , stCurH = 0
-              , stMsg = "change set is empty — watching for changes"
+              , -- only on the way in: a later refresh that finds the
+                -- session still idle must not talk over whatever the
+                -- action that emptied it had to say
+                stMsg =
+                  if wasEmpty
+                    then stMsg latest
+                    else "change set is empty — watching for changes"
               }
         else do
           let
@@ -3319,30 +3329,34 @@ abortRebase = do
 amendHead :: EventM Name St ()
 amendHead = do
   st <- get
-  got <- liftIO (commitMessage (stRoot st) "HEAD")
+  got <- liftIO (commitBody (stRoot st) "HEAD")
+  -- what folds in with the message: everything the session is showing as
+  -- changed, asked of git rather than remembered, so an agent's edits and
+  -- \$EDITOR's edits count the same as the ones typed in here. At a rebase
+  -- stop nothing folds in -- :continue owns that.
+  folding <- case stRebase st of
+    Just _ -> pure []
+    Nothing -> liftIO (changedFiles (effectiveMode st) (stRoot st))
   case got of
     Left e -> setMsg e
     Right msg -> do
       let
         ls = if T.null (T.strip msg) then [""] else T.lines msg
         ed = newEdState 0 ls
-      modify (\s -> s {stNotePopup = Just (NotePopup ed AmendMessage)})
+      modify
+        (\s -> s {stNotePopup = Just (NotePopup ed (AmendMessage folding))})
 
-applyAmendMessage :: Text -> EventM Name St ()
-applyAmendMessage text = do
+applyAmendMessage :: [FilePath] -> Text -> EventM Name St ()
+applyAmendMessage folding text = do
   st <- get
   if T.null text
     then setMsg "empty commit message — amend cancelled"
     else do
-      let
-        written = case stRebase st of
-          Just _ -> []
-          Nothing -> Set.toList (stWritten st)
       res <- liftIO $ do
         addRes <-
-          if null written
+          if null folding
             then pure (Right ())
-            else runGit (stRoot st) (["add", "--"] ++ written)
+            else runGit (stRoot st) (["add", "--"] ++ folding)
         case addRes of
           Left e -> pure (Left e)
           Right () ->
@@ -3350,12 +3364,31 @@ applyAmendMessage text = do
       case res of
         Left e -> setMsg e
         Right () -> do
-          unless (null written) (modify (\s -> s {stWritten = Set.empty}))
+          unless (null folding) (modify (\s -> s {stWritten = Set.empty}))
           forceGitRefresh
           setMsg $
-            if null written
+            if null folding
               then "amended the commit message"
-              else "amended HEAD: message and the session's edits"
+              else
+                "amended HEAD: message + "
+                  <> fileCountLabel (length folding)
+                  <> " ("
+                  <> foldedNames 3 folding
+                  <> ")"
+
+fileCountLabel :: Int -> Text
+fileCountLabel n = tshow n <> (if n == 1 then " file" else " files")
+
+-- Names for the status line: a few, then a count for the rest, so the
+-- message says what it staged without running off the bar.
+foldedNames :: Int -> [FilePath] -> Text
+foldedNames k paths =
+  let
+    shown = map (T.pack . takeFileName) (take k paths)
+    more = length paths - length shown
+  in
+    T.intercalate ", " shown
+      <> (if more > 0 then " +" <> tshow more <> " more" else "")
 
 -- Attach a reviewer note to the selection's lines (or the current hunk),
 -- so a ! or ? carries its reason into `remax list`.
@@ -3535,10 +3568,10 @@ handleNotePopupKey ev np0 = do
     np = np0 {npEd = (npEd np0) {edKill = stKill st0}}
     discardMsg = case npPurpose np of
       NoteFor _ -> "note discarded"
-      AmendMessage -> "amend cancelled"
+      AmendMessage _ -> "amend cancelled"
     wrapCol = case npPurpose np of
       NoteFor _ -> cfgNoteWrap (stConfig st0)
-      AmendMessage -> 72
+      AmendMessage _ -> 72
     saveBuffer = do
       modify (\s -> s {stNotePopup = Nothing})
       let
@@ -3547,7 +3580,7 @@ handleNotePopupKey ev np0 = do
         NoteFor keys -> do
           applyNote text keys
           runDeferredAdvance
-        AmendMessage -> applyAmendMessage text
+        AmendMessage folding -> applyAmendMessage folding text
   case ev of
     -- discard works from either popup mode; nobody should need to leave
     -- insert just to bail out
@@ -3664,27 +3697,54 @@ notePopupLayer st np =
       Insert -> "ins"
       Normal -> "nor"
     thread = case npPurpose np of
-      AmendMessage -> []
+      AmendMessage _ -> []
       NoteFor keys ->
         case mapMaybe (`Map.lookup` stThreads st) keys of
           (t : _) -> t
           [] -> []
     act = noteAct thread
     popupName = case npPurpose np of
-      AmendMessage -> "amend"
+      AmendMessage _ -> "amend"
       NoteFor _ -> case act of
         NoteNew -> "note"
         NoteEdit -> "note \183 editing yours"
         NoteReply who -> "note \183 reply to " <> who
     popupHint = case npPurpose np of
-      AmendMessage -> "\9166 amend (nor) \183 C-c cancel"
+      AmendMessage _ -> "\9166 amend (nor) \183 C-c cancel"
       NoteFor _ -> case act of
         NoteReply _ ->
           "\9166 post (nor) \183 C-c discard \183 empty clears the thread"
         _ -> "\9166 save (nor) \183 C-c discard \183 empty note clears"
     -- which line the conversation is about; the popup never used to say
     targetRows = case npPurpose np of
-      AmendMessage -> []
+      -- an amend that quietly stages files is the surprise this is here
+      -- to remove: say what folds in before ⏎ does it
+      AmendMessage folding
+        | null folding ->
+            [ withAttr
+                hintAttr
+                ( txt
+                    ( case stRebase st of
+                        Just _ ->
+                          "message only \183 :continue folds in this stop's edits"
+                        Nothing -> "message only \183 nothing else has changed"
+                    )
+                )
+            , txt " "
+            ]
+        | otherwise ->
+            withAttr
+              hintAttr
+              (txt ("folding in " <> fileCountLabel (length folding) <> ":"))
+              : map
+                (\f -> withAttr noteInlineAttr (txt ("  " <> T.pack f)))
+                (take 8 folding)
+              ++ [ withAttr
+                     hintAttr
+                     (txt ("  \8230 and " <> tshow (length folding - 8) <> " more"))
+                 | length folding > 8
+                 ]
+              ++ [txt " "]
       NoteFor _ -> case currentFileMay st of
         Nothing -> []
         Just fv ->

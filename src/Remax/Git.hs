@@ -16,6 +16,7 @@ module Remax.Git
   , listRefs
   , RebaseStatus (..)
   , rebaseStatus
+  , commitBody
   , commitMessage
   , gitStateWatchDirs
   , headCommit
@@ -320,6 +321,20 @@ readFileOr fallback path =
 
 -- The full message (with author and date) of one commit, for the
 -- commit-under-review popup.
+-- Just the message, for the buffer that edits it. commitMessage's
+-- decorated form belongs in the read-only popup; amending with it writes
+-- the sha, author and date into the new message.
+commitBody :: FilePath -> Text -> IO (Either Text Text)
+commitBody root ref = do
+  (code, out, err) <-
+    readProcessWithExitCode
+      "git"
+      ["-C", root, "show", "-s", "--format=%B", T.unpack ref]
+      ""
+  pure $ case code of
+    ExitSuccess -> Right (T.stripEnd (T.pack out))
+    ExitFailure _ -> Left (T.strip (T.pack err))
+
 commitMessage :: FilePath -> Text -> IO (Either Text Text)
 commitMessage root ref = do
   (code, out, err) <-

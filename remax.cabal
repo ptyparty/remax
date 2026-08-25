@@ -158,7 +158,7 @@ executable remax
     , directory
     , file-embed
     , filepath
-    , fsnotify
+    , fsnotify >=0.4
     , mtl
     , process
     , sqlite-simple

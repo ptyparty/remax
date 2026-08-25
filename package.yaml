@@ -90,7 +90,8 @@ executables:
       - directory
       - file-embed
       - filepath
-      - fsnotify
+      # >= 0.4 for WatchModePoll, the fallback when inotify is full
+      - fsnotify >= 0.4
       - mtl
       - process
       - SHA
