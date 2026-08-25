@@ -164,8 +164,14 @@ data Picker = Picker
 -- annotate (resolved when the popup opened).
 data NotePopup = NotePopup
   { npEd :: EdState
-  , npKeys :: [Text]
+  , npPurpose :: PopupPurpose
   }
+
+-- What saving the popup buffer means: a post in a note conversation on
+-- some lines, or the amended message of the commit under review.
+data PopupPurpose
+  = NoteFor [Text]
+  | AmendMessage
 
 data FileView = FileView
   { fvPath :: FilePath
@@ -208,8 +214,7 @@ data St = St
   , stOpened :: Set.Set FilePath -- files opened by hand, pinned across refreshes
   , stPicker :: Maybe Picker
   , stNotePopup :: Maybe NotePopup
-  , stNotes :: Map.Map Text Text -- reviewer notes by line key
-  , stReplies :: Map.Map Text Text -- agent replies by line key
+  , stThreads :: Map.Map Text [Post] -- note conversations by line key, posts in order
   , stSpace :: Bool -- the space menu prefix is pending
   , stConfig :: Config
   , stCmdFiles :: [Text] -- completion caches, filled when : opens
@@ -256,8 +261,7 @@ runReview mode root = do
   conn <- openStore
   verdicts <- loadVerdicts conn (T.pack root)
   hls <- TS.initHighlighters
-  notes0 <- loadNotes conn (T.pack root)
-  replies0 <- loadReplies conn (T.pack root)
+  threads0 <- loadThreads conn (T.pack root)
   cfg <- loadConfig
   rebase0 <- rebaseStatus root
   files <- loadAll cfg hls (rebaseEffMode rebase0 mode) root
@@ -336,8 +340,7 @@ runReview mode root = do
           , stOpened = Set.empty
           , stPicker = Nothing
           , stNotePopup = Nothing
-          , stNotes = notes0
-          , stReplies = replies0
+          , stThreads = threads0
           , stSpace = False
           , stConfig = cfg
           , stCmdFiles = []
@@ -977,7 +980,7 @@ tray st =
               && hi == clampH (fvRuns (currentFile st)) (stCurH st)
           mark = runMark (stVerdicts st) r
           noteMark =
-            if any (`Map.member` stNotes st) (runKeys r)
+            if any (`Map.member` stThreads st) (runKeys r)
               then withAttr noteInlineAttr (txt " \8801")
               else txt ""
           markAttr = case mark of
@@ -1033,27 +1036,36 @@ windowRows = 300
 -- render: annotations apply to every line of their target, so
 -- consecutive rows carrying the same pair show it once, under the last
 -- of them — a footnote to the block, not an echo on every line. One
--- entry per row, [] where nothing renders; True marks reply lines.
-shownNoteLines :: St -> [RowR] -> [[(Bool, Text)]]
+-- entry per row, [] where nothing renders. Each rendered line knows its
+-- post's author and whether it opens that post, so the conversation
+-- reads in order with a sense of who said what.
+shownNoteLines :: St -> [RowR] -> [[NoteLine]]
 shownNoteLines st rows =
   let
     annOf r = do
       k <- rKey r
-      let
-        pair = (Map.lookup k (stNotes st), Map.lookup k (stReplies st))
-      case pair of
-        (Nothing, Nothing) -> Nothing
-        _ -> Just pair
+      Map.lookup k (stThreads st)
     anns = map annOf rows
     nexts = drop 1 anns ++ [Nothing]
+    postLines post =
+      case T.lines (postBody post) of
+        [] -> []
+        (first : rest) ->
+          NoteLine (postAuthor post) True first
+            : map (NoteLine (postAuthor post) False) rest
     pick (ma, mnext) = case ma of
-      Just (mn, mr)
-        | mnext /= Just (mn, mr) ->
-            maybe [] (map (\t -> (False, t)) . T.lines) mn
-              ++ maybe [] (map (\t -> (True, t)) . T.lines) mr
+      Just posts
+        | mnext /= Just posts -> concatMap postLines posts
       _ -> []
   in
     map pick (zip anns nexts)
+
+data NoteLine = NoteLine
+  { nlAuthor :: Text
+  , nlOpens :: Bool
+  , nlText :: Text
+  }
+  deriving (Eq)
 
 renderFile :: St -> FileView -> Widget Name
 renderFile st fv =
@@ -1199,15 +1211,23 @@ renderFile st fv =
             render (buildLine (hScrollFor ctx numW curCol))
         -- the reviewer's note renders inline as virtual rows under
         -- the line it annotates — visible where the feedback lives
-        noteRowW (isReply, n) =
+        noteRowW nl =
           let
-            glyph = if isReply then "\8618 " else "\9492 \8801 "
-            noteAttr = if isReply then replyInlineAttr else noteInlineAttr
+            fromReviewer = nlAuthor nl == "reviewer"
+            glyph
+              | not (nlOpens nl) = "  "
+              | fromReviewer = "\9492 \8801 "
+              | otherwise = "\8618 "
+            label =
+              if nlOpens nl && not fromReviewer
+                then nlAuthor nl <> " · "
+                else ""
+            noteAttr = if fromReviewer then noteInlineAttr else replyInlineAttr
           in
             curBar
               <+> withAttr
                 noteAttr
-                (txt (T.replicate (numW + 4) " " <> glyph <> padT n))
+                (txt (T.replicate (numW + 4) " " <> glyph <> label <> padT (nlText nl)))
       in
         case shownNotes of
           [] -> lineScrolled
@@ -1385,9 +1405,8 @@ handleEvent brickEvent =
     AppEvent GitStateChanged -> refreshGit
     AppEvent StoreChanged -> do
       st <- get
-      notes <- liftIO (loadNotes (stConn st) (repoText st))
-      replies <- liftIO (loadReplies (stConn st) (repoText st))
-      modify (\s -> s {stNotes = notes, stReplies = replies})
+      threads <- liftIO (loadThreads (stConn st) (repoText st))
+      modify (\s -> s {stThreads = threads})
     AppEvent Tick -> scrollHunkIntoView
     VtyEvent ev -> do
       st <- get
@@ -2738,7 +2757,7 @@ commandTable =
   , ("continue", NoArg, "fold edits into the stopped commit, advance")
   , ("abort", NoArg, "abort the rebase (asks first)")
   , ("abort!", NoArg, "abort the rebase, no questions")
-  , ("amend", NoArg, "fold session edits into HEAD")
+  , ("amend", NoArg, "edit the commit message; saving amends (+ session edits)")
   , ("accept", ArgDir, "mark everything under a directory reviewed")
   , ("note", ArgText, "note popup (:note TEXT for a one-liner)")
   , ("unnote", NoArg, "remove the note from the target lines")
@@ -3171,28 +3190,51 @@ abortRebase = do
         Right () -> "rebase aborted"
 
 -- The standalone fold-fixes-into-HEAD flow (pairs with :base HEAD^).
+-- :amend — the commit message of the commit under review (HEAD; during
+-- a rebase that is the stopped commit) opens for editing, and saving
+-- amends it, folding in any files written this session outside a
+-- rebase (a rebase stop leaves the folding to :continue, so the amend
+-- there is message-only).
 amendHead :: EventM Name St ()
 amendHead = do
   st <- get
-  case stRebase st of
-    Just _ -> setMsg "rebase in progress — :continue folds edits into the stopped commit"
-    Nothing -> do
+  got <- liftIO (commitMessage (stRoot st) "HEAD")
+  case got of
+    Left e -> setMsg e
+    Right msg -> do
       let
-        written = Set.toList (stWritten st)
-      if null written
-        then setMsg "no files written this session — nothing to amend"
-        else do
-          res <- liftIO $ do
-            addRes <- runGit (stRoot st) (["add", "--"] ++ written)
-            case addRes of
-              Left e -> pure (Left e)
-              Right () -> runGit (stRoot st) ["commit", "--amend", "--no-edit"]
-          case res of
-            Left e -> setMsg e
-            Right () -> do
-              modify (\s -> s {stWritten = Set.empty})
-              forceGitRefresh
-              setMsg "amended HEAD with the session's edits"
+        ls = if T.null (T.strip msg) then [""] else T.lines msg
+        ed = newEdState 0 ls
+      modify (\s -> s {stNotePopup = Just (NotePopup ed AmendMessage)})
+
+applyAmendMessage :: Text -> EventM Name St ()
+applyAmendMessage text = do
+  st <- get
+  if T.null text
+    then setMsg "empty commit message — amend cancelled"
+    else do
+      let
+        written = case stRebase st of
+          Just _ -> []
+          Nothing -> Set.toList (stWritten st)
+      res <- liftIO $ do
+        addRes <-
+          if null written
+            then pure (Right ())
+            else runGit (stRoot st) (["add", "--"] ++ written)
+        case addRes of
+          Left e -> pure (Left e)
+          Right () ->
+            runGit (stRoot st) ["commit", "--amend", "-m", T.unpack text]
+      case res of
+        Left e -> setMsg e
+        Right () -> do
+          unless (null written) (modify (\s -> s {stWritten = Set.empty}))
+          forceGitRefresh
+          setMsg $
+            if null written
+              then "amended the commit message"
+              else "amended HEAD: message and the session's edits"
 
 -- Attach a reviewer note to the selection's lines (or the current hunk),
 -- so a ! or ? carries its reason into `remax list`.
@@ -3202,9 +3244,8 @@ resolveAllAnswered :: EventM Name St ()
 resolveAllAnswered = do
   st <- get
   n <- liftIO (resolveAnswered (stConn st) (repoText st))
-  notes <- liftIO (loadNotes (stConn st) (repoText st))
-  replies <- liftIO (loadReplies (stConn st) (repoText st))
-  modify (\s -> s {stNotes = notes, stReplies = replies})
+  threads <- liftIO (loadThreads (stConn st) (repoText st))
+  modify (\s -> s {stThreads = threads})
   setMsg $
     if n == 0
       then "no answered notes to resolve"
@@ -3215,10 +3256,7 @@ resolveAllAnswered = do
 resolveNotesInMemory :: [Text] -> EventM Name St ()
 resolveNotesInMemory keys =
   modify $ \s ->
-    s
-      { stNotes = foldr Map.delete (stNotes s) keys
-      , stReplies = foldr Map.delete (stReplies s) keys
-      }
+    s {stThreads = foldr Map.delete (stThreads s) keys}
 
 -- What a note applies to: an active selection wins; then the line under
 -- the cursor, when it already carries a verdict or a note (sitting on a
@@ -3239,23 +3277,37 @@ noteTargetKeys st =
         row = fst (cursorRC (fvEd fv))
         ks = map (\(k, _, _) -> k) (selectedChanges fv row row)
         relevant k =
-          Map.member k (stVerdicts st) || Map.member k (stNotes st)
-      noted <- case mapMaybe (\k -> Map.lookup k (stNotes st)) ks of
-        (n : _) ->
-          -- the whole group sharing this note text, so editing keeps
-          -- it a single note rather than forking per line
+          Map.member k (stVerdicts st) || Map.member k (stThreads st)
+      let
+        groupOf thread =
           let
             inGroup r = do
               k <- rKey r
-              if Map.lookup k (stNotes st) == Just n
+              if Map.lookup k (stThreads st) == Just thread
                 then Just k
                 else Nothing
           in
-            Just (Just (mapMaybe inGroup (fvRows fv)))
-        [] ->
-          if any relevant ks
-            then Just Nothing
-            else Nothing
+            mapMaybe inGroup (fvRows fv)
+        -- a conversation anywhere in the hunk under the cursor: from any
+        -- line of the hunk, :note continues that thread rather than
+        -- opening a second one a few lines away
+        hunkThread = do
+          h <- hunkUnderCursor st
+          r <- safeIdx (fvRuns fv) h
+          case mapMaybe (\k -> Map.lookup k (stThreads st)) (runKeys r) of
+            (t : _) -> Just t
+            [] -> Nothing
+      noted <- case mapMaybe (\k -> Map.lookup k (stThreads st)) ks of
+        (n : _) ->
+          -- the whole group sharing this conversation, so editing keeps
+          -- it a single thread rather than forking per line
+          Just (Just (groupOf n))
+        [] -> case hunkThread of
+          Just t -> Just (Just (groupOf t))
+          Nothing ->
+            if any relevant ks
+              then Just Nothing
+              else Nothing
       pure $ case noted of
         Just groupKeys -> groupKeys
         Nothing -> filter relevant ks
@@ -3268,32 +3320,33 @@ noteTargetKeys st =
   in
     fromMaybe [] (selectionKeys <|> cursorKeys <|> lastKeys <|> hunkKeys)
 
--- Record a note (empty text clears instead), keep the in-memory view in
--- step, and report where it landed.
+-- Save the reviewer's side of the conversation (empty text clears the
+-- whole thread instead), keep the in-memory view in step, and report
+-- where it landed. While the reviewer's own post is the newest it stays
+-- editable in place; once someone answered, saving appends the next
+-- post.
 applyNote :: Text -> [Text] -> EventM Name St ()
 applyNote text keys = do
   st <- get
   if T.null text
     then do
-      n <- liftIO (clearNotes (stConn st) (repoText st) keys)
+      n <- liftIO (clearThread (stConn st) (repoText st) keys)
       modify $ \s ->
-        s
-          { stNotes = foldr Map.delete (stNotes s) keys
-          , stReplies = foldr Map.delete (stReplies s) keys
-          }
+        s {stThreads = foldr Map.delete (stThreads s) keys}
       setMsg $
         if n == 0
           then "no notes here"
-          else "removed note from " <> tshow n <> " line(s)"
+          else "removed the conversation from " <> tshow n <> " line(s)"
     else do
-      n <- liftIO (recordNotes (stConn st) (repoText st) text keys)
+      n <- liftIO (saveReviewerPost (stConn st) (repoText st) text keys)
       let
         markedKeys = filter (`Map.member` stVerdicts st) keys
+        place thread = case reverse thread of
+          (Post "reviewer" _ : older) -> reverse (Post "reviewer" text : older)
+          _ -> thread ++ [Post "reviewer" text]
+        update k m = Map.insert k (place (Map.findWithDefault [] k m)) m
       modify $ \s ->
-        s
-          { stNotes = foldr (\k m -> Map.insert k text m) (stNotes s) markedKeys
-          , stReplies = foldr Map.delete (stReplies s) markedKeys
-          }
+        s {stThreads = foldr update (stThreads s) markedKeys}
       setMsg $
         if n == 0
           then "no verdicts here yet — mark with ! or ? first"
@@ -3328,8 +3381,10 @@ openNotePopup = do
     then setMsg "nothing to note — mark lines with ! or ? first"
     else do
       let
-        existing = case mapMaybe (`Map.lookup` stNotes st) keys of
-          (n : _) -> n
+        existing = case mapMaybe (`Map.lookup` stThreads st) keys of
+          (thread : _) -> case reverse thread of
+            (Post "reviewer" body : _) -> body
+            _ -> ""
           [] -> ""
         ls = if T.null existing then [""] else T.lines existing
         lastRow = length ls - 1
@@ -3342,7 +3397,7 @@ openNotePopup = do
             { edZipper = Z.moveCursor (lastRow, lastCol) (edZipper ed0)
             , edMode = Insert
             }
-      modify (\s -> s {stNotePopup = Just (NotePopup ed1 keys)})
+      modify (\s -> s {stNotePopup = Just (NotePopup ed1 (NoteFor keys))})
 
 setNotePopupEd :: EdState -> EventM Name St ()
 setNotePopupEd ed =
@@ -3357,33 +3412,41 @@ handleNotePopupKey ev np0 = do
   st0 <- get
   let
     np = np0 {npEd = (npEd np0) {edKill = stKill st0}}
+    discardMsg = case npPurpose np of
+      NoteFor _ -> "note discarded"
+      AmendMessage -> "amend cancelled"
+    wrapCol = case npPurpose np of
+      NoteFor _ -> cfgNoteWrap (stConfig st0)
+      AmendMessage -> 72
+    saveBuffer = do
+      modify (\s -> s {stNotePopup = Nothing})
+      let
+        text = T.strip (T.intercalate "\n" (bufferLines (npEd np)))
+      case npPurpose np of
+        NoteFor keys -> do
+          applyNote text keys
+          runDeferredAdvance
+        AmendMessage -> applyAmendMessage text
   case ev of
     -- discard works from either popup mode; nobody should need to leave
     -- insert just to bail out
     V.EvKey (V.KChar 'c') [V.MCtrl] -> do
-      modify (\s -> s {stNotePopup = Nothing, stMsg = "note discarded"})
+      modify (\s -> s {stNotePopup = Nothing, stMsg = discardMsg})
       runDeferredAdvance
     _ ->
       case edMode (npEd np) of
         Insert ->
           case handleInsert ev (npEd np) of
-            InsertHandled ed -> do
-              st <- get
-              setNotePopupEd (wrapNoteLine (cfgNoteWrap (stConfig st)) ed)
+            InsertHandled ed -> setNotePopupEd (wrapNoteLine wrapCol ed)
             InsertExit ed -> setNotePopupEd ed
             InsertUnhandled -> pure ()
         Normal ->
           case ev of
-            V.EvKey V.KEnter [] -> do
-              modify (\s -> s {stNotePopup = Nothing})
-              let
-                text = T.strip (T.intercalate "\n" (bufferLines (npEd np)))
-              applyNote text (npKeys np)
-              runDeferredAdvance
+            V.EvKey V.KEnter [] -> saveBuffer
             -- Esc from insert lands here in the popup's normal mode; Esc
             -- again cancels the dialog outright
             V.EvKey V.KEsc [] -> do
-              modify (\s -> s {stNotePopup = Nothing, stMsg = "note discarded"})
+              modify (\s -> s {stNotePopup = Nothing, stMsg = discardMsg})
               runDeferredAdvance
             _ ->
               case handleNormal ev (npEd np) of
@@ -3429,6 +3492,12 @@ notePopupLayer np =
     modeTag = case edMode ed of
       Insert -> "ins"
       Normal -> "nor"
+    popupName = case npPurpose np of
+      NoteFor _ -> "note"
+      AmendMessage -> "amend"
+    popupHint = case npPurpose np of
+      NoteFor _ -> "\9166 save (nor) · C-c discard · empty note clears"
+      AmendMessage -> "\9166 amend (nor) · C-c cancel"
     -- selections paint here the same way they do in the main buffer:
     -- whole rows for x, column spans for v
     lineSel = selectionRows ed
@@ -3470,7 +3539,7 @@ notePopupLayer np =
         boxWidth = min 90 (max 50 (availWidth ctx - 20))
         bodyRows = max 6 (availHeight ctx - 14)
       render $
-        floatFrame ("note · " <> modeTag) "\9166 save (nor) · C-c discard · empty note clears" $
+        floatFrame (popupName <> " · " <> modeTag) popupHint $
           hLimit boxWidth (padRight Max (vLimit bodyRows bodyW))
 
 -- Accept everything under a directory (or one file) as reviewed — the

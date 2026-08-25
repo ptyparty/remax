@@ -3,11 +3,13 @@
 -- Where verdicts are remembered: the XDG state directory (usually
 -- ~/.local/state/remax/review.db).
 -- One row per changed line, keyed by content (see Remax.Key), with the
--- verdict it was given, the pass that gave it, an optional reviewer note,
--- and the line's position at the time (advisory — content keys are the
--- identity; the number is a courtesy for humans and agents reading the
--- punch list). Passes record when each review ran, so "what did I review
--- yesterday" stays answerable.
+-- verdict it was given, the pass that gave it, and the line's position
+-- at the time (advisory — content keys are the identity; the number is
+-- a courtesy for humans and agents reading the punch list). Notes are a
+-- conversation: ordered posts with an author, kept per line key in
+-- note_post (every key of a noted group carries the same thread, the
+-- same way the old single note column did). Passes record when each
+-- review ran, so "what did I review yesterday" stays answerable.
 module Remax.Store
   ( Verdict (..)
   , verdictText
@@ -17,11 +19,11 @@ module Remax.Store
   , beginPass
   , finishPass
   , recordVerdicts
-  , recordNotes
-  , clearNotes
-  , loadNotes
-  , loadReplies
-  , replyToNote
+  , Post (..)
+  , loadThreads
+  , saveReviewerPost
+  , appendAgentPost
+  , clearThread
   , resolveAnswered
   , storeDirectory
   , deleteKeys
@@ -31,7 +33,7 @@ module Remax.Store
   , deleteFiles
   ) where
 
-import Control.Monad (unless, void)
+import Control.Monad (unless, void, when)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -43,6 +45,15 @@ import System.FilePath ((</>))
 
 data Verdict = Reviewed | Flagged | Questioned
   deriving (Eq, Ord, Show)
+
+-- One entry in a note conversation. Threads are ordered lists of posts;
+-- the author is "reviewer" for the human in the session, or the name an
+-- agent gave on the command line.
+data Post = Post
+  { postAuthor :: Text
+  , postBody :: Text
+  }
+  deriving (Eq, Show)
 
 verdictText :: Verdict -> Text
 verdictText Reviewed = "reviewed"
@@ -93,6 +104,19 @@ openStore = do
   execute_
     conn
     "CREATE INDEX IF NOT EXISTS line_verdict_repo ON line_verdict(repo)"
+  execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS note_post (\
+    \  repo TEXT NOT NULL,\
+    \  key TEXT NOT NULL,\
+    \  seq INTEGER NOT NULL,\
+    \  author TEXT NOT NULL,\
+    \  body TEXT NOT NULL,\
+    \  created_at TEXT NOT NULL DEFAULT (datetime('now')),\
+    \  PRIMARY KEY (repo, key, seq))"
+  -- several instances (sessions, agent CLI calls) share this file; WAL
+  -- lets readers proceed under a writer instead of stacking on the lock
+  void (query_ conn "PRAGMA journal_mode = WAL" :: IO [Only Text])
   migrate conn
   pure conn
 
@@ -114,6 +138,29 @@ migrate conn = do
     execute_ conn "ALTER TABLE line_verdict ADD COLUMN commit_subject TEXT"
   unless ("reply" `elem` names) $
     execute_ conn "ALTER TABLE line_verdict ADD COLUMN reply TEXT"
+  -- one-time carry-over from the old note/reply column pair into the
+  -- conversation table: note becomes the opening reviewer post, reply
+  -- the agent's answer after it
+  [Only posts] <- query_ conn "SELECT COUNT(*) FROM note_post" :: IO [Only Int]
+  [Only oldNotes] <-
+    query_
+      conn
+      "SELECT COUNT(*) FROM line_verdict\
+      \ WHERE note IS NOT NULL OR reply IS NOT NULL" ::
+      IO [Only Int]
+  when (posts == 0 && oldNotes > 0) $
+    withTransaction conn $ do
+      execute_
+        conn
+        "INSERT INTO note_post (repo, key, seq, author, body, created_at)\
+        \ SELECT repo, key, 0, 'reviewer', note, updated_at\
+        \ FROM line_verdict WHERE note IS NOT NULL"
+      execute_
+        conn
+        "INSERT INTO note_post (repo, key, seq, author, body, created_at)\
+        \ SELECT repo, key, 1, 'agent', reply, updated_at\
+        \ FROM line_verdict WHERE reply IS NOT NULL"
+      execute_ conn "UPDATE line_verdict SET note = NULL, reply = NULL"
 
 loadVerdicts :: Connection -> Text -> IO (Map Text Verdict)
 loadVerdicts conn repo = do
@@ -155,7 +202,7 @@ recordVerdicts conn repo passId v mCommit rows =
     toParams (key, file, line, lineNo) =
       (key, repo, file, line, lineNo, verdictText v, passId, sha, subject)
   in
-    withTransaction conn $
+    withTransaction conn $ do
       executeMany
         conn
         "INSERT INTO line_verdict\
@@ -168,107 +215,189 @@ recordVerdicts conn repo passId v mCommit rows =
         \   verdict = excluded.verdict, pass_id = excluded.pass_id,\
         \   commit_sha = excluded.commit_sha,\
         \   commit_subject = excluded.commit_subject,\
-        \   updated_at = excluded.updated_at,\
-        \   note = CASE WHEN excluded.verdict = 'reviewed'\
-        \     THEN NULL ELSE line_verdict.note END,\
-        \   reply = CASE WHEN excluded.verdict = 'reviewed'\
-        \     THEN NULL ELSE line_verdict.reply END"
+        \   updated_at = excluded.updated_at"
         (map toParams rows)
+      -- accepting closes the conversation; other verdicts keep it open
+      when (v == Reviewed) $
+        mapM_
+          ( \ks ->
+              let
+                holes = mconcat (replicate (length ks - 1) ", ?")
+              in
+                execute
+                  conn
+                  (Query ("DELETE FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
+                  (toRow (Only repo) <> toRow ks)
+          )
+          (chunks 400 (map (\(key, _, _, _) -> key) rows))
 
--- Attach a reviewer note to lines that already carry verdicts. Returns
--- how many rows the note landed on. Writing a note clears any standing
--- agent reply — the question changed, so the old answer is stale.
-recordNotes :: Connection -> Text -> Text -> [Text] -> IO Int
-recordNotes conn repo note keys =
-  let
-    batch ks = do
-      let
-        holes = mconcat (replicate (length ks - 1) ", ?")
-      execute
-        conn
-        (Query ("UPDATE line_verdict SET note = ?, reply = NULL WHERE repo = ? AND key IN (?" <> holes <> ")"))
-        (toRow (note, repo) <> toRow ks)
-      changes conn
-  in
-    withTransaction conn $ do
-      counts <- mapM batch (chunks 400 keys)
-      pure (sum counts)
-
--- Take the notes back off some lines. Returns how many rows changed.
-clearNotes :: Connection -> Text -> [Text] -> IO Int
-clearNotes conn repo keys =
-  let
-    batch ks = do
-      let
-        holes = mconcat (replicate (length ks - 1) ", ?")
-      execute
-        conn
-        (Query ("UPDATE line_verdict SET note = NULL, reply = NULL WHERE repo = ? AND note IS NOT NULL AND key IN (?" <> holes <> ")"))
-        (toRow (Only repo) <> toRow ks)
-      changes conn
-  in
-    withTransaction conn $ do
-      counts <- mapM batch (chunks 400 keys)
-      pure (sum counts)
-
--- Every note in the repo, by line key — the session's in-memory view.
-loadNotes :: Connection -> Text -> IO (Map Text Text)
-loadNotes conn repo = do
+-- Every conversation in the repo, by line key, posts in order. Keys of
+-- a noted group carry identical threads, so display code can collapse
+-- them by equality — the same trick the single note column used.
+loadThreads :: Connection -> Text -> IO (Map Text [Post])
+loadThreads conn repo = do
   rows <-
     query
       conn
-      "SELECT key, note FROM line_verdict WHERE repo = ? AND note IS NOT NULL"
+      "SELECT key, author, body FROM note_post\
+      \ WHERE repo = ? ORDER BY key, seq"
       (Only repo)
-  pure (Map.fromList rows)
+  let
+    add (key, author, body) =
+      Map.insertWith (flip (++)) key [Post author body]
+  pure (foldr add Map.empty (reverse rows))
 
--- Every agent reply in the repo, by line key.
-loadReplies :: Connection -> Text -> IO (Map Text Text)
-loadReplies conn repo = do
+nextSeq :: Connection -> Text -> Text -> IO Int
+nextSeq conn repo key = do
   rows <-
     query
       conn
-      "SELECT key, reply FROM line_verdict WHERE repo = ? AND reply IS NOT NULL"
-      (Only repo)
-  pure (Map.fromList rows)
-
--- An agent's answer to a note, addressed by any line key of the noted
--- group; the reply lands on every line sharing that note, so the
--- session shows one reply under the group. A key without a note takes
--- the reply alone. Returns how many rows it landed on.
-replyToNote :: Connection -> Text -> Text -> Text -> IO Int
-replyToNote conn repo key text = do
-  rows <-
-    query
-      conn
-      "SELECT file, note FROM line_verdict WHERE repo = ? AND key = ?"
+      "SELECT COALESCE(MAX(seq), -1) FROM note_post WHERE repo = ? AND key = ?"
       (repo, key) ::
-      IO [(Text, Maybe Text)]
-  case rows of
-    [] -> pure 0
-    ((file, mNote) : _) -> do
-      case mNote of
-        Just note ->
-          execute
-            conn
-            "UPDATE line_verdict SET reply = ? WHERE repo = ? AND file = ? AND note = ?"
-            (text, repo, file, note)
-        Nothing ->
-          execute
-            conn
-            "UPDATE line_verdict SET reply = ? WHERE repo = ? AND key = ?"
-            (text, repo, key)
-      changes conn
+      IO [Only Int]
+  pure $ case rows of
+    (Only n : _) -> n + 1
+    [] -> 0
 
--- Close every answered conversation at once: any note carrying an
--- agent reply clears, note and reply together. Returns how many rows.
+trailingPost :: Connection -> Text -> Text -> IO (Maybe (Int, Text))
+trailingPost conn repo key = do
+  rows <-
+    query
+      conn
+      "SELECT seq, author FROM note_post\
+      \ WHERE repo = ? AND key = ? ORDER BY seq DESC LIMIT 1"
+      (repo, key)
+  pure $ case rows of
+    (r : _) -> Just r
+    [] -> Nothing
+
+-- The reviewer's save from the note popup: while their own post is the
+-- newest in the thread it stays editable in place; once someone else
+-- has answered, saving starts the next post instead. Only lines that
+-- already carry verdicts take a thread. Returns how many lines.
+saveReviewerPost :: Connection -> Text -> Text -> [Text] -> IO Int
+saveReviewerPost conn repo body keys =
+  withTransaction conn $ do
+    marked <- markedKeys conn repo keys
+    mapM_
+      ( \key -> do
+          trailing <- trailingPost conn repo key
+          case trailing of
+            Just (seq_, "reviewer") ->
+              execute
+                conn
+                "UPDATE note_post SET body = ?, created_at = datetime('now')\
+                \ WHERE repo = ? AND key = ? AND seq = ?"
+                (body, repo, key, seq_)
+            _ -> do
+              seq_ <- nextSeq conn repo key
+              execute
+                conn
+                "INSERT INTO note_post (repo, key, seq, author, body)\
+                \ VALUES (?, ?, ?, 'reviewer', ?)"
+                (repo, key, seq_, body)
+      )
+      marked
+    pure (length marked)
+
+-- An agent's post, addressed by any line key of a noted group; it lands
+-- on every key carrying the same thread in the same file, so the
+-- session shows one conversation under the group. A key without a
+-- thread takes the post alone. Returns how many lines it landed on.
+appendAgentPost :: Connection -> Text -> Text -> Text -> Text -> IO Int
+appendAgentPost conn repo author key body = do
+  present <-
+    query
+      conn
+      "SELECT COUNT(*) FROM line_verdict WHERE repo = ? AND key = ?"
+      (repo, key) ::
+      IO [Only Int]
+  case present of
+    (Only 0 : _) -> pure 0
+    _ -> do
+      threads <- loadThreads conn repo
+      let
+        groupKeys = case Map.lookup key threads of
+          Nothing -> [key]
+          Just thread ->
+            Map.keys (Map.filter (== thread) threads)
+      withTransaction conn $
+        mapM_
+          ( \k -> do
+              seq_ <- nextSeq conn repo k
+              execute
+                conn
+                "INSERT INTO note_post (repo, key, seq, author, body)\
+                \ VALUES (?, ?, ?, ?, ?)"
+                (repo, k, seq_, author, body)
+          )
+          groupKeys
+      pure (length groupKeys)
+
+-- Drop the whole conversation from some lines. Returns how many lines
+-- actually had one.
+clearThread :: Connection -> Text -> [Text] -> IO Int
+clearThread conn repo keys =
+  let
+    batch ks = do
+      let
+        holes = mconcat (replicate (length ks - 1) ", ?")
+      cleared <-
+        query
+          conn
+          (Query ("SELECT COUNT(DISTINCT key) FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
+          (toRow (Only repo) <> toRow ks) ::
+          IO [Only Int]
+      execute
+        conn
+        (Query ("DELETE FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
+        (toRow (Only repo) <> toRow ks)
+      pure $ case cleared of
+        (Only n : _) -> n
+        [] -> 0
+  in
+    withTransaction conn $ do
+      counts <- mapM batch (chunks 400 keys)
+      pure (sum counts)
+
+-- Close every answered conversation at once: a thread whose newest post
+-- came from someone other than the reviewer clears entirely. Returns
+-- how many lines.
 resolveAnswered :: Connection -> Text -> IO Int
 resolveAnswered conn repo = do
-  execute
-    conn
-    "UPDATE line_verdict SET note = NULL, reply = NULL\
-    \ WHERE repo = ? AND reply IS NOT NULL"
-    (Only repo)
-  changes conn
+  threads <- loadThreads conn repo
+  let
+    answered = answeredKeys threads
+  case answered of
+    [] -> pure 0
+    keys -> clearThread conn repo keys
+
+answeredKeys :: Map Text [Post] -> [Text]
+answeredKeys threads =
+  let
+    endsElsewhere posts = case reverse posts of
+      (p : _) -> postAuthor p /= "reviewer"
+      [] -> False
+  in
+    Map.keys (Map.filter endsElsewhere threads)
+
+-- Threads attach only to lines that already carry verdicts; noting an
+-- unmarked line would record a conversation nothing displays.
+markedKeys :: Connection -> Text -> [Text] -> IO [Text]
+markedKeys conn repo keys =
+  let
+    batch ks = do
+      let
+        holes = mconcat (replicate (length ks - 1) ", ?")
+      rows <-
+        query
+          conn
+          (Query ("SELECT key FROM line_verdict WHERE repo = ? AND key IN (?" <> holes <> ")"))
+          (toRow (Only repo) <> toRow ks) ::
+          IO [Only Text]
+      pure (map (\(Only k) -> k) rows)
+  in
+    fmap concat (mapM batch (chunks 400 keys))
 
 data PunchRow = PunchRow
   { punchKey :: Text
@@ -276,8 +405,7 @@ data PunchRow = PunchRow
   , punchVerdict :: Text
   , punchLine :: Text
   , punchLineNo :: Maybe Int
-  , punchNote :: Maybe Text
-  , punchReply :: Maybe Text
+  , punchThread :: [Post]
   , punchCommitSha :: Maybe Text
   , punchCommitSubject :: Maybe Text
   , punchAt :: Text
@@ -289,21 +417,21 @@ punchRows conn repo = do
   rows <-
     query
       conn
-      "SELECT key, file, verdict, line, line_no, note, reply,\
+      "SELECT key, file, verdict, line, line_no,\
       \ commit_sha, commit_subject, updated_at FROM line_verdict\
       \ WHERE repo = ? AND verdict <> 'reviewed'\
       \ ORDER BY file, line_no, updated_at DESC"
       (Only repo)
+  threads <- loadThreads conn repo
   let
-    toPunch ((key, file, verdict, line, lineNo, note) :. (reply, sha, subject, at)) =
+    toPunch (key, file, verdict, line, lineNo, sha, subject, at) =
       PunchRow
         { punchKey = key
         , punchFile = file
         , punchVerdict = verdict
         , punchLine = line
         , punchLineNo = lineNo
-        , punchNote = note
-        , punchReply = reply
+        , punchThread = Map.findWithDefault [] key threads
         , punchCommitSha = sha
         , punchCommitSubject = subject
         , punchAt = at
@@ -323,10 +451,15 @@ deleteKeys conn repo keys =
       let
         holes = mconcat (replicate (length ks - 1) ", ?")
       in
-        execute
-          conn
-          (Query ("DELETE FROM line_verdict WHERE repo = ? AND key IN (?" <> holes <> ")"))
-          (toRow (Only repo) <> toRow ks)
+        do
+          execute
+            conn
+            (Query ("DELETE FROM line_verdict WHERE repo = ? AND key IN (?" <> holes <> ")"))
+            (toRow (Only repo) <> toRow ks)
+          execute
+            conn
+            (Query ("DELETE FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
+            (toRow (Only repo) <> toRow ks)
   in
     withTransaction conn $
       mapM_ batch (chunks 400 keys)
@@ -340,10 +473,21 @@ deleteFiles conn repo files =
       let
         holes = mconcat (replicate (length fs - 1) ", ?") -- first hole below
       in
-        execute
-          conn
-          (Query ("DELETE FROM line_verdict WHERE repo = ? AND file IN (?" <> holes <> ")"))
-          (toRow (Only repo) <> toRow fs)
+        do
+          execute
+            conn
+            ( Query
+                ( "DELETE FROM note_post WHERE repo = ? AND key IN\
+                  \ (SELECT key FROM line_verdict WHERE repo = ? AND file IN (?"
+                    <> holes
+                    <> "))"
+                )
+            )
+            (toRow (repo, repo) <> toRow fs)
+          execute
+            conn
+            (Query ("DELETE FROM line_verdict WHERE repo = ? AND file IN (?" <> holes <> ")"))
+            (toRow (Only repo) <> toRow fs)
   in
     withTransaction conn $
       mapM_ batch (chunks 400 files)

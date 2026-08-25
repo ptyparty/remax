@@ -29,6 +29,8 @@ This prints the punch list for that repository (run it from anywhere —
     "line": "+  let xs = map fromJust ys",
     "line_no": 42,
     "note": "use mapMaybe here instead",
+    "thread": [{"author": "reviewer", "body": "use mapMaybe here instead"},
+               {"author": "agent", "body": "done — switched to mapMaybe"}],
     "updated_at": "2026-08-23 19:23:51"}]}
 ```
 
@@ -37,11 +39,14 @@ This prints the punch list for that repository (run it from anywhere —
   fix. If the code is wrong, fix it. If the code is right as written,
   answer the question — see **Replying to notes** below. Never answer
   by adding comments to the code, and never edit the reviewer's note.
-- `note` — the reviewer's reason, when they left one (possibly
-  multi-line). It is the most important field; follow it.
+- `thread` — the conversation on this item, oldest first. Each post
+  has an `author` (`"reviewer"` is the human; agents appear under the
+  name they replied with) and a `body`. **Read the whole thread and act
+  on the newest reviewer post**; if your own post is already the last
+  word and still answers it, don't repeat yourself.
+- `note` / `reply` — compatibility views of the thread: the opening
+  reviewer post and the newest non-reviewer post. Prefer `thread`.
 - `key` — the item's stable identifier; the address for `remax reply`.
-- `reply` — your own standing reply to this note, if you already sent
-  one (see below). If it answers the current note, don't repeat it.
 - `line` — the exact line text, prefixed `+` (added) or `-` (removed
   from the base). Find it by content.
 - `line_no` — where the line sat when the verdict was recorded;
@@ -58,15 +63,16 @@ This prints the punch list for that repository (run it from anywhere —
 remax -C /path/to/repo reply KEY "answer text"
 ```
 
-`KEY` is the item's `key` from `list --json`. The reply attaches to the
-whole noted group and **renders inline under the reviewer's note in
-their live session** — this is the primary way to answer a `?`, because
-the answer appears exactly where the question was asked. Also summarize
-the answer in your chat reply when you're in a conversation with the
-human. One reply slot per note: replying again replaces your earlier
-text, and the reviewer rewriting or removing their note clears your
-reply (the question changed — check `list --json` again rather than
-assuming your answer still stands).
+`KEY` is the item's `key` from `list --json`. The reply **appends a
+post to the item's conversation** and renders inline, in order and
+under your name, in the reviewer's live session — this is the primary
+way to answer a `?`, because the answer appears exactly where the
+question was asked. Also summarize the answer in your chat reply when
+you're in a conversation with the human. The thread is ordered: the
+reviewer may answer your post with another of theirs, so re-check
+`list --json` for posts newer than yours instead of assuming your
+answer was the last word. Accepting the hunk (or resolving the note)
+closes the whole conversation.
 
 ## Fixing per-commit feedback
 

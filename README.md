@@ -27,7 +27,7 @@ remax --unstaged      # working tree vs index
 remax --untracked     # new files, reviewed as pure additions
 remax forget          # forget verdicts under the current directory (asks first)
 remax list [--json]   # flagged/questioned punch list for this repository
-remax reply KEY TEXT  # agent answers a note; shows live in the session
+remax reply KEY TEXT  # agent posts in a note's conversation; shows live in the session
 remax -C DIR ...      # any of the above, as if started in DIR
 ```
 
@@ -200,11 +200,11 @@ note popup keeps its modal keys in either keymap.
 | `:rebase [REF]` | start a commit-by-commit review pass (below) |
 | `:continue` | fold this stop's edits into the stopped commit and advance — *everything* dirty at the stop counts, including edits made through `$EDITOR` or by an agent, since the stop started clean |
 | `:abort!` | abort the rebase (`:abort` asks first) |
-| `:amend` | outside a rebase: fold the session's edits into HEAD (pairs with `:base HEAD^`) |
-| `:note TEXT` | attach a one-line note to the lines just marked `!`/`?` (or the selection) |
-| `:note` | open the note popup — a small modal buffer (full editing keys) for richer notes; text auto-wraps at the popup width; `⏎` in its normal mode saves, `Ctrl-c` (any mode) or `Esc` in its normal mode discards, saving empty clears. With the cursor on a noted line, `:note` opens that note for editing |
-| `:unnote` / `:resolve` | remove the note from the same target |
-| `:resolve all` | sweep every **answered** note in the repository — anything carrying an agent reply clears, note and reply together; unanswered notes stay |
+| `:amend` | open the commit message of the commit under review (HEAD; the stopped commit mid-rebase) in the popup editor — `⏎` in its normal mode amends. Outside a rebase the session's edits fold in with it; at a rebase stop the amend is message-only (`:continue` owns the folding) |
+| `:note TEXT` | post a one-line note on the lines just marked `!`/`?` (or the selection) |
+| `:note` | open the note popup — a small modal buffer (full editing keys); text auto-wraps; `⏎` in its normal mode saves, `Ctrl-c` (any mode) or `Esc` in its normal mode discards, saving empty clears the whole conversation. Notes are a **conversation**: while your own post is the newest it reopens for editing; once someone answered, saving posts your follow-up. From any line of a hunk that carries a conversation, `:note` continues that thread |
+| `:unnote` / `:resolve` | drop the whole conversation from the same target |
+| `:resolve all` | sweep every **answered** conversation in the repository — any thread whose newest post isn't yours clears; threads awaiting an answer stay |
 | `:accept PATH` | mark every hunk under a directory (or in one file) reviewed — the bulk verb for generated code; matching is by path component |
 | `:open PATH` / `:close` | open any repository file in the session / drop it again |
 | `:files` | the fuzzy file finder (also `Ctrl-p`) |
@@ -219,9 +219,10 @@ command's arguments (refs for `:base`/`:rebase`, files for
 
 A file opened by hand arrives with zero hunks (it reviews against its
 own content at open time), stays pinned across git refreshes, and any
-edits you make to it decorate as hunks like everything else. Notes
-render inline — a dim `└ ≡ …` footnote under the block they annotate —
-and hunks carrying one show `≡` in the tray.
+edits you make to it decorate as hunks like everything else. Note
+conversations render inline under the block they annotate — your posts
+as `└ ≡ …`, everyone else's as `↪ name · …`, oldest first — and hunks
+carrying one show `≡` in the tray.
 
 Every base or mode switch closes the current review pass and opens a new
 one, so pass history records what was reviewed against what.
@@ -260,12 +261,13 @@ your feedback flows back through the store:
    carries no commit and agents recover one from the line text with
    `git blame` when it matters.
 3. For a `?` it can answer in place: `remax reply KEY "text"` (the key
-   comes from the JSON) attaches an answer that renders live under your
-   note in the open session, marked `↪`. Rewriting or removing your
-   note clears the stale reply — and **accepting the lines resolves the
-   whole conversation**: note and reply clear when you mark them
+   comes from the JSON) posts into the note's conversation, rendering
+   live in order under your note, marked `↪` with the author's name.
+   The thread is ordered and two-way: answer their post with `:note`
+   and it appends as your follow-up. **Accepting the lines resolves the
+   whole conversation** — the thread clears when you mark them
    reviewed, so "read the answer, `X Enter`" is the one-gesture close.
-   `Space u` dismisses a note without accepting anything.
+   `Space u` dismisses a conversation without accepting anything.
 4. It fixes the code; the fixed lines automatically come back as pending
    in your session; you accept or push back.
 

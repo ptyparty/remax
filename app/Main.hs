@@ -163,18 +163,15 @@ list asJson = do
                 <> ")"
             )
           TIO.putStrLn ("    " <> punchLine row)
-          forM_ (punchNote row) $ \note ->
-            case T.lines note of
+          forM_ (punchThread row) $ \post ->
+            case T.lines (postBody post) of
               [] -> pure ()
               (firstLine : more) -> do
-                TIO.putStrLn ("    note: " <> firstLine)
-                forM_ more (\l -> TIO.putStrLn ("          " <> l))
-          forM_ (punchReply row) $ \r ->
-            case T.lines r of
-              [] -> pure ()
-              (firstLine : more) -> do
-                TIO.putStrLn ("    reply: " <> firstLine)
-                forM_ more (\l -> TIO.putStrLn ("           " <> l))
+                let
+                  label = postAuthor post <> ": "
+                  indent = T.replicate (T.length label) " "
+                TIO.putStrLn ("    " <> label <> firstLine)
+                forM_ more (\l -> TIO.putStrLn ("    " <> indent <> l))
           forM_ (punchCommitSha row) $ \sha ->
             TIO.putStrLn
               ( "    commit: "
@@ -183,14 +180,14 @@ list asJson = do
                   <> fromMaybe "" (punchCommitSubject row)
               )
 
--- An agent's answer to a reviewer note: KEY is the item's key from
--- `list --json`; the reply lands on the whole noted group and renders
--- under the note in a running session.
+-- An agent's post in a note conversation: KEY is the item's key from
+-- `list --json`; the post appends to the whole thread's group and
+-- renders in order, with its author, in a running session.
 reply :: Text -> Text -> IO ()
 reply key text = do
   root <- requireRoot
   conn <- openStore
-  n <- replyToNote conn (T.pack root) key text
+  n <- appendAgentPost conn (T.pack root) "agent" key text
   if n == 0
     then die "No such key recorded for this repository."
     else putStrLn ("reply attached to " ++ show n ++ " line(s)")
@@ -210,8 +207,9 @@ punchJson repo rows =
         , ("verdict", jsonString (punchVerdict row))
         , ("line", jsonString (punchLine row))
         , ("line_no", maybe "null" (T.pack . show) (punchLineNo row))
-        , ("note", maybe "null" jsonString (punchNote row))
-        , ("reply", maybe "null" jsonString (punchReply row))
+        , ("note", maybe "null" jsonString (openingNote row))
+        , ("reply", maybe "null" jsonString (latestAnswer row))
+        , ("thread", threadJson (punchThread row))
         , ("commit_sha", maybe "null" jsonString (punchCommitSha row))
         , ("commit_subject", maybe "null" jsonString (punchCommitSubject row))
         , ("updated_at", jsonString (punchAt row))
@@ -221,6 +219,32 @@ punchJson repo rows =
       [ ("repo", jsonString repo)
       , ("items", "[" <> T.intercalate ", " (map item rows) <> "]")
       ]
+
+-- Compatibility views of the thread: the opening reviewer post is the
+-- "note", the newest non-reviewer post the "reply".
+openingNote :: PunchRow -> Maybe Text
+openingNote row =
+  case punchThread row of
+    (post : _)
+      | postAuthor post == "reviewer" -> Just (postBody post)
+    _ -> Nothing
+
+latestAnswer :: PunchRow -> Maybe Text
+latestAnswer row =
+  case filter (\p -> postAuthor p /= "reviewer") (reverse (punchThread row)) of
+    (post : _) -> Just (postBody post)
+    [] -> Nothing
+
+threadJson :: [Post] -> Text
+threadJson posts =
+  let
+    one post =
+      jsonObject
+        [ ("author", jsonString (postAuthor post))
+        , ("body", jsonString (postBody post))
+        ]
+  in
+    "[" <> T.intercalate ", " (map one posts) <> "]"
 
 jsonObject :: [(Text, Text)] -> Text
 jsonObject fields =
