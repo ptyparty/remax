@@ -122,11 +122,13 @@ import Remax.Git
   , changedFiles
   , commitBody
   , commitMessage
+  , currentBranch
   , gitStateWatchDirs
   , hasStagedChanges
   , headCommit
   , listFiles
   , listRefs
+  , localBranches
   , looksBinary
   , modeLabel
   , rebaseStatus
@@ -152,7 +154,7 @@ data Prompt = SearchPrompt Text | CmdPrompt Text
 -- The finder overlay: fuzzy file picking, or project-wide grep. Each
 -- display row is aligned with a jump target (file, and a 1-based line
 -- for grep hits; 0 = just open the file).
-data PickerMode = PickFiles | PickGrep | PickBase
+data PickerMode = PickFiles | PickGrep | PickBase | PickBranch
 
 data Picker = Picker
   { pkMode :: PickerMode
@@ -235,6 +237,8 @@ data St = St
   , stInfoPopup :: Maybe (Text, Text) -- read-only text popup: title, body
   , stKill :: Text -- session-wide kill/yank slot, shared across files
   , stPolling :: Bool -- the native watcher was refused; polling instead
+  , stBranch :: Maybe Text -- Nothing when HEAD is detached
+  , stHead :: Maybe (Text, Text) -- (short sha, subject) of HEAD
   }
 
 repoText :: St -> Text
@@ -337,6 +341,8 @@ runReview mode root = do
   threads0 <- loadThreads conn (T.pack root)
   cfg <- loadConfig
   rebase0 <- rebaseStatus root
+  branch0 <- currentBranch root
+  head0 <- headCommit root
   files <- loadAll cfg hls (rebaseEffMode rebase0 mode) root
   passId <- beginPass conn (T.pack root) (modeLabel mode)
   theme <- loadHelixTheme
@@ -431,6 +437,8 @@ runReview mode root = do
           , stInfoPopup = Nothing
           , stKill = T.empty
           , stPolling = polling
+          , stBranch = branch0
+          , stHead = head0
           }
       st1 = case firstUnrespondedOrPending st0 of
         Just (f, h) ->
@@ -806,7 +814,7 @@ draw st =
       Nothing -> []
     rebaseRows = case stRebase st of
       Just rb -> [rebaseBar rb]
-      Nothing -> []
+      Nothing -> [gitBar st]
     infoRows = case stInfoPopup st of
       Just (title, infoBody) -> [infoPopupLayer title infoBody]
       Nothing -> []
@@ -826,6 +834,32 @@ draw st =
 -- that the reverse-video slabs are gone.
 hairline :: Widget Name
 hairline = vLimit 1 (withAttr hairAttr (fill '\9472'))
+
+-- Outside a rebase the same full-width slot answers "where am I in git":
+-- the branch, and the commit HEAD is on. Same shape as the rebase bar,
+-- because it is the same question.
+gitBar :: St -> Widget Name
+gitBar st =
+  let
+    place = case stBranch st of
+      Just b ->
+        hBox
+          [ withAttr headerAttr (txt " on ")
+          , withAttr headerFileAttr (txt b)
+          ]
+      Nothing -> withAttr conflictAttr (txt " detached")
+    commitSeg = case stHead st of
+      Nothing -> [withAttr hintAttr (txt "   no commits yet")]
+      Just (sha, subject) ->
+        [ txt "  "
+        , withAttr rebaseShaAttr (txt sha)
+        , txt "  "
+        , txt subject
+        , withAttr hintAttr (txt "   \9251c full message")
+        ]
+  in
+    withDefAttr headerRebaseAttr . padRight Max $
+      hBox (place : commitSeg)
 
 -- The commit under review gets its own full-width bar during a rebase:
 -- step, sha, and the whole subject line. Space c shows the full
@@ -2760,7 +2794,10 @@ refreshGit = do
     else do
       modify (\s -> s {stLastGit = now, stGitQueued = False})
       rebaseNow <- liftIO (rebaseStatus (stRoot st))
-      modify (\s -> s {stRebase = rebaseNow})
+      branchNow <- liftIO (currentBranch (stRoot st))
+      headNow <- liftIO (headCommit (stRoot st))
+      modify
+        (\s -> s {stRebase = rebaseNow, stBranch = branchNow, stHead = headNow})
       stEff <- get
       let
         mode = effectiveMode stEff
@@ -2880,6 +2917,7 @@ commandTable =
   , ("grep", ArgText, "project-wide search (picker)")
   , ("edit", ArgPath, "$EDITOR at the cursor (or on PATH)")
   , ("set", ArgSet, "change a setting (live + persisted)")
+  , ("checkout", NoArg, "switch branches (picker)")
   , ("q", NoArg, "quit")
   ]
 
@@ -3038,6 +3076,8 @@ runCommand input =
     [] -> pure ()
     ["q"] -> halt
     ["base"] -> openBasePicker
+    ["checkout"] -> openBranchPicker
+    ["checkout", branch] -> applyCheckout branch
     ["base", "branch"] -> setBaseBranch
     ["branch"] -> setBaseBranch
     ["base", ref] -> setBase (VsRef ref)
@@ -4062,16 +4102,17 @@ openBasePicker = do
     s
       { stPicker =
           Just
-            ( refreshBasePicker
+            ( refreshRowPicker
                 (Picker PickBase "" (map T.unpack rows) [] [] 0)
             )
       }
 
--- History order carries meaning, so rank on match quality alone and let
--- the sort's stability keep newest-first within a tier. (refreshPicker's
--- third component is path length, which would scramble it.)
-refreshBasePicker :: Picker -> Picker
-refreshBasePicker pk =
+-- For the base and branch pickers, where the incoming order carries
+-- meaning: rank on match quality alone and let the sort's stability keep
+-- it within a tier. (refreshPicker's third component is path length,
+-- which would scramble it.)
+refreshRowPicker :: Picker -> Picker
+refreshRowPicker pk =
   let
     q = pkInput pk
     quality row = fmap (\(a, b, _) -> (a, b)) (fuzzyScore q row)
@@ -4092,6 +4133,50 @@ applyBaseChoice row =
     [] -> pure ()
     ("branch" : _) -> setBaseBranch
     (ref : _) -> setBase (VsRef ref)
+
+-- Check out a branch from the same overlay. A sixth explicit mutation
+-- point, and like the others it only ever runs because you asked: the
+-- picker is the confirmation, and git's own refusal is the guardrail
+-- when the tree would be clobbered.
+openBranchPicker :: EventM Name St ()
+openBranchPicker = do
+  st <- get
+  case stRebase st of
+    Just _ -> setMsg "mid-rebase — :continue or :abort! before switching branches"
+    Nothing -> do
+      branches <- liftIO (localBranches (stRoot st))
+      let
+        pad n t = T.justifyLeft n ' ' t
+        here b = if Just b == stBranch st then "  \8592 current" else ""
+        row (b, ago, subject) =
+          pad 24 b <> pad 16 (T.take 15 ago) <> subject <> here b
+        rows = map row branches
+      if null rows
+        then setMsg "no local branches"
+        else modify $ \s ->
+          s
+            { stPicker =
+                Just
+                  ( refreshRowPicker
+                      (Picker PickBranch "" (map T.unpack rows) [] [] 0)
+                  )
+            }
+
+applyCheckout :: Text -> EventM Name St ()
+applyCheckout row =
+  case T.words row of
+    [] -> pure ()
+    (branch : _) -> do
+      st <- get
+      if Just branch == stBranch st
+        then setMsg ("already on " <> branch)
+        else do
+          res <- liftIO (runGit (stRoot st) ["checkout", T.unpack branch])
+          case res of
+            Left e -> setMsg e
+            Right () -> do
+              forceGitRefresh
+              setMsg ("checked out " <> branch)
 
 -- Project-wide search: git grep behind the same overlay, Enter jumping
 -- straight to the hit.
@@ -4249,7 +4334,10 @@ handlePickerKey ev pk =
             (\s -> s {stPicker = Just (refreshPicker pk {pkInput = q})})
         PickBase ->
           modify
-            (\s -> s {stPicker = Just (refreshBasePicker pk {pkInput = q})})
+            (\s -> s {stPicker = Just (refreshRowPicker pk {pkInput = q})})
+        PickBranch ->
+          modify
+            (\s -> s {stPicker = Just (refreshRowPicker pk {pkInput = q})})
         PickGrep -> do
           st <- get
           (matches, targets) <- liftIO (grepRepo (stRoot st) q)
@@ -4273,6 +4361,10 @@ handlePickerKey ev pk =
           PickBase ->
             case safeIdx (pkTargets pk) (pkSel pk) of
               Just (row, _) -> applyBaseChoice (T.pack row)
+              Nothing -> pure ()
+          PickBranch ->
+            case safeIdx (pkTargets pk) (pkSel pk) of
+              Just (row, _) -> applyCheckout (T.pack row)
               Nothing -> pure ()
           _ -> case safeIdx (pkTargets pk) (pkSel pk) of
             Just (path, 0) -> openFilePath (T.pack path)
@@ -4306,6 +4398,7 @@ pickerLayer pk =
           content = case pkMode pk of
             PickFiles -> highlightSubseq (pkInput pk) shownText
             PickBase -> highlightSubseq (pkInput pk) shownText
+            PickBranch -> highlightSubseq (pkInput pk) shownText
             PickGrep -> highlightInfix (pkInput pk) shownText
           line = padRight Max (txt " " <+> content)
         in
@@ -4319,10 +4412,13 @@ pickerLayer pk =
           tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
         PickBase ->
           tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
+        PickBranch ->
+          tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
         PickGrep -> tshow (length (pkMatches pk)) <> " hits"
       title = case pkMode pk of
         PickFiles -> "files"
         PickBase -> "base"
+        PickBranch -> "checkout"
         PickGrep -> "grep"
       inputRow =
         hBox
@@ -4338,6 +4434,7 @@ pickerLayer pk =
               ++ replicate (visibleCount - length shown) (txt " ")
       pickerHint = case pkMode pk of
         PickBase -> "\8593\8595 move · \9166 review against this · esc closes"
+        PickBranch -> "\8593\8595 move · \9166 checks out · esc closes"
         _ -> "\8593\8595 move · \9166 open · esc closes"
     render $
       floatFrame title pickerHint $

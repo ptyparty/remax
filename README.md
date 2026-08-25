@@ -75,6 +75,11 @@ Everything still works while polling — it just arrives a beat late.
 ## The screen
 
 - Header: mode, current file, file/hunk position, pending count.
+- Git bar: its own full-width line under the header, always there —
+  the branch you're on (or `detached`), and the sha and subject of the
+  commit HEAD is at, with `Space c` for the full message. During a
+  rebase the same line becomes the rebase bar (step, sha, subject),
+  because it answers the same question.
 - Tray (left, `Tab` collapses): hunks grouped by file, with per-hunk
   marks — `·` pending, `✓` reviewed, `!` flagged, `?` questioned. The
   tool starts in **pending-only** mode: fully *reviewed* hunks fold under
@@ -225,6 +230,7 @@ note popup keeps its modal keys in either keymap.
 | `:files` | the fuzzy file finder (also `Ctrl-p`) |
 | `:N` | jump to line N of the current file, clamped to its ends — the cursor moves, the hunk under review and the `'` anchor don't |
 | `:edit [PATH]` | suspend into `$EDITOR` at the cursor (or on PATH) |
+| `:checkout` | switch branches — a picker over local branches (most recently committed first, `← current` marked); `⏎` checks out. `:checkout NAME` skips the picker. Refused mid-rebase |
 | `:q` | quit |
 
 The command line completes itself: a bare `:` lists every command with
@@ -258,8 +264,8 @@ advances. A conflict stop is labeled `CONFLICT`; resolve it in the buffer
 and `:continue`. This is the surgical alternative to the ambient
 `:base branch` view (where fixes land at the branch tip).
 
-The session never runs git on its own — those five commands are the only
-mutation points, each one explicit. The awareness half works with zero
+The session never runs git on its own — those six commands (with
+`:checkout`) are the only mutation points, each one explicit. The awareness half works with zero
 commands too: drive `git rebase --exec false`, `--continue`, `--abort`
 from your shell and the open session tracks every stop.
 

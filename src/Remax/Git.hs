@@ -21,6 +21,8 @@ module Remax.Git
   , gitStateWatchDirs
   , headCommit
   , recentCommits
+  , currentBranch
+  , localBranches
   , runGit
   ) where
 
@@ -355,6 +357,41 @@ commitMessage root ref = do
 
 -- The short sha and subject of HEAD — during a rebase stop, that is the
 -- commit under review, so verdicts can carry their commit.
+-- The branch HEAD points at, or Nothing when it is detached.
+currentBranch :: FilePath -> IO (Maybe Text)
+currentBranch root = do
+  (code, out, _) <-
+    readProcessWithExitCode
+      "git"
+      ["-C", root, "symbolic-ref", "--short", "-q", "HEAD"]
+      ""
+  pure $ case code of
+    ExitFailure _ -> Nothing
+    ExitSuccess ->
+      case T.strip (T.pack out) of
+        b
+          | T.null b -> Nothing
+          | otherwise -> Just b
+
+-- Local branches, for the checkout picker: most recently committed
+-- first, which is the order you tend to want them in.
+localBranches :: FilePath -> IO [(Text, Text, Text)]
+localBranches root = do
+  (code, out, _) <-
+    readProcessWithExitCode
+      "git"
+      [ "-C"
+      , root
+      , "for-each-ref"
+      , "--sort=-committerdate"
+      , "--format=%(refname:short)%09%(committerdate:relative)%09%(contents:subject)"
+      , "refs/heads"
+      ]
+      ""
+  pure $ case code of
+    ExitFailure _ -> []
+    ExitSuccess -> mapMaybe commitRow (T.lines (T.pack out))
+
 -- Recent history for the base picker: short sha, how long ago, subject.
 -- Newest first, which is the order the picker keeps when nothing is
 -- typed.
