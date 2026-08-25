@@ -113,7 +113,7 @@ Normal mode:
 | `w b e` | word motions — **the crossed span becomes the selection**, so `wc` is "change word", `ed` is "delete to word end" |
 | `f F t T` + char | find / till a character (forward / back, across lines) — the crossed span becomes the selection |
 | `gh gl gs` / Home End | line start / line end / first non-blank — on a long line the view scrolls horizontally to follow the cursor (gutter stays pinned); `gh` brings it home |
-| `gg ge` | file start / file end |
+| `gg ge` | file start / file end (`:N` on the command line for a particular line) |
 | `ga` | goto the alternate file (also `Space a`) |
 | `v` | extend mode: every motion grows the selection; `;` collapses |
 | `x` | select line, repeat to extend |
@@ -208,6 +208,7 @@ note popup keeps its modal keys in either keymap.
 | `:accept PATH` | mark every hunk under a directory (or in one file) reviewed — the bulk verb for generated code; matching is by path component |
 | `:open PATH` / `:close` | open any repository file in the session / drop it again |
 | `:files` | the fuzzy file finder (also `Ctrl-p`) |
+| `:N` | jump to line N of the current file, clamped to its ends — the cursor moves, the hunk under review and the `'` anchor don't |
 | `:edit [PATH]` | suspend into `$EDITOR` at the cursor (or on PATH) |
 | `:q` | quit |
 
@@ -215,7 +216,9 @@ The command line completes itself: a bare `:` lists every command with
 a one-line description, typing narrows the menu, and `Tab` /
 `Shift-Tab` cycle completions — command names first, then that
 command's arguments (refs for `:base`/`:rebase`, files for
-`:open`/`:edit`, directories for `:accept`, modes for `:mode`).
+`:open`/`:edit`, directories for `:accept`, modes for `:mode`). A bare
+number isn't a command name at all — it reads as a line address, and the
+menu says which line it will take you to.
 
 A file opened by hand arrives with zero hunks (it reviews against its
 own content at open time), stays pinned across git refreshes, and any

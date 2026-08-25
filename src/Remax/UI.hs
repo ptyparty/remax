@@ -2166,6 +2166,26 @@ jumpToAnchor = do
         Nothing -> setMsg ("anchored file left the session: " <> T.pack path)
     Nothing -> parkM (stCurF st) (stCurH st)
 
+-- :N — park the cursor on line N of the current file, 1-based.
+-- Z.moveCursor clamps, so :0 lands on the first line and a number past
+-- the end lands on the last. This is an investigation move: the '
+-- anchor and the hunk under review both stay where they are.
+gotoLine :: Int -> EventM Name St ()
+gotoLine n = do
+  st <- get
+  case currentFileMay st of
+    Nothing -> setMsg "no file on screen"
+    Just fv ->
+      let
+        ed = fvEd fv
+        move = Z.moveCursor (n - 1, 0)
+      in
+        setEd (stCurF st) $
+          if cfgKeys (stConfig st) == KeysEmacs
+            -- emacs: point moves, the mark stays, so the region grows
+            then ed {edZipper = move (edZipper ed), edInsertEntry = Nothing}
+            else plainMove move ed
+
 -- Space h: adopt the hunk the cursor is standing in as the current one
 -- — the deliberate counterpart of ', which jumps back to the hunk
 -- under review.
@@ -2893,13 +2913,34 @@ promptMenu st =
             then [withAttr hintAttr (txt ("   \8230 " <> tshow more <> " more"))]
             else []
       in
-        case cands of
-          [] -> Nothing
+        case (cands, lineAddress base) of
+          -- a bare number is a line address: no completions to offer,
+          -- but say what it will do, like every other command does
+          ([], Just n) ->
+            Just
+              ( txt
+                  ( " :"
+                      <> T.justifyLeft 10 ' ' base
+                      <> "  go to line "
+                      <> tshow (max 1 n)
+                  )
+              )
+          ([], _) -> Nothing
           _ -> Just (vBox (map row shown ++ moreRow))
     _ -> Nothing
 
 setMsg :: Text -> EventM Name St ()
 setMsg t = modify (\s -> s {stMsg = t})
+
+-- A bare number on the command line is a line address, ex-style.
+-- Read as an Integer and saturated, so an absurdly wide number still
+-- means "the end of the file" rather than wrapping around to the top.
+lineAddress :: Text -> Maybe Int
+lineAddress t = case TR.decimal t of
+  Right (n, rest)
+    | T.null rest ->
+        Just (fromInteger (min n (fromIntegral (maxBound :: Int))))
+  _ -> Nothing
 
 runCommand :: Text -> EventM Name St ()
 runCommand input =
@@ -2941,6 +2982,7 @@ runCommand input =
     ["edit", path] -> do
       st <- get
       launchEditor (stRoot st </> T.unpack path) 1
+    [tok] | Just n <- lineAddress tok -> gotoLine n
     _ -> setMsg ("unknown command: " <> input)
 
 -- Settings management: :set with no arguments lists everything, one

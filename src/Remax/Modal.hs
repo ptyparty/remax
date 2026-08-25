@@ -14,6 +14,7 @@ module Remax.Modal
   , newEdState
   , bufferLines
   , cursorRC
+  , plainMove
   , selectionRows
   , charSelection
   , hasPending
