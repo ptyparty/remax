@@ -88,8 +88,12 @@ tip is the safe fallback.
 
 ## Rules
 
-- Answers to `?` questions go through `remax reply` (and the chat when
-  one is open) — never as comments in source files unless the reviewer
+- Anything you have to say back to the reviewer goes through
+  `remax reply` (and the chat when one is open): an answer to a `?`,
+  pushback on a `!` you think is wrong, a heads-up that you fixed it a
+  different way than they suggested. The reviewer opened a conversation,
+  so reply in the conversation, where it renders next to the line they
+  asked about — never as comments in source files unless the reviewer
   explicitly asks for a comment, and never by editing the reviewer's
   note text.
 - Fix by editing the files normally. The reviewer's session updates
