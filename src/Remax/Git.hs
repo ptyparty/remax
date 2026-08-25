@@ -398,6 +398,12 @@ localBranches root = do
 -- Newest first, which is the order the picker keeps when nothing is
 -- typed.
 --   (short sha, how long ago, ref names, subject)
+-- --first-parent, so this is the branch's own line of development going
+-- back: a merge is one commit, and what it brought in stays out of the
+-- list. Without it git walks every parent and sorts by date, so commits
+-- authored on merged-in branches turn up interleaved with yours, reading
+-- as history that isn't yours. They stay legal bases -- everything here
+-- is reachable from HEAD either way -- so :base <sha> can still name one.
 -- %D is git's own decoration -- "HEAD -> main, origin/main", empty when
 -- nothing points here -- which is how the picker answers "where is HEAD"
 -- and "which of these is a branch tip".
@@ -406,7 +412,14 @@ recentCommits n root = do
   (code, out, _) <-
     readProcessWithExitCode
       "git"
-      ["-C", root, "log", "--format=%h%x09%ar%x09%D%x09%s", "-n", show n]
+      [ "-C"
+      , root
+      , "log"
+      , "--first-parent"
+      , "--format=%h%x09%ar%x09%D%x09%s"
+      , "-n"
+      , show n
+      ]
       ""
   pure $ case code of
     ExitFailure _ -> []
