@@ -4077,9 +4077,46 @@ openBufferPicker = do
           Just (refreshPicker (Picker PickFiles "" (map fvPath (stFiles st)) [] [] 0))
       }
 
+-- Lay cells out in real columns: each leading column as wide as its
+-- widest cell up to a cap, anything longer clipped, so one long branch
+-- name or ref decoration can never shove its neighbours out of line.
+-- The final cell runs free.
+columnRow :: [Int] -> [Text] -> Text
+columnRow widths cells =
+  let
+    clip w t = if T.length t <= w then t else T.take (max 1 (w - 1)) t <> "\8230"
+    lead = zipWith (\w c -> T.justifyLeft (w + 2) ' ' (clip w c)) widths cells
+    rest = drop (length widths) cells
+  in
+    T.concat lead <> T.intercalate " " rest
+
+-- Column widths measured from the data, each capped so a single outlier
+-- cannot stretch the whole table.
+columnWidths :: [Int] -> [[Text]] -> [Int]
+columnWidths caps rows =
+  let
+    at i r = fromMaybe "" (safeIdx r i)
+    widest i = maximum (1 : map (T.length . at i) rows)
+  in
+    zipWith (\cap i -> min cap (widest i)) caps [0 ..]
+
+-- A picker row carries three separate things, because they are not the
+-- same string: the ref to act on, the columns to draw, and the text to
+-- filter against. Filtering has to see the unclipped cells -- otherwise
+-- the tail of a long branch name is both invisible and unsearchable --
+-- and acting has to see the unclipped ref.
+pickerRow :: Text -> Text -> Text -> FilePath
+pickerRow ref display match =
+  T.unpack (T.intercalate "\t" [ref, display, match])
+
+splitPickerRow :: FilePath -> (Text, Text, Text)
+splitPickerRow row =
+  case T.splitOn "\t" (T.pack row) of
+    (ref : display : match : _) -> (ref, display, match)
+    [ref, display] -> (ref, display, display)
+    _ -> (T.pack row, T.pack row, T.pack row)
+
 -- Pick a base out of the history instead of spelling one: bare :base.
--- Rows are "ref  when  subject", and the ref is the first word of the
--- row, so filtering and selection work on one list.
 openBasePicker :: EventM Name St ()
 openBasePicker = do
   st <- get
@@ -4088,24 +4125,21 @@ openBasePicker = do
     here ref = case stMode st of
       VsRef cur | cur == ref -> "  \8592 current"
       _ -> ""
-    pad n t = T.justifyLeft n ' ' t
-    commitRow (sha, ago, subject) =
-      pad 10 sha <> pad 16 (T.take 15 ago) <> subject <> here sha
-    rows =
-      [ pad 10 "HEAD" <> pad 16 "" <> "uncommitted changes" <> here "HEAD"
-      , pad 10 "branch"
-          <> pad 16 ""
-          <> "the whole branch \8212 merge-base with the mainline"
+    -- sha · how long ago · what points here · subject
+    cellsFor (sha, ago, refs, subject) = [sha, ago, refs, subject <> here sha]
+    cells =
+      [ ["HEAD", "", "", "uncommitted changes" <> here "HEAD"]
+      , ["branch", "", "", "the whole branch \8212 merge-base with the mainline"]
       ]
-        ++ map commitRow commits
+        ++ map cellsFor commits
+    widths = columnWidths [12, 15, 28] cells
+    refOf cs = fromMaybe "" (safeIdx cs 0)
+    rows =
+      map
+        (\cs -> pickerRow (refOf cs) (columnRow widths cs) (T.unwords cs))
+        cells
   modify $ \s ->
-    s
-      { stPicker =
-          Just
-            ( refreshRowPicker
-                (Picker PickBase "" (map T.unpack rows) [] [] 0)
-            )
-      }
+    s {stPicker = Just (refreshRowPicker (Picker PickBase "" rows [] [] 0))}
 
 -- For the base and branch pickers, where the incoming order carries
 -- meaning: rank on match quality alone and let the sort's stability keep
@@ -4115,24 +4149,26 @@ refreshRowPicker :: Picker -> Picker
 refreshRowPicker pk =
   let
     q = pkInput pk
-    quality row = fmap (\(a, b, _) -> (a, b)) (fuzzyScore q row)
-    scored = mapMaybe (\row -> fmap (\sc -> (sc, row)) (quality row)) (pkAll pk)
-    ranked = map snd (sortOn fst scored)
+    quality t = fmap (\(a, b, _) -> (a, b)) (fuzzyScore q (T.unpack t))
+    score row =
+      let
+        (ref, disp, match) = splitPickerRow row
+      in
+        fmap (\sc -> (sc, (ref, disp))) (quality match)
+    ranked = map snd (sortOn fst (mapMaybe score (pkAll pk)))
   in
     pk
-      { pkMatches = map T.pack ranked
-      , pkTargets = map (\row -> (row, 0)) ranked
+      { pkMatches = map snd ranked
+      , pkTargets = map (\(ref, _) -> (T.unpack ref, 0)) ranked
       , pkSel = 0
       }
 
--- The row's first word is the ref; 'branch' means the merge-base, the
--- same word :base already takes.
+-- 'branch' means the merge-base, the same word :base already takes.
 applyBaseChoice :: Text -> EventM Name St ()
-applyBaseChoice row =
-  case T.words row of
-    [] -> pure ()
-    ("branch" : _) -> setBaseBranch
-    (ref : _) -> setBase (VsRef ref)
+applyBaseChoice ref
+  | T.null ref = pure ()
+  | ref == "branch" = setBaseBranch
+  | otherwise = setBase (VsRef ref)
 
 -- Check out a branch from the same overlay. A sixth explicit mutation
 -- point, and like the others it only ever runs because you asked: the
@@ -4146,27 +4182,29 @@ openBranchPicker = do
     Nothing -> do
       branches <- liftIO (localBranches (stRoot st))
       let
-        pad n t = T.justifyLeft n ' ' t
         here b = if Just b == stBranch st then "  \8592 current" else ""
-        row (b, ago, subject) =
-          pad 24 b <> pad 16 (T.take 15 ago) <> subject <> here b
-        rows = map row branches
+        -- branch · how long ago · the tip you would land on · subject
+        cellsFor (b, ago, sha, subject) = [b, ago, sha, subject <> here b]
+        cells = map cellsFor branches
+        widths = columnWidths [28, 15, 12] cells
+        refOf cs = fromMaybe "" (safeIdx cs 0)
+        rows =
+          map
+            (\cs -> pickerRow (refOf cs) (columnRow widths cs) (T.unwords cs))
+            cells
       if null rows
         then setMsg "no local branches"
         else modify $ \s ->
           s
             { stPicker =
                 Just
-                  ( refreshRowPicker
-                      (Picker PickBranch "" (map T.unpack rows) [] [] 0)
-                  )
+                  (refreshRowPicker (Picker PickBranch "" rows [] [] 0))
             }
 
 applyCheckout :: Text -> EventM Name St ()
-applyCheckout row =
-  case T.words row of
-    [] -> pure ()
-    (branch : _) -> do
+applyCheckout branch
+  | T.null branch = pure ()
+  | otherwise = do
       st <- get
       if Just branch == stBranch st
         then setMsg ("already on " <> branch)

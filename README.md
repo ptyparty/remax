@@ -213,7 +213,7 @@ note popup keeps its modal keys in either keymap.
 
 | command | action |
 |---|---|
-| `:base` | pick the base out of the history: a picker over recent commits (short sha, how long ago, subject) with `HEAD` and `branch` on top. Type to filter on subject or sha, `⏎` reviews the working tree against the row you land on, and whatever you're reviewing against now is marked `← current` |
+| `:base` | pick the base out of the history: a picker over recent commits in aligned columns — short sha, how long ago, what points there (`HEAD -> main`, `tag: v1.0`), subject — with `HEAD` and `branch` on top. Type to filter on any of it, including a name too long to fit on screen, `⏎` reviews the working tree against the row you land on, and whatever you're reviewing against now is marked `← current` |
 | `:base REF` | review the working tree against REF (any commit-ish) |
 | `:base branch` / `:branch` | against the merge-base with the mainline — the whole branch diff, fixes land at the tip |
 | `:mode head` / `:mode unstaged` / `:mode untracked` | the classic change sets |
@@ -230,7 +230,7 @@ note popup keeps its modal keys in either keymap.
 | `:files` | the fuzzy file finder (also `Ctrl-p`) |
 | `:N` | jump to line N of the current file, clamped to its ends — the cursor moves, the hunk under review and the `'` anchor don't |
 | `:edit [PATH]` | suspend into `$EDITOR` at the cursor (or on PATH) |
-| `:checkout` | switch branches — a picker over local branches (most recently committed first, `← current` marked); `⏎` checks out. `:checkout NAME` skips the picker. Refused mid-rebase |
+| `:checkout` | switch branches — a picker over local branches in the same columns (branch, how long ago, the tip you'd land on, subject), most recently committed first with `← current` marked; `⏎` checks out. `:checkout NAME` skips the picker. Refused mid-rebase |
 | `:q` | quit |
 
 The command line completes itself: a bare `:` lists every command with

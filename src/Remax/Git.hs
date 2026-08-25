@@ -374,8 +374,10 @@ currentBranch root = do
           | otherwise -> Just b
 
 -- Local branches, for the checkout picker: most recently committed
--- first, which is the order you tend to want them in.
-localBranches :: FilePath -> IO [(Text, Text, Text)]
+-- first, which is the order you tend to want them in. Carries each
+-- branch's tip so the picker can say what you would be moving to.
+--   (branch, how long ago, tip sha, subject)
+localBranches :: FilePath -> IO [(Text, Text, Text, Text)]
 localBranches root = do
   (code, out, _) <-
     readProcessWithExitCode
@@ -384,33 +386,39 @@ localBranches root = do
       , root
       , "for-each-ref"
       , "--sort=-committerdate"
-      , "--format=%(refname:short)%09%(committerdate:relative)%09%(contents:subject)"
+      , "--format=%(refname:short)%09%(committerdate:relative)%09%(objectname:short)%09%(contents:subject)"
       , "refs/heads"
       ]
       ""
   pure $ case code of
     ExitFailure _ -> []
-    ExitSuccess -> mapMaybe commitRow (T.lines (T.pack out))
+    ExitSuccess -> mapMaybe fourFields (T.lines (T.pack out))
 
 -- Recent history for the base picker: short sha, how long ago, subject.
 -- Newest first, which is the order the picker keeps when nothing is
 -- typed.
-recentCommits :: Int -> FilePath -> IO [(Text, Text, Text)]
+--   (short sha, how long ago, ref names, subject)
+-- %D is git's own decoration -- "HEAD -> main, origin/main", empty when
+-- nothing points here -- which is how the picker answers "where is HEAD"
+-- and "which of these is a branch tip".
+recentCommits :: Int -> FilePath -> IO [(Text, Text, Text, Text)]
 recentCommits n root = do
   (code, out, _) <-
     readProcessWithExitCode
       "git"
-      ["-C", root, "log", "--format=%h%x09%ar%x09%s", "-n", show n]
+      ["-C", root, "log", "--format=%h%x09%ar%x09%D%x09%s", "-n", show n]
       ""
   pure $ case code of
     ExitFailure _ -> []
-    ExitSuccess -> mapMaybe commitRow (T.lines (T.pack out))
+    ExitSuccess -> mapMaybe fourFields (T.lines (T.pack out))
 
-commitRow :: Text -> Maybe (Text, Text, Text)
-commitRow line =
+-- Four tab-separated fields, the last keeping any tabs of its own --
+-- subjects are free text.
+fourFields :: Text -> Maybe (Text, Text, Text, Text)
+fourFields line =
   case T.splitOn "\t" line of
-    (sha : ago : rest)
-      | not (T.null sha) -> Just (sha, ago, T.intercalate "\t" rest)
+    (a : b : c : rest)
+      | not (T.null a) -> Just (a, b, c, T.intercalate "\t" rest)
     _ -> Nothing
 
 headCommit :: FilePath -> IO (Maybe (Text, Text))
