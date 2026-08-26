@@ -21,6 +21,8 @@ Prebuilt Linux binaries: every push to main updates the rolling
 
 ```sh
 remax                 # review everything uncommitted (working tree vs HEAD)
+                      #   in a directory of checkouts rather than a repo, opens
+                      #   the first and offers the rest to :repo
 remax --base REF      # review the working tree against any ref
 remax --branch        # against the merge-base with the mainline (whole branch)
 remax --unstaged      # working tree vs index
@@ -233,6 +235,7 @@ note popup keeps its modal keys in either keymap.
 | `:accept PATH` | mark every hunk under a directory (or in one file) reviewed — the bulk verb for generated code; matching is by path component |
 | `:open PATH` / `:close` | open any repository file in the session / drop it again |
 | `:files` | the fuzzy file finder (also `Ctrl-p`) |
+| `:repo` | switch which repository the session is looking at (also `Space R`, or `:repo NAME`). Start remax in a directory that *holds* checkouts rather than being one — a story directory of worktrees, say — and it opens the first and offers the rest here, with each row's branch and state (`clean`, `3 changed`, `rebasing 2/7`, `CONFLICT`) so you can see which one wants you. Your place in a repository is remembered, so leaving one mid-rebase and coming back lands you on the same hunk with the rebase still in progress — that state lives in `.git` and is read back on arrival, while buffers are re-read from disk, since the reason you stepped away may well have been to let an agent work there |
 | `:tree` | the project tree (also `Space t`): every file in the repository, with git's status letter and `+N −N` per file in the same green and rose the body uses, directory rollups so a folded directory still shows its weight, and the review meter for files the session has hunks for. `→`/`←` fold — a directory into its files, **a file into its hunks**, which arrive with the tray's own `· ! ? ✓` marks, line numbers and enclosing declarations. `⏎` expands a directory, jumps to a hunk, or opens a file. Typing **narrows the tree in place** rather than flattening it: matching files survive, and the directories holding them survive and open themselves. Deleted files appear here — with `D` and their removed count — even though the change set itself cannot show them |
 | `:N` | jump to line N of the current file, clamped to its ends — the cursor moves, the hunk under review and the `'` anchor don't |
 | `:edit [PATH]` | suspend into `$EDITOR` at the cursor (or on PATH) |

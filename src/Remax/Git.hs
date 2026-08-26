@@ -14,6 +14,7 @@ module Remax.Git
   , hasStagedChanges
   , listFiles
   , listRefs
+  , childRepos
   , PathChange (..)
   , PathStat (..)
   , pathChangeLetter
@@ -31,12 +32,13 @@ module Remax.Git
   ) where
 
 import qualified Data.ByteString as BS
+import Data.List (sort)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Read as TR
-import System.Directory (doesDirectoryExist)
+import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import qualified System.Environment as Env
 import System.Exit (ExitCode (..))
 import System.FilePath (isAbsolute, (</>))
@@ -143,6 +145,36 @@ listRefs root = do
   pure $ case code of
     ExitSuccess -> "HEAD" : filter (not . T.null) (T.lines (T.pack out))
     ExitFailure _ -> ["HEAD"]
+
+-- Sibling repositories --------------------------------------------------------
+
+-- Git checkouts directly beneath a directory, sorted. A story directory
+-- is not itself a repository — it is a folder of them, one per repo the
+-- story touches — so a session started there has to find its subjects
+-- rather than refuse.
+--
+-- Depth one only: deeper would wander into vendored trees and build
+-- directories, and the layouts this serves put the checkouts side by
+-- side anyway.
+childRepos :: FilePath -> IO [FilePath]
+childRepos dir = do
+  entries <- listDirectoryOr dir
+  found <- mapM asRepo (sort entries)
+  pure (concat found)
+
+asRepo :: FilePath -> IO [FilePath]
+asRepo path = do
+  -- .git is a directory in a normal clone and a file in a linked
+  -- worktree, which is most of what these directories hold
+  isDir <- doesDirectoryExist (path </> ".git")
+  isFile <- doesFileExist (path </> ".git")
+  pure [path | isDir || isFile]
+
+listDirectoryOr :: FilePath -> IO [FilePath]
+listDirectoryOr dir =
+  catchIOError
+    (fmap (map (dir </>)) (listDirectory dir))
+    (const (pure []))
 
 -- Per-path change shape ------------------------------------------------------
 

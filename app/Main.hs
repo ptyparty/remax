@@ -22,7 +22,7 @@ import System.FilePath (isAbsolute, makeRelative, normalise, (</>))
 import System.IO (hFlush, stdout)
 
 import Paths_remax (version)
-import Remax.Git (ReviewMode (..), branchRoot, refExists, repoRoot)
+import Remax.Git (ReviewMode (..), branchRoot, childRepos, refExists, repoRoot)
 import Remax.Store
 import Remax.UI (runReview)
 
@@ -103,7 +103,7 @@ parseArgs args0 =
 
 review :: ModeArg -> IO ()
 review marg = do
-  root <- requireRoot
+  (root, roots) <- reviewStart
   mode <- case marg of
     ArgHead -> pure (VsRef "HEAD")
     ArgUnstaged -> pure VsIndex
@@ -117,7 +117,7 @@ review marg = do
       case got of
         Left e -> die (T.unpack e)
         Right sha -> pure (VsRef (T.take 10 sha))
-  runReview mode root
+  runReview mode root roots
 
 requireRoot :: IO FilePath
 requireRoot = do
@@ -125,6 +125,28 @@ requireRoot = do
   case got of
     Just root -> pure root
     Nothing -> die "Not inside a git repository."
+
+-- Where a review session starts: the repository we are inside, or — for
+-- a directory that merely holds repositories, which is what a story
+-- directory is — the first one beneath it, with the rest reachable by
+-- :repo once the session is up.
+reviewStart :: IO (FilePath, [FilePath])
+reviewStart = do
+  got <- repoRoot
+  here <- getCurrentDirectory
+  case got of
+    Just root -> do
+      pure (root, [root])
+    Nothing -> do
+      children <- childRepos here
+      case children of
+        [] ->
+          die
+            ( "Not inside a git repository, and no repositories directly under "
+                ++ here
+                ++ "."
+            )
+        (first : _) -> pure (first, children)
 
 -- Forget the verdicts recorded for files under the current directory, so
 -- those changes come up for review from scratch. At the top of the

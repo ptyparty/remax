@@ -151,6 +151,10 @@ import qualified Remax.TreeSitter as TS
 data Name = BodyVP | TrayVP | TheCursor
   deriving (Eq, Ord, Show)
 
+-- FileChangedOnDisk carries an absolute path: the watcher callback is
+-- created once and outlives any number of :repo switches, so it cannot
+-- know which root to make a path relative to. The handler, which does
+-- know, relativizes on arrival.
 data REvent = FileChangedOnDisk FilePath | GitStateChanged | StoreChanged | Tick
 
 -- The one-line prompt at the bottom of the screen: / search or : command.
@@ -159,7 +163,7 @@ data Prompt = SearchPrompt Text | CmdPrompt Text
 -- The finder overlay: fuzzy file picking, or project-wide grep. Each
 -- display row is aligned with a jump target (file, and a 1-based line
 -- for grep hits; 0 = just open the file).
-data PickerMode = PickFiles | PickGrep | PickBase | PickBranch
+data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRepo
 
 data Picker = Picker
   { pkMode :: PickerMode
@@ -179,6 +183,23 @@ data NotePopup = NotePopup
 
 -- What saving the popup buffer means: a post in a note conversation on
 -- some lines, or the amended message of the commit under review.
+-- Your place in a repository you have stepped away from.
+--
+-- Buffers are deliberately not kept. Coming back reloads from disk,
+-- because the reason you left may well have been to let an agent work
+-- there, and a stale buffer would be worse than no memory at all. A
+-- rebase in progress needs no remembering either — it lives in .git and
+-- is read back on arrival. What is worth keeping is where you were
+-- looking and what you had asked to see.
+data RepoPlace = RepoPlace
+  { rpMode :: ReviewMode
+  , rpFile :: FilePath
+  , rpHunk :: Int
+  , rpOnlyPending :: Bool
+  , rpOpened :: Set.Set FilePath
+  , rpAnchor :: Maybe (FilePath, Int)
+  }
+
 data PopupPurpose
   = NoteFor [Text]
   | -- the paths that will be staged along with the message, so the popup
@@ -246,6 +267,8 @@ data St = St
   , stHead :: Maybe (Text, Text) -- (short sha, subject) of HEAD
   , stTree :: Maybe TreeView -- the project tree overlay, while it is open
   , stHelp :: Bool -- the keybinding cheat sheet is up
+  , stRoots :: [FilePath] -- repositories this session can switch between
+  , stPlaces :: Map.Map FilePath RepoPlace -- where you were in each
   }
 
 repoText :: St -> Text
@@ -340,8 +363,8 @@ watcherFailure nativeErr polledErr =
 
 -- Entry point ---------------------------------------------------------------
 
-runReview :: ReviewMode -> FilePath -> IO ()
-runReview mode root = do
+runReview :: ReviewMode -> FilePath -> [FilePath] -> IO ()
+runReview mode root roots = do
   conn <- openStore
   verdicts <- loadVerdicts conn (T.pack root)
   hls <- TS.initHighlighters
@@ -448,6 +471,8 @@ runReview mode root = do
           , stHead = head0
           , stTree = Nothing
           , stHelp = False
+          , stRoots = roots
+          , stPlaces = Map.empty
           }
       st1 = case firstUnrespondedOrPending st0 of
         Just (f, h) ->
@@ -539,7 +564,8 @@ printSummary st = do
 dispatchFsEvent :: BChan REvent -> FilePath -> FS.Event -> IO ()
 dispatchFsEvent chan root ev = do
   let
-    rel = makeRelative root (FS.eventPath ev)
+    absolute = FS.eventPath ev
+    rel = makeRelative root absolute
     parts = splitDirectories rel
     noisy = any (`elem` ["dist-newstyle", ".stack-work", "node_modules"]) parts
   unless noisy $
@@ -553,7 +579,7 @@ dispatchFsEvent chan root ev = do
               || "refs" `elem` parts
           )
           (void (writeBChanNonBlocking chan GitStateChanged))
-      else void (writeBChanNonBlocking chan (FileChangedOnDisk rel))
+      else void (writeBChanNonBlocking chan (FileChangedOnDisk absolute))
 
 -- Loading and rebuilding -----------------------------------------------------
 
@@ -855,13 +881,24 @@ hairline = vLimit 1 (withAttr hairAttr (fill '\9472'))
 gitBar :: St -> Widget Name
 gitBar st =
   let
+    -- with more than one repository in reach, which one you are in is
+    -- the first thing the bar has to answer
+    repoSeg =
+      if length (stRoots st) > 1
+        then
+          [ withAttr headerFileAttr (txt (" " <> T.pack (takeFileName (stRoot st))))
+          , withAttr headerAttr (txt " ·")
+          ]
+        else []
     place = case stBranch st of
       Just b ->
         hBox
-          [ withAttr headerAttr (txt " on ")
-          , withAttr headerFileAttr (txt b)
-          ]
-      Nothing -> withAttr conflictAttr (txt " detached")
+          ( repoSeg
+              ++ [ withAttr headerAttr (txt " on ")
+                 , withAttr headerFileAttr (txt b)
+                 ]
+          )
+      Nothing -> hBox (repoSeg ++ [withAttr conflictAttr (txt " detached")])
     commitSeg = case stHead st of
       Nothing -> [withAttr hintAttr (txt "   no commits yet")]
       Just (sha, subject) ->
@@ -1081,6 +1118,7 @@ spaceMenuEntries =
   [ ("f", "file picker", openPicker)
   , ("b", "open files", openBufferPicker)
   , ("t", "project tree", openTree)
+  , ("R", "switch repository", openRepoPicker)
   , ("n", "note popup", openNotePopup)
   , ("e", "$EDITOR here", editCurrent)
   , ("p", "pending filter", togglePendingOnly)
@@ -1680,7 +1718,12 @@ meterTextWidth done total =
 handleEvent :: BrickEvent Name REvent -> EventM Name St ()
 handleEvent brickEvent =
   case brickEvent of
-    AppEvent (FileChangedOnDisk rel) -> reloadFromDisk rel
+    AppEvent (FileChangedOnDisk absolute) -> do
+      st <- get
+      -- relativize here, against whichever repository is current now
+      let
+        rel = makeRelative (stRoot st) absolute
+      unless (isAbsolute rel) (reloadFromDisk rel)
     AppEvent GitStateChanged -> refreshGit
     AppEvent StoreChanged -> do
       st <- get
@@ -3074,6 +3117,7 @@ commandTable =
   , ("close", NoArg, "drop the current file")
   , ("files", NoArg, "fuzzy file finder")
   , ("tree", NoArg, "project tree with per-file diff stats")
+  , ("repo", NoArg, "switch to another repository here (picker)")
   , ("help", NoArg, "the keys, grouped (also Space ?)")
   , ("commit", NoArg, "full message of the commit under review / HEAD")
   , ("grep", ArgText, "project-wide search (picker)")
@@ -3269,6 +3313,12 @@ runCommand input =
     ["files"] -> openPicker
     ["tree"] -> openTree
     ["help"] -> showHelp
+    ["repo"] -> openRepoPicker
+    ["repo", name] -> do
+      st <- get
+      case filter ((== T.unpack name) . takeFileName) (stRoots st) of
+        (root : _) -> switchRepo root
+        [] -> setMsg ("no repository called " <> name <> " here")
     ["commit"] -> showCommitPopup
     ("grep" : rest)
       | not (null rest) -> openGrepPicker (T.unwords rest)
@@ -4049,6 +4099,119 @@ notePopupLayer st np =
               vLimit bodyRows $
                 vBox (targetRows ++ markerRows ++ shownRows ++ ruleRows ++ [bodyW])
 
+-- Switching repositories --------------------------------------------------------
+
+-- Remember where we are before stepping away.
+currentPlace :: St -> Maybe (FilePath, RepoPlace)
+currentPlace st = do
+  fv <- currentFileMay st
+  pure
+    ( stRoot st
+    , RepoPlace
+        { rpMode = stMode st
+        , rpFile = fvPath fv
+        , rpHunk = stCurH st
+        , rpOnlyPending = stOnlyPending st
+        , rpOpened = stOpened st
+        , rpAnchor = stAnchor st
+        }
+    )
+
+-- Point the session at another repository, keeping the one we leave in
+-- stPlaces so coming back lands where we left off. Everything else is
+-- read fresh: the verdicts and threads are that repository's, the rebase
+-- state comes back out of its .git, and the buffers are re-read from
+-- disk because an agent may have been working here in the meantime.
+switchRepo :: FilePath -> EventM Name St ()
+switchRepo target = do
+  st <- get
+  if target == stRoot st
+    then setMsg ("already in " <> T.pack (takeFileName target))
+    else do
+      let
+        remembered = Map.lookup target (stPlaces st)
+        mode = maybe (VsRef "HEAD") rpMode remembered
+        conn = stConn st
+        saved = case currentPlace st of
+          Just (from, place) -> Map.insert from place (stPlaces st)
+          Nothing -> stPlaces st
+      liftIO (finishPass conn (stPassId st))
+      loaded <- liftIO $ do
+        verdicts <- loadVerdicts conn (T.pack target)
+        threads <- loadThreads conn (T.pack target)
+        rebase <- rebaseStatus target
+        branch <- currentBranch target
+        headAt <- headCommit target
+        files <-
+          loadAll (stConfig st) (stHls st) (rebaseEffMode rebase mode) target
+        passId <- beginPass conn (T.pack target) (modeLabel mode)
+        -- the watch manager is shared, so following a second repository
+        -- costs watch descriptors rather than another inotify instance
+        gitDirs <- gitStateWatchDirs target
+        mapM_ (stWatch st) gitDirs
+        mapM_ (stWatch st . fileDir target . fvPath) files
+        pure (verdicts, threads, rebase, branch, headAt, files, passId)
+      let
+        (verdicts, threads, rebase, branch, headAt, files, passId) = loaded
+      modify $ \s ->
+        s
+          { stRoot = target
+          , stFiles = files
+          , stVerdicts = verdicts
+          , stThreads = threads
+          , stRebase = rebase
+          , stBranch = branch
+          , stHead = headAt
+          , stPassId = passId
+          , stMode = mode
+          , stPlaces = saved
+          , stCurF = 0
+          , stCurH = 0
+          , stWritten = Set.empty
+          , stAltFile = Nothing
+          , stAnchor = maybe Nothing rpAnchor remembered
+          , stOpened = maybe Set.empty rpOpened remembered
+          , stOnlyPending = maybe (stOnlyPending s) rpOnlyPending remembered
+          , stGrepNav = Nothing
+          , stCmdFiles = []
+          , stCmdDirs = []
+          , stCmdRefs = []
+          }
+      case remembered of
+        Just place -> restorePlace place
+        Nothing -> do
+          arrived <- get
+          case firstUnrespondedOrPending arrived of
+            Just (f, h) -> parkAnchor f h
+            Nothing -> pure ()
+      setMsg (repoArrivalMsg target rebase files)
+
+-- Land back on the file and hunk we left, when they are still there;
+-- otherwise fall back to wherever a fresh session would have opened.
+restorePlace :: RepoPlace -> EventM Name St ()
+restorePlace place = do
+  st <- get
+  case findIndex ((== rpFile place) . fvPath) (stFiles st) of
+    Just f -> parkM f (rpHunk place)
+    Nothing ->
+      case firstUnrespondedOrPending st of
+        Just (f, h) -> parkAnchor f h
+        Nothing -> pure ()
+
+repoArrivalMsg :: FilePath -> Maybe RebaseStatus -> [FileView] -> Text
+repoArrivalMsg target rebase files =
+  let
+    name = T.pack (takeFileName target)
+    hunks = length (concatMap fvRuns files)
+    what
+      | null files = "nothing to review"
+      | otherwise = tshow hunks <> " hunk(s) in " <> tshow (length files) <> " file(s)"
+    mid = case rebase of
+      Just rb -> " · rebasing, " <> rebaseStopMsg rb
+      Nothing -> ""
+  in
+    name <> " · " <> what <> mid
+
 -- The project tree ------------------------------------------------------------
 
 -- Browsing and shape in one overlay: the repository's files, decorated
@@ -4720,6 +4883,50 @@ applyBaseChoice ref
   | ref == "branch" = setBaseBranch
   | otherwise = setBase (VsRef ref)
 
+-- Pick which repository the session is looking at. Each row costs two
+-- git calls, which is fine for the handful of checkouts a story
+-- directory holds and is worth it: choosing between five repos by name
+-- alone tells you nothing about which one needs you.
+openRepoPicker :: EventM Name St ()
+openRepoPicker = do
+  st <- get
+  case stRoots st of
+    [] -> setMsg "no other repositories here"
+    [_] -> setMsg "this is the only repository here"
+    roots -> do
+      described <- liftIO (mapM (describeRepo st) roots)
+      let
+        widths = columnWidths [24, 28, 16] (map snd described)
+        -- the row shows the basename; the ref carries the whole path, so
+        -- a clipped name can never become the thing we switch to
+        row (root, cells) =
+          pickerRow
+            (T.pack root)
+            (columnRow widths cells)
+            (T.pack root <> " " <> T.unwords cells)
+        rows = map row described
+      modify $ \s ->
+        s {stPicker = Just (refreshRowPicker (Picker PickRepo "" rows [] [] 0))}
+
+describeRepo :: St -> FilePath -> IO (FilePath, [Text])
+describeRepo st root = do
+  branch <- currentBranch root
+  rebase <- rebaseStatus root
+  changed <- changedFiles (VsRef "HEAD") root
+  let
+    here = if root == stRoot st then "  \8592 current" else ""
+    onBranch = case branch of
+      Just b -> b
+      Nothing -> "detached"
+    state = case rebase of
+      Just rb
+        | rebaseConflicted rb -> "CONFLICT"
+        | otherwise -> "rebasing " <> tshow (rebaseStep rb) <> "/" <> tshow (rebaseTotal rb)
+      Nothing
+        | null changed -> "clean"
+        | otherwise -> tshow (length changed) <> " changed"
+  pure (root, [T.pack (takeFileName root), onBranch, state <> here])
+
 -- Check out a branch from the same overlay. A sixth explicit mutation
 -- point, and like the others it only ever runs because you asked: the
 -- picker is the confirmation, and git's own refusal is the guardrail
@@ -4926,6 +5133,9 @@ handlePickerKey ev pk =
         PickBranch ->
           modify
             (\s -> s {stPicker = Just (refreshRowPicker pk {pkInput = q})})
+        PickRepo ->
+          modify
+            (\s -> s {stPicker = Just (refreshRowPicker pk {pkInput = q})})
         PickGrep -> do
           st <- get
           (matches, targets) <- liftIO (grepRepo (stRoot st) q)
@@ -4953,6 +5163,10 @@ handlePickerKey ev pk =
           PickBranch ->
             case safeIdx (pkTargets pk) (pkSel pk) of
               Just (row, _) -> applyCheckout (T.pack row)
+              Nothing -> pure ()
+          PickRepo ->
+            case safeIdx (pkTargets pk) (pkSel pk) of
+              Just (row, _) -> switchRepo row
               Nothing -> pure ()
           _ -> case safeIdx (pkTargets pk) (pkSel pk) of
             Just (path, 0) -> openFilePath (T.pack path)
@@ -4987,6 +5201,7 @@ pickerLayer pk =
             PickFiles -> highlightSubseq (pkInput pk) shownText
             PickBase -> highlightSubseq (pkInput pk) shownText
             PickBranch -> highlightSubseq (pkInput pk) shownText
+            PickRepo -> highlightSubseq (pkInput pk) shownText
             PickGrep -> highlightInfix (pkInput pk) shownText
           line = padRight Max (txt " " <+> content)
         in
@@ -5002,11 +5217,14 @@ pickerLayer pk =
           tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
         PickBranch ->
           tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
+        PickRepo ->
+          tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
         PickGrep -> tshow (length (pkMatches pk)) <> " hits"
       title = case pkMode pk of
         PickFiles -> "files"
         PickBase -> "base"
         PickBranch -> "checkout"
+        PickRepo -> "repo"
         PickGrep -> "grep"
       inputRow =
         hBox
@@ -5023,6 +5241,7 @@ pickerLayer pk =
       pickerHint = case pkMode pk of
         PickBase -> "\8593\8595 move · \9166 review against this · esc closes"
         PickBranch -> "\8593\8595 move · \9166 checks out · esc closes"
+        PickRepo -> "\8593\8595 move · \9166 switch to this repository · esc closes"
         _ -> "\8593\8595 move · \9166 open · esc closes"
     render $
       floatFrame title pickerHint $
