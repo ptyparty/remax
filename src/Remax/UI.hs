@@ -4435,10 +4435,52 @@ verdictMarkAttr mark =
     '\10003' -> doneMarkAttr
     _ -> pendingMarkAttr
 
-treeRowWidget :: St -> Bool -> TreeRow -> Widget Name
-treeRowWidget st isSel row =
+-- Which characters of a row's own label the filter matched.
+--
+-- The filter matches the whole path, so that is where the positions come
+-- from; they are then shifted onto the slice of the path this row
+-- actually shows. A file that survived only because a *directory* name
+-- matched therefore lights nothing of its own, and the lit characters
+-- appear on the directory row above it instead — which is the honest
+-- answer to "why is this one here".
+rowMatchPositions :: Text -> TreeRow -> Set.Set Int
+rowMatchPositions query row
+  | T.null query = Set.empty
+  | otherwise =
+      let
+        path = T.pack (trPath row)
+        label = T.dropWhileEnd (== '/') (trLabel row)
+        offset = T.length path - T.length label
+        inLabel p = p >= offset && p < offset + T.length label
+      in
+        case subseqPositions query path of
+          Just ps -> Set.fromList (map (subtract offset) (filter inLabel ps))
+          Nothing -> Set.empty
+
+treeRowWidget :: St -> Text -> Int -> Bool -> TreeRow -> Widget Name
+treeRowWidget st query rowWidth isSel row =
   let
     indent = T.replicate (trDepth row * 2) " "
+    -- the prefix (indent and fold marker) is never part of the path, so
+    -- it sits outside the highlighted span
+    --
+    -- A row with nothing to say about git has no columns to line up
+    -- with, so its name takes the whole row rather than being clipped at
+    -- the width the decorated rows need.
+    nameCellIn width attr prefix label =
+      let
+        room = max 1 (width - T.length prefix)
+        shown = clipT room label
+      in
+        treeCell
+          width
+          ( hBox
+              [ withAttr attr (txt prefix)
+              , withAttr attr (highlightAt (rowMatchPositions query row) shown)
+              ]
+          )
+    nameCell = nameCellIn treeNameW
+    wideName = nameCellIn (max treeNameW rowWidth)
     lead =
       if isSel
         then withAttr floatSelBarAttr (txt "\9614")
@@ -4484,11 +4526,12 @@ treeRowWidget st isSel row =
         RowDir roll open ->
           let
             marker = if open then "\9662 " else "\9656 "
-            name = clipT treeNameW (indent <> marker <> trLabel row <> "/")
+            changed = ruChanged roll > 0
+            cell = if changed then nameCell else wideName
           in
             hBox
-              ( treeCell treeNameW (withAttr hintAttr (txt name))
-                  : if ruChanged roll > 0
+              ( cell hintAttr (indent <> marker) (trLabel row <> "/")
+                  : if changed
                     then
                       [ treeCell treeStatW (txt " ")
                       , treeCellR
@@ -4516,22 +4559,27 @@ treeRowWidget st isSel row =
               | not hasHunks = "  "
               | open = "\9662 "
               | otherwise = "\9656 "
-            name = clipT treeNameW (indent <> marker <> trLabel row)
             nameAttr =
               if trPath row == curPath then trayFileCurAttr else trayFileAttr
             letter = case fmap psChange mStat of
               Just change ->
                 withAttr (statusAttrFor change) (txt (pathChangeLetter change))
               Nothing -> txt " "
+            -- untouched and not in the session: nothing to the right of
+            -- the name, so the name gets the room
+            bare = mStat == Nothing && not hasHunks
           in
-            hBox
-              ( [ treeCell treeNameW (withAttr nameAttr (txt name))
-                , treeCell treeStatW letter
-                ]
-                  ++ countCells mStat
-                  ++ [txt "  ", meterCell (trPath row)]
-                  ++ fromCell mStat
-              )
+            if bare
+              then wideName nameAttr (indent <> marker) (trLabel row)
+              else
+                hBox
+                  ( [ nameCell nameAttr (indent <> marker) (trLabel row)
+                    , treeCell treeStatW letter
+                    ]
+                      ++ countCells mStat
+                      ++ [txt "  ", meterCell (trPath row)]
+                      ++ fromCell mStat
+                  )
         RowHunk ix ->
           case treeHunkInfo st (trPath row) ix of
             Nothing -> txt " "
@@ -4572,10 +4620,14 @@ treeLayer st view =
         find ((== parent) . trPath) (reverse (take start visible))
       body = case sticky of
         Just parent ->
-          withDefAttr floatSelAttr (treeRowWidget st False parent)
+          withDefAttr floatSelAttr (treeRowWidget st query rowWidth False parent)
             : map row (drop 1 (zip [start ..] shown))
         Nothing -> map row (zip [start ..] shown)
-      row (i, r) = treeRowWidget st (i == sel) r
+      row (i, r) = treeRowWidget st query rowWidth (i == sel) r
+      query = tvInput view
+      -- what a row has to play with once the frame and the selection
+      -- bar have taken theirs
+      rowWidth = max treeNameW (boxWidth - 6)
       counter =
         if T.null (tvInput view)
           then tshow (length (tvAll view)) <> " files"
