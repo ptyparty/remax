@@ -11,9 +11,14 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Data.Version (showVersion)
 import Numeric (showHex)
-import System.Directory (getCurrentDirectory, setCurrentDirectory)
+import System.Directory
+  ( doesDirectoryExist
+  , getCurrentDirectory
+  , setCurrentDirectory
+  )
 import System.Environment (getArgs)
 import System.Exit (die)
+import System.FilePath (isAbsolute, makeRelative, normalise, (</>))
 import System.IO (hFlush, stdout)
 
 import Paths_remax (version)
@@ -23,7 +28,15 @@ import Remax.UI (runReview)
 
 data ModeArg = ArgHead | ArgBase Text | ArgBranch | ArgUnstaged | ArgUntracked
 
-data Cmd = Review ModeArg | Forget | List Bool | Reply Text Text | ShowVersion
+data Cmd
+  = Review ModeArg
+  | -- Nothing scopes to the current directory; a path need not still
+    -- exist, which is the point — you forget a directory *because* it
+    -- is gone.
+    Forget (Maybe FilePath)
+  | List Bool
+  | Reply Text Text
+  | ShowVersion
 
 main :: IO ()
 main = do
@@ -31,10 +44,21 @@ main = do
   case parseArgs args of
     Left err -> die err
     Right (mDir, cmd) -> do
-      forM_ mDir setCurrentDirectory
+      forM_ mDir $ \dir -> do
+        there <- doesDirectoryExist dir
+        unless there $
+          die
+            ( "No such directory: "
+                ++ dir
+                ++ "\nTo forget verdicts for a directory that is gone, run"
+                ++ " remax forget "
+                ++ dir
+                ++ " from somewhere that still exists."
+            )
+        setCurrentDirectory dir
       case cmd of
         Review marg -> review marg
-        Forget -> forget
+        Forget mPath -> forget mPath
         List asJson -> list asJson
         Reply key text -> reply key text
         ShowVersion -> putStrLn ("remax " ++ showVersion version)
@@ -42,7 +66,8 @@ main = do
 usage :: String
 usage =
   "usage: remax [-C DIR] [--base REF | --branch | --unstaged | --untracked]\n\
-  \       remax [-C DIR] forget         forget verdicts under the current directory\n\
+  \       remax [-C DIR] forget [PATH]  forget verdicts under PATH (default: the\n\
+  \                                     current directory); PATH need not still exist\n\
   \       remax [-C DIR] list [--json]  show flagged and questioned lines\n\
   \       remax [-C DIR] reply KEY TEXT  answer a note; shows in the review session\n\
   \\n\
@@ -64,7 +89,8 @@ parseArgs args0 =
         ["--untracked"] -> Right (mDir, Review ArgUntracked)
         ["--branch"] -> Right (mDir, Review ArgBranch)
         ["--base", ref] -> Right (mDir, Review (ArgBase (T.pack ref)))
-        ["forget"] -> Right (mDir, Forget)
+        ["forget"] -> Right (mDir, Forget Nothing)
+        ["forget", path] -> Right (mDir, Forget (Just path))
         ["list"] -> Right (mDir, List False)
         ["list", "--json"] -> Right (mDir, List True)
         ["--version"] -> Right (mDir, ShowVersion)
@@ -103,29 +129,41 @@ requireRoot = do
 -- Forget the verdicts recorded for files under the current directory, so
 -- those changes come up for review from scratch. At the top of the
 -- repository that is everything recorded for it.
-forget :: IO ()
-forget = do
+-- Verdicts outlive the files they were recorded against — that is the
+-- whole design, since they are keyed by line content — so forgetting has
+-- to be able to name a directory that is no longer there. The scope is
+-- resolved by path arithmetic alone, never touching the filesystem, so a
+-- deleted path scopes exactly as well as a live one.
+forget :: Maybe FilePath -> IO ()
+forget mPath = do
   root <- requireRoot
   here <- getCurrentDirectory
   conn <- openStore
   rows <- repoRows conn (T.pack root)
   let
-    prefix =
-      if here == root
-        then ""
-        else T.pack (drop (length root + 1) here) <> "/"
-    underHere (_, f) = T.null prefix || prefix `T.isPrefixOf` f
-    doomed = filter underHere rows
+    target = case mPath of
+      Nothing -> here
+      Just path
+        | isAbsolute path -> normalise path
+        | otherwise -> normalise (here </> path)
+    relative = makeRelative root target
+    scope = if relative == "." || relative == root then "" else T.pack relative
+    -- by path component, as :accept matches: "gen" covers gen/a.txt but
+    -- not generated.hs, and naming one file exactly forgets just it
+    underScope (_, f) =
+      T.null scope || f == scope || (scope <> "/") `T.isPrefixOf` f
+    doomed = filter underScope rows
     files = nub (map snd doomed)
+    described = if T.null scope then "the repository" else T.unpack scope
   if null doomed
-    then putStrLn ("Nothing is recorded for the files under " ++ here ++ ".")
+    then putStrLn ("Nothing is recorded for the files under " ++ described ++ ".")
     else do
       putStrLn
         ( show (length doomed)
             ++ " line verdict(s) across "
             ++ show (length files)
             ++ " file(s) under "
-            ++ here
+            ++ described
             ++ "."
         )
       putStrLn "  Forgetting them means reviewing those changes again from scratch."
