@@ -4437,23 +4437,26 @@ verdictMarkAttr mark =
 
 -- Which characters of a row's own label the filter matched.
 --
--- The filter matches the whole path, so that is where the positions come
--- from; they are then shifted onto the slice of the path this row
--- actually shows. A file that survived only because a *directory* name
--- matched therefore lights nothing of its own, and the lit characters
--- appear on the directory row above it instead — which is the honest
--- answer to "why is this one here".
+-- Positions come from the row's witness — the full path the whole query
+-- actually matches — and are then shifted onto the slice of it this row
+-- displays. A directory has to be measured against a descendant's path
+-- rather than its own: "remaxgit" matches src/Remax/Git.hs, but no part
+-- of that query matches src/Remax alone, so asking the directory by
+-- itself finds nothing and lights nothing. Every row on the way down to
+-- a match now shows its share of it.
 rowMatchPositions :: Text -> TreeRow -> Set.Set Int
 rowMatchPositions query row
   | T.null query = Set.empty
   | otherwise =
       let
-        path = T.pack (trPath row)
+        witness = T.pack (trWitness row)
         label = T.dropWhileEnd (== '/') (trLabel row)
-        offset = T.length path - T.length label
+        -- the label is the tail of trPath, and trPath is a prefix of the
+        -- witness, so this span is the same in both
+        offset = length (trPath row) - T.length label
         inLabel p = p >= offset && p < offset + T.length label
       in
-        case subseqPositions query path of
+        case subseqPositions query witness of
           Just ps -> Set.fromList (map (subtract offset) (filter inLabel ps))
           Nothing -> Set.empty
 

@@ -21,6 +21,7 @@ module Remax.Tree
   ) where
 
 import qualified Data.Map.Strict as Map
+import Data.Maybe (listToMaybe, mapMaybe)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -148,6 +149,11 @@ data TreeRow = TreeRow
   { trDepth :: Int
   , trLabel :: Text
   , trPath :: FilePath
+  , -- the full path whose match justifies this row: its own for a file,
+    -- a matching descendant's for a directory. Only against this does
+    -- the whole query line up, so it is what a highlight is computed
+    -- from — see matchWitness.
+    trWitness :: FilePath
   , trParent :: Maybe FilePath
   , trKind :: RowKind
   }
@@ -180,20 +186,22 @@ data TreeFilter
   = ShowAll
   | ShowMatching (FilePath -> Bool)
 
-keptFile :: TreeFilter -> FilePath -> Bool
-keptFile treeFilter path =
+-- The path whose match justifies keeping a node: its own, for a file
+-- that matched; the first matching file beneath it, for a directory.
+--
+-- A directory needs a descendant's path rather than its own because the
+-- query is matched against a whole path. "remaxgit" matches
+-- src/Remax/Git.hs, but nothing of it matches src/Remax on its own — so
+-- asking the directory alone finds no match at all, and the directory's
+-- share of one can only be recovered from a descendant that has it.
+matchWitness :: TreeFilter -> TreeNode -> Maybe FilePath
+matchWitness treeFilter node =
   case treeFilter of
-    ShowAll -> True
-    ShowMatching matches -> matches path
-
-keptNode :: TreeFilter -> TreeNode -> Bool
-keptNode treeFilter node =
-  case treeFilter of
-    ShowAll -> True
-    ShowMatching _ ->
+    ShowAll -> Just (tnPath node)
+    ShowMatching matches ->
       case tnKids node of
-        [] -> keptFile treeFilter (tnPath node)
-        kids -> any (keptNode treeFilter) kids
+        [] -> if matches (tnPath node) then Just (tnPath node) else Nothing
+        kids -> listToMaybe (mapMaybe (matchWitness treeFilter) kids)
 
 filtering :: TreeFilter -> Bool
 filtering treeFilter =
@@ -214,8 +222,10 @@ treeRows ::
 treeRows treeFilter expanded hunkCount root =
   let
     walk depth parent node =
-      concatMap (emit depth parent) (filter (keptNode treeFilter) (tnKids node))
-    emit depth parent node =
+      concatMap
+        (\kid -> maybe [] (emit depth parent kid) (matchWitness treeFilter kid))
+        (tnKids node)
+    emit depth parent node witness =
       let
         path = tnPath node
         -- a directory opens itself while filtering; a file does not, so
@@ -233,6 +243,7 @@ treeRows treeFilter expanded hunkCount root =
                   { trDepth = depth + 1
                   , trLabel = ""
                   , trPath = path
+                  , trWitness = path
                   , trParent = Just path
                   , trKind = RowHunk i
                   }
@@ -241,6 +252,7 @@ treeRows treeFilter expanded hunkCount root =
                 { trDepth = depth
                 , trLabel = tnName node
                 , trPath = path
+                , trWitness = witness
                 , trParent = parent
                 , trKind = RowFile (tnStat node) (n > 0) isOpen
                 }
@@ -255,6 +267,7 @@ treeRows treeFilter expanded hunkCount root =
                 { trDepth = depth
                 , trLabel = label
                 , trPath = tnPath target
+                , trWitness = witness
                 , trParent = parent
                 , trKind = RowDir (tnRollup target) openTarget
                 }
