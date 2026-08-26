@@ -245,6 +245,7 @@ data St = St
   , stBranch :: Maybe Text -- Nothing when HEAD is detached
   , stHead :: Maybe (Text, Text) -- (short sha, subject) of HEAD
   , stTree :: Maybe TreeView -- the project tree overlay, while it is open
+  , stHelp :: Bool -- the keybinding cheat sheet is up
   }
 
 repoText :: St -> Text
@@ -446,6 +447,7 @@ runReview mode root = do
           , stBranch = branch0
           , stHead = head0
           , stTree = Nothing
+          , stHelp = False
           }
       st1 = case firstUnrespondedOrPending st0 of
         Just (f, h) ->
@@ -823,11 +825,13 @@ draw st =
     rebaseRows = case stRebase st of
       Just rb -> [rebaseBar rb]
       Nothing -> [gitBar st]
+    helpRows = if stHelp st then [helpLayer] else []
     infoRows = case stInfoPopup st of
       Just (title, infoBody) -> [infoPopupLayer title infoBody]
       Nothing -> []
   in
-    infoRows
+    helpRows
+      ++ infoRows
       ++ overlays
       ++ [ vBox
              ( [headerBar st]
@@ -931,6 +935,141 @@ infoPopupLayer title body =
 
 -- The pending-space infobox, helix style: bottom-right, listing what the
 -- menu offers.
+-- The cheat sheet: what a newcomer cannot otherwise find out. The :
+-- commands document themselves — a bare : lists every one with its
+-- description — but the keys had nowhere to be discovered, so this is
+-- mostly keys, grouped by what you are trying to do rather than
+-- alphabetically.
+helpGroups :: [(Text, [(Text, Text)])]
+helpGroups =
+  [
+    ( "review"
+    ,
+      [ ("\9166", "accept the selection as reviewed")
+      , ("!", "flag it — come back to this")
+      , ("?", "question it — explain or fix")
+      , ("X", "select the whole hunk")
+      , ("] [", "next / previous hunk")
+      , ("'", "back to the hunk under review")
+      , ("\9251 h", "make this hunk the current one")
+      , ("\9251 p", "show only hunks still pending")
+      ]
+    )
+  ,
+    ( "saying something"
+    ,
+      [ (":note TEXT", "a one-line note on what you marked")
+      , (":note", "the popup, with the thread so far")
+      , ("\9251 u", "drop the conversation here")
+      ]
+    )
+  ,
+    ( "moving"
+    ,
+      [ ("h j k l", "left down up right")
+      , ("w b e", "words; the crossed span is selected")
+      , ("f F t T", "find / till a character")
+      , ("gh gl gs", "line start / end / first non-blank")
+      , ("gg ge", "file start / file end")
+      , (":42", "go to line 42")
+      , (") (", "next / previous file")
+      , ("ga", "the alternate file")
+      ]
+    )
+  ,
+    ( "selecting"
+    ,
+      [ ("v", "every motion grows the selection")
+      , ("x", "the line; again to extend")
+      , ("%", "the whole file")
+      , (";", "collapse it")
+      ]
+    )
+  ,
+    ( "editing"
+    ,
+      [ ("i a I A o O", "enter insert")
+      , ("d c", "delete / change the selection")
+      , ("u", "undo")
+      , ("y p P", "yank / paste after / before")
+      , ("> <", "indent / unindent")
+      , ("J Q", "join lines / reflow to 80")
+      , ("r ~", "replace character / toggle case")
+      , (".", "repeat the last insert")
+      ]
+    )
+  ,
+    ( "finding"
+    ,
+      [ ("/ n N", "search this file, repeat fwd / back")
+      , ("*", "search for the word under the cursor")
+      , ("\9251 /", "search the whole project")
+      ]
+    )
+  ,
+    ( "getting around"
+    ,
+      [ ("Ctrl-p", "the file picker")
+      , ("\9251 t", "the project tree, with diff stats")
+      , ("\9251 b", "files already open in the session")
+      , ("Tab", "collapse / expand the tray")
+      , ("{ }", "scroll the tray")
+      , ("E", "suspend into $EDITOR here")
+      ]
+    )
+  ,
+    ( "the : line"
+    ,
+      [ (":", "commands — a bare : lists them all")
+      , (":base", "pick what to diff against")
+      , (":rebase", "review commit by commit")
+      , (":q", "quit")
+      ]
+    )
+  ]
+
+-- Two columns, split where the row counts come out even, so the sheet is
+-- one glance rather than a scroll.
+helpLayer :: Widget Name
+helpLayer =
+  Widget Greedy Greedy $ do
+    ctx <- getContext
+    let
+      colWidth = max 36 (min 50 (div (availWidth ctx - 24) 2))
+      keyWidth = 13
+      entryRow (key, desc) =
+        hBox
+          [ hLimit keyWidth (padRight Max (withAttr noteInlineAttr (txt (" " <> key))))
+          , withAttr statusAttr (txt desc)
+          ]
+      groupRows (name, entries) =
+        (withAttr floatTitleAttr (txt (" " <> name)) : map entryRow entries)
+          ++ [txt " "]
+      height g = length (snd g) + 2
+      half = div (sum (map height helpGroups)) 2
+      -- take a group into the left column while doing so lands closer to
+      -- the halfway mark than stopping would; a plain "stop once over
+      -- half" split leaves the columns lopsided
+      pack used groups =
+        case groups of
+          [] -> ([], [])
+          (g : rest)
+            | used == 0
+                || abs (used + height g - half) <= abs (half - used) ->
+                let
+                  (a, b) = pack (used + height g) rest
+                in
+                  (g : a, b)
+            | otherwise -> ([], g : rest)
+      (leftGroups, rightGroups) = pack 0 helpGroups
+      column groups = vBox (concatMap groupRows groups)
+    render $
+      floatFrame "keys" "any key closes" $
+        hBox
+          [ hLimit colWidth (padRight Max (column leftGroups))
+          , hLimit colWidth (padRight Max (column rightGroups))
+          ]
+
 -- Space, then one key. This table is the only place a space key exists:
 -- the infobox is rendered from it and the keystroke is dispatched through
 -- it, so a key cannot be bound without being listed. :tree arrived bound
@@ -944,12 +1083,16 @@ spaceMenuEntries =
   , ("e", "$EDITOR here", editCurrent)
   , ("p", "pending filter", togglePendingOnly)
   , ("u", "resolve note here", unnoteCmd)
-  , ("h", "adopt hunk here", adoptHunkUnderCursor)
+  , ("h", "make this hunk current", setCurrentHunkHere)
   , ("r", "revert hunk to base", revertTarget)
   , ("a", "alternate file", gotoAltFile)
   , ("/", "project search", openGrepPicker "")
   , ("c", "commit message", showCommitPopup)
+  , ("?", "keys", showHelp)
   ]
+
+showHelp :: EventM Name St ()
+showHelp = modify (\s -> s {stHelp = True})
 
 spaceMenu :: Widget Name
 spaceMenu =
@@ -1480,10 +1623,10 @@ statusBar st =
           Nothing -> txt ""
       Nothing -> txt ""
     hint = case currentFileMay st of
-      Nothing -> ": command · :q quit "
+      Nothing -> ": command · \9251? keys · :q quit "
       Just fv ->
         (if fvStale fv then "hunks refresh on Esc · " else "")
-          <> "\9166 accept · \9251 menu "
+          <> "\9166 accept · ! flag · ? question · \9251 menu · \9251? keys "
     meterSeg =
       let
         pairs = allRunPairs st
@@ -1548,6 +1691,8 @@ handleEvent brickEvent =
       -- handler that has something new to say sets it afresh
       modify (\s -> s {stMsg = ""})
       case (stNotePopup st, stPicker st, stPrompt st) of
+        _
+          | stHelp st -> modify (\s -> s {stHelp = False})
         _
           | stInfoPopup st /= Nothing ->
               modify (\s -> s {stInfoPopup = Nothing})
@@ -1725,7 +1870,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'x') [] -> selectCurrentHunk
         V.EvKey (V.KChar 'p') [] -> togglePendingOnly
         V.EvKey (V.KChar 'u') [] -> unnoteCmd
-        V.EvKey (V.KChar 'h') [] -> adoptHunkUnderCursor
+        V.EvKey (V.KChar 'h') [] -> setCurrentHunkHere
         V.EvKey (V.KChar 'v') [] -> revertTarget
         V.EvKey (V.KChar 'a') [] -> gotoAltFile
         V.EvKey (V.KChar '/') [] -> openGrepPicker ""
@@ -2316,9 +2461,6 @@ gotoLine n = do
             then ed {edZipper = move (edZipper ed), edInsertEntry = Nothing}
             else plainMove move ed
 
--- Space h: adopt the hunk the cursor is standing in as the current one
--- — the deliberate counterpart of ', which jumps back to the hunk
--- under review.
 -- :revert / Space r — put the base text back for the hunk under the
 -- cursor, or for every hunk a selection touches. The revert is an
 -- ordinary buffer edit, so u undoes it and the diff re-derives at once.
@@ -2389,15 +2531,19 @@ revertTarget = do
                 applyToDisk (stCurF st)
                 setMsg "\10226 reverted to base"
 
-adoptHunkUnderCursor :: EventM Name St ()
-adoptHunkUnderCursor = do
+-- Space h: make the hunk the cursor is standing in the current one —
+-- the current hunk being what a selection-less X, ! or ? acts on, and
+-- what ' comes home to. The deliberate counterpart of ': that one goes
+-- back to where you were reviewing, this one says review here instead.
+setCurrentHunkHere :: EventM Name St ()
+setCurrentHunkHere = do
   st <- get
   case hunkUnderCursor st of
     Nothing -> setMsg "cursor isn't in a hunk"
     Just h -> do
       modify (\s -> s {stCurH = h, stMsg = " "})
-      adopted <- get
-      case currentFileMay adopted of
+      moved <- get
+      case currentFileMay moved of
         Just fv -> modify (\s -> s {stAnchor = Just (fvPath fv, h)})
         Nothing -> pure ()
 
@@ -2420,7 +2566,7 @@ selectCurrentHunk = do
         ([], Just r) -> Just (runAnchor r, runAnchor r)
         _ -> Nothing
   if hunkUnderCursor st /= Just (clampH (fvRuns fv) (stCurH st))
-    then setMsg "cursor isn't in the current hunk — Space h adopts this one"
+    then setMsg "cursor isn't in the current hunk — Space h makes this one current"
     else case pickSpan of
       Nothing -> pure ()
       Just (first, lastRow) -> do
@@ -2525,7 +2671,7 @@ applyVerdictHunk v = do
         else Nothing
   case target of
     Nothing -> do
-      setMsg "cursor isn't in the current hunk — Space h adopts this one"
+      setMsg "cursor isn't in the current hunk — Space h makes this one current"
       pure False
     Just r -> do
       let
@@ -2926,6 +3072,7 @@ commandTable =
   , ("close", NoArg, "drop the current file")
   , ("files", NoArg, "fuzzy file finder")
   , ("tree", NoArg, "project tree with per-file diff stats")
+  , ("help", NoArg, "the keys, grouped (also Space ?)")
   , ("commit", NoArg, "full message of the commit under review / HEAD")
   , ("grep", ArgText, "project-wide search (picker)")
   , ("edit", ArgPath, "$EDITOR at the cursor (or on PATH)")
@@ -3119,6 +3266,7 @@ runCommand input =
     ["close"] -> closeCurrent
     ["files"] -> openPicker
     ["tree"] -> openTree
+    ["help"] -> showHelp
     ["commit"] -> showCommitPopup
     ("grep" : rest)
       | not (null rest) -> openGrepPicker (T.unwords rest)

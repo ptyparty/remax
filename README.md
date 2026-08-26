@@ -148,7 +148,7 @@ Normal mode:
 | `u` | undo |
 | `y` | yank the selection (or cursor cell) — line-wise for `x` selections; the yank slot is session-wide, so paste works across files (and the note popup) |
 | `p` / `P` | paste after / before: whole lines below/above for a line-wise yank, after/at the cursor otherwise; the paste is selected |
-| `Space` | menu (helix-style infobox): `f` file picker, `b` open files, `t` project tree, `n` note popup, `e` `$EDITOR` here, `p` pending filter, `u` resolve the note here, `h` adopt the hunk under the cursor as current, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
+| `Space` | menu (helix-style infobox): `f` file picker, `b` open files, `t` project tree, `n` note popup, `e` `$EDITOR` here, `p` pending filter, `u` resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
 | `.` | repeat the last insert session (the entering command plus what was typed), helix-style — `c`-fix-`Esc` then `.` applies the same change at the cursor |
 | `Enter` | **accept the selection as reviewed** — a selection is required, so what you accept is always visibly highlighted (`X Enter` for the hunk you're looking at). Completing a hunk jumps to the next pending one; a partial mark steps to the next line |
 | `!` / `?` | flag-to-return-to / question — the selection's lines, or the whole current hunk with none. The note popup opens immediately for the reason (`note-on-flag = 0` in the config turns that off); discarding keeps the mark, and the jump to the next hunk waits until the popup closes |
@@ -170,9 +170,11 @@ normal review keys keep working at every stop.
 
 Jumping to a hunk parks the cursor on its first line still needing
 attention. The cursor roams freely without changing the current hunk:
-`Space h` adopts the hunk it's standing in, and a selection-less hunk
-verb (`X`, `!`, `?`) refuses when the cursor isn't inside the current
-hunk, rather than acting on one out of view. A session opens on the
+`Space h` makes the hunk it's standing in the current one, and a
+selection-less hunk verb (`X`, `!`, `?`) refuses when the cursor isn't
+inside the current hunk, rather than acting on one out of view — the
+refusal names `Space h` as the way to move the current hunk to where you
+are. A session opens on the
 first hunk nothing has been said about yet, and auto-advance walks the
 same way: fresh hunks first,
 circling back to the flagged and questioned ones only when nothing
