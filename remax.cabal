@@ -108,6 +108,7 @@ executable remax
       Remax.Modal
       Remax.Store
       Remax.Theme
+      Remax.Tree
       Remax.TreeSitter
       Remax.UI
       Remax.Zipper

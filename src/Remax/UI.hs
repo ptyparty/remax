@@ -77,7 +77,7 @@ import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
 import Data.List (find, findIndex, groupBy, isPrefixOf, maximumBy, sortOn)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, mapMaybe)
 import Data.Ord (comparing)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -115,7 +115,9 @@ import Remax.Config
 import Remax.DiffModel
 import Remax.Emacs (handleEmacs)
 import Remax.Git
-  ( RebaseStatus (..)
+  ( PathChange (..)
+  , PathStat (..)
+  , RebaseStatus (..)
   , ReviewMode (..)
   , baseLines
   , branchRoot
@@ -131,6 +133,8 @@ import Remax.Git
   , localBranches
   , looksBinary
   , modeLabel
+  , pathChangeLetter
+  , pathStats
   , rebaseStatus
   , recentCommits
   , refExists
@@ -141,6 +145,7 @@ import Remax.Highlight
 import Remax.Modal
 import Remax.Store
 import Remax.Theme
+import Remax.Tree
 import qualified Remax.TreeSitter as TS
 
 data Name = BodyVP | TrayVP | TheCursor
@@ -239,6 +244,7 @@ data St = St
   , stPolling :: Bool -- the native watcher was refused; polling instead
   , stBranch :: Maybe Text -- Nothing when HEAD is detached
   , stHead :: Maybe (Text, Text) -- (short sha, subject) of HEAD
+  , stTree :: Maybe TreeView -- the project tree overlay, while it is open
   }
 
 repoText :: St -> Text
@@ -439,6 +445,7 @@ runReview mode root = do
           , stPolling = polling
           , stBranch = branch0
           , stHead = head0
+          , stTree = Nothing
           }
       st1 = case firstUnrespondedOrPending st0 of
         Just (f, h) ->
@@ -806,6 +813,7 @@ draw st =
     overlays =
       catMaybes
         [ fmap (notePopupLayer st) (stNotePopup st)
+        , fmap (treeLayer st) (stTree st)
         , fmap pickerLayer (stPicker st)
         , if stSpace st then Just spaceMenu else Nothing
         ]
@@ -923,29 +931,37 @@ infoPopupLayer title body =
 
 -- The pending-space infobox, helix style: bottom-right, listing what the
 -- menu offers.
+-- Space, then one key. This table is the only place a space key exists:
+-- the infobox is rendered from it and the keystroke is dispatched through
+-- it, so a key cannot be bound without being listed. :tree arrived bound
+-- but invisible precisely because those used to be two lists.
+spaceMenuEntries :: [(Text, Text, EventM Name St ())]
+spaceMenuEntries =
+  [ ("f", "file picker", openPicker)
+  , ("b", "open files", openBufferPicker)
+  , ("t", "project tree", openTree)
+  , ("n", "note popup", openNotePopup)
+  , ("e", "$EDITOR here", editCurrent)
+  , ("p", "pending filter", togglePendingOnly)
+  , ("u", "resolve note here", unnoteCmd)
+  , ("h", "adopt hunk here", adoptHunkUnderCursor)
+  , ("r", "revert hunk to base", revertTarget)
+  , ("a", "alternate file", gotoAltFile)
+  , ("/", "project search", openGrepPicker "")
+  , ("c", "commit message", showCommitPopup)
+  ]
+
 spaceMenu :: Widget Name
 spaceMenu =
   let
-    item key label =
+    item (key, label, _) =
       hBox
         [ withAttr noteInlineAttr (txt (" " <> key))
         , withAttr statusAttr (txt ("  " <> label))
         ]
   in
     floatFrame "space" "any other key cancels" . hLimit 26 . padRight Max $
-      vBox
-        [ item "f" "file picker"
-        , item "b" "open files"
-        , item "n" "note popup"
-        , item "e" "$EDITOR here"
-        , item "p" "pending filter"
-        , item "u" "resolve note here"
-        , item "h" "adopt hunk here"
-        , item "r" "revert hunk to base"
-        , item "a" "alternate file"
-        , item "/" "project search"
-        , item "c" "commit message"
-        ]
+      vBox (map item spaceMenuEntries)
 
 -- The persistent session's resting state: nothing to review, but the
 -- watcher is live and new work will wake the screen on its own.
@@ -1536,6 +1552,8 @@ handleEvent brickEvent =
           | stInfoPopup st /= Nothing ->
               modify (\s -> s {stInfoPopup = Nothing})
         (Just np, _, _) -> handleNotePopupKey ev np
+        _
+          | Just tv <- stTree st -> handleTreeKey ev tv
         (_, Just pk, _) -> handlePickerKey ev pk
         (_, _, Just p) -> handlePromptKey ev p
         _ ->
@@ -1554,22 +1572,16 @@ handleEvent brickEvent =
     _ -> pure ()
 
 -- The helix-style space menu: Space, then one key; anything unlisted
--- just cancels. The menu itself renders as an infobox while pending.
+-- just cancels. Dispatch reads spaceMenuEntries, which is also what the
+-- infobox renders, so the menu and the bindings cannot disagree.
 handleSpaceKey :: V.Event -> EventM Name St ()
 handleSpaceKey ev = do
   modify (\s -> s {stSpace = False})
   case ev of
-    V.EvKey (V.KChar 'f') [] -> openPicker
-    V.EvKey (V.KChar 'b') [] -> openBufferPicker
-    V.EvKey (V.KChar 'n') [] -> openNotePopup
-    V.EvKey (V.KChar 'e') [] -> editCurrent
-    V.EvKey (V.KChar 'p') [] -> togglePendingOnly
-    V.EvKey (V.KChar 'u') [] -> unnoteCmd
-    V.EvKey (V.KChar 'h') [] -> adoptHunkUnderCursor
-    V.EvKey (V.KChar 'r') [] -> revertTarget
-    V.EvKey (V.KChar 'a') [] -> gotoAltFile
-    V.EvKey (V.KChar '/') [] -> openGrepPicker ""
-    V.EvKey (V.KChar 'c') [] -> showCommitPopup
+    V.EvKey (V.KChar c) [] ->
+      case find (\(key, _, _) -> key == T.singleton c) spaceMenuEntries of
+        Just (_, _, action) -> action
+        Nothing -> pure ()
     _ -> pure ()
 
 togglePendingOnly :: EventM Name St ()
@@ -2913,6 +2925,7 @@ commandTable =
   , ("open", ArgPath, "open a file in the session")
   , ("close", NoArg, "drop the current file")
   , ("files", NoArg, "fuzzy file finder")
+  , ("tree", NoArg, "project tree with per-file diff stats")
   , ("commit", NoArg, "full message of the commit under review / HEAD")
   , ("grep", ArgText, "project-wide search (picker)")
   , ("edit", ArgPath, "$EDITOR at the cursor (or on PATH)")
@@ -3105,6 +3118,7 @@ runCommand input =
     ["open", path] -> openFilePath path
     ["close"] -> closeCurrent
     ["files"] -> openPicker
+    ["tree"] -> openTree
     ["commit"] -> showCommitPopup
     ("grep" : rest)
       | not (null rest) -> openGrepPicker (T.unwords rest)
@@ -3884,6 +3898,390 @@ notePopupLayer st np =
             padRight Max $
               vLimit bodyRows $
                 vBox (targetRows ++ markerRows ++ shownRows ++ ruleRows ++ [bodyW])
+
+-- The project tree ------------------------------------------------------------
+
+-- Browsing and shape in one overlay: the repository's files, decorated
+-- per file the way git diff --stat is, and expandable a level further so
+-- a file opens into its hunks. That last level makes this the tray's
+-- file-to-hunk list with directories on top, which is why the model
+-- lives in Remax.Tree and knows nothing about being drawn in a float.
+data TreeView = TreeView
+  { tvRoot :: TreeNode
+  , tvAll :: [(FilePath, Maybe PathStat)] -- flat, for filtering
+  , tvExpanded :: Set.Set FilePath -- directories and files alike
+  , tvSel :: Int
+  , tvInput :: Text
+  }
+
+openTree :: EventM Name St ()
+openTree = do
+  st <- get
+  let
+    root = stRoot st
+  ignores <- liftIO (loadIgnores root)
+  files <- liftIO (listFiles root)
+  stats <- liftIO (pathStats (effectiveMode st) root)
+  let
+    keep = filter (not . ignoredPath ignores)
+    paths = keep files
+    statPaths = Map.filterWithKey (\p _ -> not (ignoredPath ignores p)) stats
+    node = buildTree paths statPaths
+    -- open the directories a change lives in, and the ones leading to
+    -- the file under review, so the diff is on screen with no keystrokes
+    changed = Map.keys statPaths
+    here = maybe [] (\fv -> [fvPath fv]) (currentFileMay st)
+    opened = Set.fromList (concatMap ancestorPaths (changed ++ here))
+    flat =
+      map (\p -> (p, Map.lookup p statPaths)) (Set.toList (Set.fromList (paths ++ changed)))
+    view =
+      TreeView
+        { tvRoot = node
+        , tvAll = flat
+        , tvExpanded = opened
+        , tvSel = 0
+        , tvInput = ""
+        }
+    onCurrent = case here of
+      (p : _) -> selectTreePath st view p
+      [] -> view
+  modify (\s -> s {stTree = Just onCurrent})
+
+ancestorPaths :: FilePath -> [FilePath]
+ancestorPaths path =
+  let
+    segs = splitDirectories path
+    prefixes n = T.unpack (T.intercalate "/" (map T.pack (take n segs)))
+  in
+    map prefixes [1 .. length segs - 1]
+
+selectTreePath :: St -> TreeView -> FilePath -> TreeView
+selectTreePath st view path =
+  case findIndex ((== path) . trPath) (treeVisible st view) of
+    Just i -> view {tvSel = i}
+    Nothing -> view
+
+-- How many hunks the session has for a path; zero means the file is not
+-- expandable, which is also true of every file outside the change set.
+treeHunkCount :: St -> FilePath -> Int
+treeHunkCount st path =
+  case find ((== path) . fvPath) (stFiles st) of
+    Just fv -> length (fvRuns fv)
+    Nothing -> 0
+
+-- Typing narrows the tree where it stands: matching files survive,
+-- directories survive if anything under them does, and the survivors
+-- open themselves. The point of a tree is the structure, so a search
+-- that threw it away and ranked a flat list would be answering a
+-- different question — the file picker already answers that one.
+treeVisible :: St -> TreeView -> [TreeRow]
+treeVisible st view =
+  let
+    query = tvInput view
+    treeFilter =
+      if T.null query
+        then ShowAll
+        else ShowMatching (\path -> isJust (fuzzyScore query path))
+  in
+    treeRows treeFilter (tvExpanded view) (treeHunkCount st) (tvRoot view)
+
+treeFileCount :: [TreeRow] -> Int
+treeFileCount = length . filter rowIsFile
+
+treeSelected :: St -> TreeView -> Maybe TreeRow
+treeSelected st view = safeIdx (treeVisible st view) (tvSel view)
+
+setTree :: TreeView -> EventM Name St ()
+setTree view = modify (\s -> s {stTree = Just view})
+
+-- What a hunk row shows, taken straight from the tray's own vocabulary:
+-- the verdict mark, the line it starts on, the enclosing declaration, and
+-- whether a conversation hangs off it.
+treeHunkInfo :: St -> FilePath -> Int -> Maybe (Char, Int, Text, Bool)
+treeHunkInfo st path ix = do
+  fv <- find ((== path) . fvPath) (stFiles st)
+  r <- safeIdx (fvRuns fv) ix
+  let
+    decl = case safeIdx (fvRunDecls fv) ix of
+      Just d
+        | not (T.null d) -> " " <> T.take 12 (declName d)
+      _ -> ""
+  pure
+    ( runMark (stVerdicts st) r
+    , runAnchor r + 1
+    , decl
+    , any (`Map.member` stThreads st) (runKeys r)
+    )
+
+handleTreeKey :: V.Event -> TreeView -> EventM Name St ()
+handleTreeKey ev view = do
+  st <- get
+  let
+    visible = treeVisible st view
+    bound = max 0 (length visible - 1)
+    move d = setTree view {tvSel = max 0 (min bound (tvSel view + d))}
+    -- land on the first file that matched, not on a directory kept only
+    -- to hold it: the directories are structure, the file is the answer
+    retype q =
+      let
+        next = view {tvInput = q, tvSel = 0}
+        firstFile = findIndex rowIsFile (treeVisible st next)
+      in
+        setTree next {tvSel = fromMaybe 0 firstFile}
+    close = modify (\s -> s {stTree = Nothing})
+    expandable row = rowExpandable row
+    fold path = setTree view {tvExpanded = Set.delete path (tvExpanded view)}
+    unfold path = setTree view {tvExpanded = Set.insert path (tvExpanded view)}
+    toParent row = case trParent row of
+      Nothing -> pure ()
+      Just parent ->
+        let
+          folded = view {tvExpanded = Set.delete parent (tvExpanded view)}
+          at = findIndex ((== parent) . trPath) (treeVisible st folded)
+        in
+          setTree folded {tvSel = fromMaybe (tvSel view) at}
+    act row =
+      case trKind row of
+        RowDir _ open ->
+          if open then fold (trPath row) else unfold (trPath row)
+        RowHunk ix -> do
+          close
+          case findIndex ((== trPath row) . fvPath) (stFiles st) of
+            Just f -> parkAnchor f ix
+            Nothing -> setMsg "that file has left the session"
+        RowFile mStat hasHunks open ->
+          if hasHunks && not open
+            then unfold (trPath row)
+            else case fmap psChange mStat of
+              Just PathDeleted ->
+                setMsg "deleted in this change — nothing to open"
+              _ -> do
+                close
+                openFilePath (T.pack (trPath row))
+  case ev of
+    V.EvKey V.KEsc []
+      | not (T.null (tvInput view)) -> retype ""
+      | otherwise -> close
+    V.EvKey V.KUp [] -> move (-1)
+    V.EvKey (V.KChar 'p') [V.MCtrl] -> move (-1)
+    V.EvKey V.KDown [] -> move 1
+    V.EvKey (V.KChar 'n') [V.MCtrl] -> move 1
+    V.EvKey V.KRight [] ->
+      case treeSelected st view of
+        Just row | expandable row -> unfold (trPath row)
+        _ -> pure ()
+    V.EvKey V.KLeft [] ->
+      case treeSelected st view of
+        Just row
+          | expandable row && Set.member (trPath row) (tvExpanded view) ->
+              fold (trPath row)
+          | otherwise -> toParent row
+        Nothing -> pure ()
+    V.EvKey V.KEnter [] ->
+      case treeSelected st view of
+        Just row -> act row
+        Nothing -> pure ()
+    V.EvKey V.KBS [] -> retype (T.dropEnd 1 (tvInput view))
+    V.EvKey (V.KChar c) [] -> retype (T.snoc (tvInput view) c)
+    _ -> pure ()
+
+-- Fixed-width columns, so one long name cannot shove the numbers out of
+-- line. hLimit does what columnRow does for the pickers, but keeps the
+-- cells as widgets so they can carry their own colors.
+treeCell :: Int -> Widget Name -> Widget Name
+treeCell w = hLimit w . padRight Max
+
+treeCellR :: Int -> Widget Name -> Widget Name
+treeCellR w = hLimit w . padLeft Max
+
+treeNameW, treeStatW, treeNumW, treeMeterW :: Int
+treeNameW = 34
+treeStatW = 2
+treeNumW = 6
+treeMeterW = 13
+
+clipT :: Int -> Text -> Text
+clipT w t = if T.length t <= w then t else T.take (max 1 (w - 1)) t <> "\8230"
+
+statusAttrFor :: PathChange -> AttrName
+statusAttrFor change =
+  case change of
+    PathAdded -> addedMarkAttr
+    PathModified -> pendingMarkAttr
+    PathDeleted -> removedMarkAttr
+    PathRenamed _ -> questionMarkAttr
+    PathCopied _ -> questionMarkAttr
+    PathUntracked -> hintAttr
+    PathOtherChange -> hintAttr
+
+verdictMarkAttr :: Char -> AttrName
+verdictMarkAttr mark =
+  case mark of
+    '!' -> flagMarkAttr
+    '?' -> questionMarkAttr
+    '\10003' -> doneMarkAttr
+    _ -> pendingMarkAttr
+
+treeRowWidget :: St -> Bool -> TreeRow -> Widget Name
+treeRowWidget st isSel row =
+  let
+    indent = T.replicate (trDepth row * 2) " "
+    lead =
+      if isSel
+        then withAttr floatSelBarAttr (txt "\9614")
+        else txt " "
+    curPath = maybe "" fvPath (currentFileMay st)
+    countCells mStat =
+      case fmap psCounts mStat of
+        Just (Just (a, r)) ->
+          [ treeCellR
+              treeNumW
+              (if a > 0 then withAttr addedMarkAttr (txt ("+" <> tshow a)) else txt " ")
+          , treeCellR
+              treeNumW
+              (if r > 0 then withAttr removedMarkAttr (txt ("\8722" <> tshow r)) else txt " ")
+          ]
+        Just Nothing ->
+          case fmap psChange mStat of
+            Just PathUntracked -> [treeCell (treeNumW * 2) (txt " ")]
+            _ ->
+              [ treeCellR treeNumW (withAttr trayDeclAttr (txt "bin"))
+              , treeCell treeNumW (txt " ")
+              ]
+        Nothing -> [treeCell (treeNumW * 2) (txt " ")]
+    meterCell path =
+      case find ((== path) . fvPath) (stFiles st) of
+        Just fv
+          | not (null (fvRuns fv)) ->
+              let
+                total = length (fvRuns fv)
+                done = length (filter (not . runPending (stVerdicts st)) (fvRuns fv))
+              in
+                treeCell treeMeterW (meterW done total)
+        _ -> treeCell treeMeterW (txt " ")
+    fromCell mStat =
+      case fmap psChange mStat of
+        Just (PathRenamed from) -> [renamedFrom from]
+        Just (PathCopied from) -> [renamedFrom from]
+        _ -> []
+    renamedFrom from =
+      withAttr hintAttr (txt (" \8592 " <> T.pack (takeFileName from)))
+    body =
+      case trKind row of
+        RowDir roll open ->
+          let
+            marker = if open then "\9662 " else "\9656 "
+            name = clipT treeNameW (indent <> marker <> trLabel row <> "/")
+          in
+            hBox
+              ( treeCell treeNameW (withAttr hintAttr (txt name))
+                  : if ruChanged roll > 0
+                    then
+                      [ treeCell treeStatW (txt " ")
+                      , treeCellR
+                          treeNumW
+                          (withAttr addedMarkAttr (txt ("+" <> tshow (ruAdded roll))))
+                      , treeCellR
+                          treeNumW
+                          (withAttr removedMarkAttr (txt ("\8722" <> tshow (ruRemoved roll))))
+                      , txt "  "
+                      , treeCell
+                          treeMeterW
+                          ( if open
+                              then txt " "
+                              else
+                                withAttr
+                                  hintAttr
+                                  (txt (tshow (ruChanged roll) <> " chg"))
+                          )
+                      ]
+                    else []
+              )
+        RowFile mStat hasHunks open ->
+          let
+            marker
+              | not hasHunks = "  "
+              | open = "\9662 "
+              | otherwise = "\9656 "
+            name = clipT treeNameW (indent <> marker <> trLabel row)
+            nameAttr =
+              if trPath row == curPath then trayFileCurAttr else trayFileAttr
+            letter = case fmap psChange mStat of
+              Just change ->
+                withAttr (statusAttrFor change) (txt (pathChangeLetter change))
+              Nothing -> txt " "
+          in
+            hBox
+              ( [ treeCell treeNameW (withAttr nameAttr (txt name))
+                , treeCell treeStatW letter
+                ]
+                  ++ countCells mStat
+                  ++ [txt "  ", meterCell (trPath row)]
+                  ++ fromCell mStat
+              )
+        RowHunk ix ->
+          case treeHunkInfo st (trPath row) ix of
+            Nothing -> txt " "
+            Just (mark, ln, decl, hasNote) ->
+              hBox
+                [ txt (indent <> "  ")
+                , withAttr (verdictMarkAttr mark) (str [mark])
+                , txt (" :" <> tshow ln)
+                , withAttr trayDeclAttr (txt decl)
+                , if hasNote
+                    then withAttr noteInlineAttr (txt " \8801")
+                    else txt ""
+                ]
+    w = padRight Max (hBox [lead, txt " ", body])
+  in
+    if isSel then withDefAttr floatSelAttr w else w
+
+treeLayer :: St -> TreeView -> Widget Name
+treeLayer st view =
+  Widget Greedy Greedy $ do
+    ctx <- getContext
+    let
+      boxWidth = min 96 (max 60 (availWidth ctx - 16))
+      -- as tall as the tree needs and no taller: a folded tree should not
+      -- open a full-height box of nothing
+      roomFor = max 6 (availHeight ctx - 14)
+      visible = treeVisible st view
+      visibleCount = max 6 (min roomFor (length visible))
+      sel = max 0 (min (length visible - 1) (tvSel view))
+      start =
+        max 0 (min (sel - div visibleCount 2) (max 0 (length visible - visibleCount)))
+      -- when the enclosing directory (or file, for a hunk) has scrolled
+      -- off, pin it: otherwise a row loses all sense of whose it is
+      shown = take visibleCount (drop start visible)
+      sticky = do
+        top <- safeIdx shown 0
+        parent <- trParent top
+        find ((== parent) . trPath) (reverse (take start visible))
+      body = case sticky of
+        Just parent ->
+          withDefAttr floatSelAttr (treeRowWidget st False parent)
+            : map row (drop 1 (zip [start ..] shown))
+        Nothing -> map row (zip [start ..] shown)
+      row (i, r) = treeRowWidget st (i == sel) r
+      counter =
+        if T.null (tvInput view)
+          then tshow (length (tvAll view)) <> " files"
+          else -- files that matched, not rows: the directories kept to
+          -- hold them are structure, not results
+            tshow (treeFileCount visible) <> "/" <> tshow (length (tvAll view))
+      inputRow =
+        hBox
+          [ withAttr statusAttr (txt (" " <> tvInput view <> "\9612"))
+          , padLeft Max (withAttr hintAttr (txt (counter <> " ")))
+          ]
+      filler = replicate (visibleCount - length body) (txt " ")
+      hint =
+        if T.null (tvInput view)
+          then "\8593\8595 move \183 \8594\8592 fold \183 \9166 open \183 esc closes"
+          else "\8593\8595 move \183 \9166 open \183 esc clears the filter"
+    render $
+      floatFrame "tree" hint $
+        hLimit boxWidth (vBox (inputRow : txt " " : (body ++ filler)))
 
 -- Accept everything under a directory (or one file) as reviewed — the
 -- bulk verb for generated code nobody reads line by line. Matching is
@@ -4801,6 +5199,9 @@ mkAttrMap mth =
       , (floatSelAttr, V.defAttr `V.withBackColor` surfSel)
       , (floatSelBarAttr, fg inkLavender `V.withBackColor` surfSel)
       , (floatTitleAttr, fg inkLavender `V.withBackColor` surfFloat)
+      , -- every popup is framed in the same lavender as its title; floatFrame
+        -- is the only bordered widget, so this reaches exactly the popups
+        (B.borderAttr, fg inkLavender `V.withBackColor` surfFloat)
       , (matchCharAttr, fg matchGold)
       , (meterOnAttr, fg inkGreen)
       , (meterOffAttr, fg meterRail)

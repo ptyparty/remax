@@ -14,6 +14,10 @@ module Remax.Git
   , hasStagedChanges
   , listFiles
   , listRefs
+  , PathChange (..)
+  , PathStat (..)
+  , pathChangeLetter
+  , pathStats
   , RebaseStatus (..)
   , rebaseStatus
   , commitBody
@@ -27,9 +31,11 @@ module Remax.Git
   ) where
 
 import qualified Data.ByteString as BS
+import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Read as TR
 import System.Directory (doesDirectoryExist)
 import qualified System.Environment as Env
 import System.Exit (ExitCode (..))
@@ -137,6 +143,168 @@ listRefs root = do
   pure $ case code of
     ExitSuccess -> "HEAD" : filter (not . T.null) (T.lines (T.pack out))
     ExitFailure _ -> ["HEAD"]
+
+-- Per-path change shape ------------------------------------------------------
+
+-- What happened to a path, as git classifies it. A rename and a copy
+-- carry where they came from, which is the whole point of asking git
+-- with -M: without it a move is an unrelated delete and add.
+data PathChange
+  = PathAdded
+  | PathModified
+  | PathDeleted
+  | PathRenamed FilePath
+  | PathCopied FilePath
+  | PathUntracked
+  | PathOtherChange
+  deriving (Eq, Show)
+
+-- Counts are Nothing for a binary file, where git reports "-" rather
+-- than a number, and for an untracked file, where getting a real count
+-- would mean a diff against /dev/null per file.
+data PathStat = PathStat
+  { psChange :: PathChange
+  , psCounts :: Maybe (Int, Int)
+  }
+  deriving (Eq, Show)
+
+pathChangeLetter :: PathChange -> Text
+pathChangeLetter change =
+  case change of
+    PathAdded -> "A"
+    PathModified -> "M"
+    PathDeleted -> "D"
+    PathRenamed _ -> "R"
+    PathCopied _ -> "C"
+    PathUntracked -> "?"
+    PathOtherChange -> "\183"
+
+-- Status and line counts for every path the mode considers changed, plus
+-- the untracked files, which no diff reports.
+--
+-- Two calls, both -z: without it a rename comes back brace-compressed as
+-- "src/{Old.hs => New.hs}", which is miserable to parse. With -z a
+-- rename is instead a token followed by two NUL-separated paths, in both
+-- formats:
+--
+--   --name-status  "R100\0src/Old.hs\0src/New.hs\0"
+--   --numstat      "4\t2\t\0src/Old.hs\0src/New.hs\0"   (empty path field)
+pathStats :: ReviewMode -> FilePath -> IO (Map.Map FilePath PathStat)
+pathStats mode root = do
+  others <- untrackedFiles root
+  let
+    untracked =
+      Map.fromList (map (\p -> (p, PathStat PathUntracked Nothing)) others)
+  case mode of
+    Untracked -> pure untracked
+    _ -> do
+      let
+        refArgs = case mode of
+          VsRef ref -> [T.unpack ref]
+          _ -> []
+        diffFields kind = do
+          (code, out, _) <-
+            readProcessWithExitCode
+              "git"
+              (["-C", root, "diff", kind, "-M", "-z"] ++ refArgs)
+              ""
+          pure $ case code of
+            ExitSuccess -> nulFields (T.pack out)
+            ExitFailure _ -> []
+      changes <- fmap parseNameStatus (diffFields "--name-status")
+      counts <- fmap parseNumstat (diffFields "--numstat")
+      let
+        stat path change =
+          PathStat change (Map.findWithDefault Nothing path counts)
+      pure (Map.union (Map.mapWithKey stat changes) untracked)
+
+untrackedFiles :: FilePath -> IO [FilePath]
+untrackedFiles root = do
+  (code, out, _) <-
+    readProcessWithExitCode
+      "git"
+      ["-C", root, "ls-files", "--others", "--exclude-standard"]
+      ""
+  pure $ case code of
+    ExitSuccess -> filter (not . null) (lines out)
+    ExitFailure _ -> []
+
+nulFields :: Text -> [Text]
+nulFields = filter (not . T.null) . T.splitOn "\NUL"
+
+parseNameStatus :: [Text] -> Map.Map FilePath PathChange
+parseNameStatus fields =
+  case fields of
+    [] -> Map.empty
+    (token : rest)
+      | pairedToken token ->
+          case rest of
+            (from : to : more) ->
+              Map.insert
+                (T.unpack to)
+                (pairedChange token (T.unpack from))
+                (parseNameStatus more)
+            _ -> Map.empty
+      | otherwise ->
+          case rest of
+            (path : more) ->
+              Map.insert (T.unpack path) (letterChange token) (parseNameStatus more)
+            _ -> Map.empty
+
+-- R and C are the two statuses that name a source as well as a target.
+pairedToken :: Text -> Bool
+pairedToken token = T.isPrefixOf "R" token || T.isPrefixOf "C" token
+
+pairedChange :: Text -> FilePath -> PathChange
+pairedChange token from =
+  case T.take 1 token of
+    "C" -> PathCopied from
+    _ -> PathRenamed from
+
+letterChange :: Text -> PathChange
+letterChange token =
+  case T.take 1 token of
+    "A" -> PathAdded
+    "M" -> PathModified
+    "D" -> PathDeleted
+    _ -> PathOtherChange
+
+parseNumstat :: [Text] -> Map.Map FilePath (Maybe (Int, Int))
+parseNumstat fields =
+  case fields of
+    [] -> Map.empty
+    (record : rest) ->
+      case T.splitOn "\t" record of
+        [added, removed, path]
+          | T.null path ->
+              -- a rename: the paths follow as their own NUL fields
+              case rest of
+                (_from : to : more) ->
+                  Map.insert
+                    (T.unpack to)
+                    (numstatCounts added removed)
+                    (parseNumstat more)
+                _ -> Map.empty
+          | otherwise ->
+              Map.insert
+                (T.unpack path)
+                (numstatCounts added removed)
+                (parseNumstat rest)
+        _ -> parseNumstat rest
+
+-- git writes "-" for both sides of a binary file.
+numstatCounts :: Text -> Text -> Maybe (Int, Int)
+numstatCounts added removed = do
+  a <- readCount added
+  r <- readCount removed
+  pure (a, r)
+
+readCount :: Text -> Maybe Int
+readCount t =
+  case TR.decimal t of
+    Right (n, rest)
+      | T.null rest -> Just n
+    _ -> Nothing
 
 -- Ref probing ---------------------------------------------------------------
 
