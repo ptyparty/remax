@@ -77,7 +77,7 @@ import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
 import Data.List (find, findIndex, groupBy, isPrefixOf, maximumBy, sortOn)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromMaybe, isJust, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Ord (comparing)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -219,7 +219,7 @@ data St = St
   , stPrompt :: Maybe Prompt -- the / search or : command prompt, while open
   , stLastSearch :: Text
   , stBorder :: V.Attr -- concrete attr for raw border fills
-  , stHls :: [([String], TS.Highlighter)]
+  , stHls :: TS.HighlighterTable
   , stOnlyPending :: Bool -- hide/skip hunks that already have verdicts
   , stRebase :: Maybe RebaseStatus -- a paused rebase the session is following
   , stWritten :: Set.Set FilePath -- files written since the last commit-shaped action
@@ -557,7 +557,7 @@ dispatchFsEvent chan root ev = do
 
 -- Loading and rebuilding -----------------------------------------------------
 
-loadAll :: Config -> [([String], TS.Highlighter)] -> ReviewMode -> FilePath -> IO [FileView]
+loadAll :: Config -> TS.HighlighterTable -> ReviewMode -> FilePath -> IO [FileView]
 loadAll cfg hls mode root = do
   ignores <- loadIgnores root
   names <- fmap (filter (not . ignoredPath ignores)) (changedFiles mode root)
@@ -585,7 +585,7 @@ forMaybeBounded f xs = do
 
 loadOne ::
   Config ->
-  [([String], TS.Highlighter)] ->
+  TS.HighlighterTable ->
   ReviewMode ->
   FilePath ->
   FilePath ->
@@ -613,7 +613,9 @@ loadOne cfg hls mode root path = do
                 , fvToks = []
                 , fvStale = False
                 , fvHighlighted = False
-                , fvHl = TS.highlighterFor hls path
+                , -- the shebang is the fallback for a file with no
+                  -- extension to go on, so the first line comes along
+                  fvHl = TS.highlighterFor hls path (listToMaybe newLs)
                 , fvRunDecls = []
                 }
           (fv, _) <- rebuildFV (cfgSplit cfg) (T.pack root) fv0
@@ -4522,7 +4524,7 @@ openFilePath rawPath = do
 -- Like loadOne, but the base is the file's own content right now.
 loadOpened ::
   Config ->
-  [([String], TS.Highlighter)] ->
+  TS.HighlighterTable ->
   FilePath ->
   FilePath ->
   IO (Maybe FileView)
@@ -4548,7 +4550,9 @@ loadOpened cfg hls root path = do
                 , fvToks = []
                 , fvStale = False
                 , fvHighlighted = False
-                , fvHl = TS.highlighterFor hls path
+                , -- the shebang is the fallback for a file with no
+                  -- extension to go on, so the first line comes along
+                  fvHl = TS.highlighterFor hls path (listToMaybe newLs)
                 , fvRunDecls = []
                 }
           (fv, _) <- rebuildFV (cfgSplit cfg) (T.pack root) fv0

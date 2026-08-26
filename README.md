@@ -102,6 +102,9 @@ Everything still works while polling — it just arrives a beat late.
   visible. Removed lines have no number, keeping the numbering honestly
   absolute.
 - Body: the whole file, scrollable, syntax-highlighted by **tree-sitter**
+  (picked by extension, or by the **shebang** when there isn't one — so
+  `scripts/build` highlights as bash on the strength of its first line,
+  and `#!/usr/bin/env -S bash --norc` names bash rather than env)
   with **your helix theme** (the `theme` from `~/.config/helix/config.toml`,
   `inherits` followed, palette resolved; a built-in scope palette covers
   users without helix). The jellybeans base theme is embedded in the

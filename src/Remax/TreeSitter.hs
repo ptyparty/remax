@@ -14,6 +14,8 @@
 -- non-highlight captures (@spell, @_helpers…) are ignored.
 module Remax.TreeSitter
   ( Highlighter
+  , GrammarKeys (..)
+  , HighlighterTable
   , initHighlighters
   , highlighterFor
   , tsHighlight
@@ -38,7 +40,7 @@ import Foreign.Marshal.Alloc (alloca)
 import Foreign.Marshal.Array (allocaArray)
 import Foreign.Ptr (Ptr, nullPtr, plusPtr)
 import Foreign.Storable (peek, peekByteOff, peekElemOff)
-import System.FilePath (takeExtension)
+import System.FilePath (takeExtension, takeFileName)
 import System.Timeout (timeout)
 
 data CParser
@@ -145,55 +147,70 @@ foreign import ccall unsafe "tree_sitter_markdown"
 
 -- One vendored grammar: extensions it claims, its language function, and
 -- its embedded highlight query.
-vendored :: [([String], IO (Ptr CLanguage), BS.ByteString)]
+-- How a grammar claims a file. Both ways of claiming live on the same
+-- record, so a language cannot be reachable by extension while its
+-- shebangs quietly point somewhere else.
+data GrammarKeys = GrammarKeys
+  { gkExtensions :: [String]
+  , gkShebangs :: [Text] -- bare interpreter names, e.g. "bash"
+  }
+
+type HighlighterTable = [(GrammarKeys, Highlighter)]
+
+vendored :: [(GrammarKeys, IO (Ptr CLanguage), BS.ByteString)]
 vendored =
   [
-    ( [".hs", ".hs-boot", ".hsc"]
+    ( GrammarKeys
+        [".hs", ".hs-boot", ".hsc"]
+        -- a stack script is Haskell: #!/usr/bin/env stack
+        ["runhaskell", "runghc", "stack"]
     , c_lang_haskell
     , $(embedFile "vendor/grammars/haskell/highlights.scm")
     )
   ,
-    ( [".purs"]
+    ( GrammarKeys [".purs"] []
     , c_lang_purescript
     , $(embedFile "vendor/grammars/purescript/highlights.scm")
     )
   ,
-    ( [".yaml", ".yml"]
+    ( GrammarKeys [".yaml", ".yml"] []
     , c_lang_yaml
     , $(embedFile "vendor/grammars/yaml/highlights.scm")
     )
   ,
-    ( [".json"]
+    ( GrammarKeys [".json"] []
     , c_lang_json
     , $(embedFile "vendor/grammars/json/highlights.scm")
     )
   ,
-    ( [".toml"]
+    ( GrammarKeys [".toml"] []
     , c_lang_toml
     , $(embedFile "vendor/grammars/toml/highlights.scm")
     )
   ,
-    ( [".tf", ".tfvars", ".hcl", ".nomad"]
+    ( GrammarKeys [".tf", ".tfvars", ".hcl", ".nomad"] []
     , c_lang_hcl
     , $(embedFile "vendor/grammars/hcl/highlights.scm")
     )
   ,
-    ( [".sql"]
+    ( GrammarKeys [".sql"] []
     , c_lang_sql
     , $(embedFile "vendor/grammars/sql/highlights.scm")
     )
   ,
-    ( [".sh", ".bash", ".zsh"]
+    ( GrammarKeys
+        [".sh", ".bash", ".zsh"]
+        ["sh", "bash", "zsh", "dash", "ash", "ksh"]
     , c_lang_bash
     , $(embedFile "vendor/grammars/bash/highlights.scm")
     )
   ,
-    ( [".nu"]
+    ( GrammarKeys [".nu"] ["nu", "nushell"]
     , c_lang_nu
     , $(embedFile "vendor/grammars/nu/highlights.scm")
     )
   ,
-    ( [".md", ".markdown"]
+    ( GrammarKeys [".md", ".markdown"] []
     , c_lang_markdown
     , $(embedFile "vendor/grammars/markdown/highlights.scm")
     )
@@ -216,10 +233,10 @@ data Highlighter = Highlighter
 
 -- Build every vendored grammar's query once at startup; a grammar whose
 -- query fails to compile is dropped rather than crashing the tool.
-initHighlighters :: IO [([String], Highlighter)]
+initHighlighters :: IO HighlighterTable
 initHighlighters =
   let
-    build (exts, getLang, queryBytes) = do
+    build (keys, getLang, queryBytes) = do
       lang <- getLang
       query <-
         BS.useAsCStringLen queryBytes $ \(p, len) ->
@@ -231,7 +248,7 @@ initHighlighters =
         else do
           names <- captureNames query
           preds <- patternPredicates query
-          pure [(exts, Highlighter lang query names preds)]
+          pure [(keys, Highlighter lang query names preds)]
   in
     fmap concat (mapM build vendored)
 
@@ -370,12 +387,42 @@ stringValue query sid =
     len <- peek lenP
     T.pack <$> peekCStringLen (p, fromIntegral len)
 
-highlighterFor :: [([String], Highlighter)] -> FilePath -> Maybe Highlighter
-highlighterFor table path =
+-- Extension first. A file without a usable one falls back to its
+-- shebang, which is all scripts/build has to go on — no extension, but
+-- "#!/bin/bash" on line one.
+highlighterFor :: HighlighterTable -> FilePath -> Maybe Text -> Maybe Highlighter
+highlighterFor table path mFirstLine =
   let
-    claims (exts, _) = takeExtension path `elem` exts
+    byExtension (keys, _) = takeExtension path `elem` gkExtensions keys
+    byShebang name (keys, _) = name `elem` gkShebangs keys
   in
-    fmap snd (find claims table)
+    case find byExtension table of
+      Just (_, hl) -> Just hl
+      Nothing -> do
+        name <- mFirstLine >>= shebangInterpreter
+        fmap snd (find (byShebang name) table)
+
+-- The interpreter a shebang names, bare: "#!/bin/sh" is sh.
+shebangInterpreter :: Text -> Maybe Text
+shebangInterpreter line =
+  case T.stripPrefix "#!" (T.stripStart line) of
+    Nothing -> Nothing
+    Just rest -> interpreterName (T.words rest)
+
+-- env is a launcher rather than a language, so "#!/usr/bin/env -S bash
+-- --norc" names bash: step over env and any flags to reach what it is
+-- actually starting.
+interpreterName :: [Text] -> Maybe Text
+interpreterName ws =
+  case ws of
+    [] -> Nothing
+    (w : rest) ->
+      let
+        name = T.pack (takeFileName (T.unpack w))
+      in
+        if name == "env"
+          then interpreterName (dropWhile (T.isPrefixOf "-") rest)
+          else Just name
 
 parseBudgetMicros :: Word64
 parseBudgetMicros = 300000
