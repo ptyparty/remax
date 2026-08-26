@@ -1048,8 +1048,9 @@ helpGroups =
   ,
     ( "getting around"
     ,
-      [ ("Ctrl-p", "the file picker")
-      , ("\9251 t", "the project tree, with diff stats")
+      [ ("Ctrl-p", "find a file, flat and ranked")
+      , ("\9251 t", "the same dialog, as a tree")
+      , ("\8633", "in either: flat \8596 tree, filter kept")
       , ("\9251 b", "files already open in the session")
       , ("Tab", "collapse / expand the tray")
       , ("{ }", "scroll the tray")
@@ -1115,7 +1116,7 @@ helpLayer =
 -- but invisible precisely because those used to be two lists.
 spaceMenuEntries :: [(Text, Text, EventM Name St ())]
 spaceMenuEntries =
-  [ ("f", "file picker", openPicker)
+  [ ("f", "find a file", openFileFinder)
   , ("b", "open files", openBufferPicker)
   , ("t", "project tree", openTree)
   , ("R", "switch repository", openRepoPicker)
@@ -1795,7 +1796,7 @@ handleIdleKey :: V.Event -> EventM Name St ()
 handleIdleKey ev =
   case ev of
     V.EvKey (V.KChar ':') [] -> openCmdPrompt
-    V.EvKey (V.KChar 'p') [V.MCtrl] -> openPicker
+    V.EvKey (V.KChar 'p') [V.MCtrl] -> openFileFinder
     V.EvKey (V.KChar ' ') [] -> modify (\s -> s {stSpace = True})
     V.EvKey (V.KChar 'x') [V.MMeta] -> openCmdPrompt
     V.EvKey (V.KChar 'x') [V.MCtrl] ->
@@ -1924,7 +1925,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
         V.EvKey (V.KChar 'n') [] -> searchNext 1
         V.EvKey (V.KChar 'N') [] -> searchNext (-1)
-        V.EvKey (V.KChar 'f') [] -> openPicker
+        V.EvKey (V.KChar 'f') [] -> openFileFinder
         V.EvKey (V.KChar 'b') [] -> openBufferPicker
         V.EvKey (V.KChar 'e') [] -> editCurrent
         V.EvKey (V.KChar ')') [] -> switchFile 1
@@ -2003,7 +2004,7 @@ handleHelixKey i fv ed ev = do
           launchEditor (stRoot st </> fvPath fv) (row + 1)
         V.EvKey (V.KChar ')') [] -> switchFile 1
         V.EvKey (V.KChar '(') [] -> switchFile (-1)
-        V.EvKey (V.KChar 'p') [V.MCtrl] -> openPicker
+        V.EvKey (V.KChar 'p') [V.MCtrl] -> openFileFinder
         V.EvKey (V.KChar '{') [] ->
           vScrollBy (viewportScroll TrayVP) (-8)
         V.EvKey (V.KChar '}') [] ->
@@ -3310,7 +3311,7 @@ runCommand input =
     ["set", key, val] -> applySet key val
     ["open", path] -> openFilePath path
     ["close"] -> closeCurrent
-    ["files"] -> openPicker
+    ["files"] -> openFileFinder
     ["tree"] -> openTree
     ["help"] -> showHelp
     ["repo"] -> openRepoPicker
@@ -4219,16 +4220,32 @@ repoArrivalMsg target rebase files =
 -- a file opens into its hunks. That last level makes this the tray's
 -- file-to-hunk list with directories on top, which is why the model
 -- lives in Remax.Tree and knows nothing about being drawn in a float.
+-- The same dialog, seen two ways. Flat is the file finder: every file on
+-- one level, ranked best-match-first. Hierarchy is the project tree:
+-- structure kept, order meaningful. They were two commands answering one
+-- question, so Tab now moves between them without dropping the filter —
+-- a flat row is just a tree row whose label happens to be the whole path.
+data TreeMode = TreeHierarchy | TreeFlat
+  deriving (Eq)
+
 data TreeView = TreeView
-  { tvRoot :: TreeNode
-  , tvAll :: [(FilePath, Maybe PathStat)] -- flat, for filtering
+  { tvMode :: TreeMode
+  , tvRoot :: TreeNode
+  , tvAll :: [(FilePath, Maybe PathStat)] -- every file, for flat mode
   , tvExpanded :: Set.Set FilePath -- directories and files alike
   , tvSel :: Int
   , tvInput :: Text
   }
 
 openTree :: EventM Name St ()
-openTree = do
+openTree = openTreeIn TreeHierarchy
+
+-- Ctrl-p and Space f land here: the same dialog, opened flat.
+openFileFinder :: EventM Name St ()
+openFileFinder = openTreeIn TreeFlat
+
+openTreeIn :: TreeMode -> EventM Name St ()
+openTreeIn wanted = do
   st <- get
   let
     root = stRoot st
@@ -4249,7 +4266,8 @@ openTree = do
       map (\p -> (p, Map.lookup p statPaths)) (Set.toList (Set.fromList (paths ++ changed)))
     view =
       TreeView
-        { tvRoot = node
+        { tvMode = wanted
+        , tvRoot = node
         , tvAll = flat
         , tvExpanded = opened
         , tvSel = 0
@@ -4296,7 +4314,49 @@ treeVisible st view =
         then ShowAll
         else ShowMatching (\path -> isJust (fuzzyScore query path))
   in
-    treeRows treeFilter (tvExpanded view) (treeHunkCount st) (tvRoot view)
+    case tvMode view of
+      TreeHierarchy ->
+        treeRows treeFilter (tvExpanded view) (treeHunkCount st) (tvRoot view)
+      TreeFlat -> flatRows st view
+
+-- Flat mode ranks rather than preserving order — that is what makes the
+-- finder quick, and it is the one real difference between the two views.
+-- Files keep their hunks: expanding one here works as it does in the
+-- tree, since the rows are the same rows.
+flatRows :: St -> TreeView -> [TreeRow]
+flatRows st view =
+  let
+    query = tvInput view
+    scored =
+      mapMaybe
+        (\(p, ms) -> fmap (\sc -> (sc, (p, ms))) (fuzzyScore query p))
+        (tvAll view)
+    emit (path, mStat) =
+      let
+        hunks = treeHunkCount st path
+        isOpen = Set.member path (tvExpanded view)
+        fileRow =
+          TreeRow
+            { trDepth = 0
+            , trLabel = T.pack path
+            , trPath = path
+            , trWitness = path
+            , trParent = Nothing
+            , trKind = RowFile mStat (hunks > 0) isOpen
+            }
+        hunkRow i =
+          TreeRow
+            { trDepth = 1
+            , trLabel = ""
+            , trPath = path
+            , trWitness = path
+            , trParent = Just path
+            , trKind = RowHunk i
+            }
+      in
+        fileRow : (if isOpen && hunks > 0 then map hunkRow [0 .. hunks - 1] else [])
+  in
+    concatMap (emit . snd) (sortOn fst scored)
 
 treeFileCount :: [TreeRow] -> Int
 treeFileCount = length . filter rowIsFile
@@ -4394,9 +4454,36 @@ handleTreeKey ev view = do
       case treeSelected st view of
         Just row -> act row
         Nothing -> pure ()
+    -- Tab moves between flat and hierarchical without losing the filter,
+    -- and lands on the same file it was pointing at. (Tab is safe to
+    -- spend here: a path containing one is a problem no keybinding can
+    -- fix.)
+    V.EvKey (V.KChar '\t') [] -> switchTreeMode view
     V.EvKey V.KBS [] -> retype (T.dropEnd 1 (tvInput view))
     V.EvKey (V.KChar c) [] -> retype (T.snoc (tvInput view) c)
     _ -> pure ()
+
+-- Flip the view, keeping the filter and the row. Coming back to the tree
+-- opens the ancestors of wherever flat mode left you, so the file you
+-- were on is on screen rather than folded away.
+switchTreeMode :: TreeView -> EventM Name St ()
+switchTreeMode view = do
+  st <- get
+  let
+    was = treeSelected st view
+    onPath = fmap trPath was
+    flipped = case tvMode view of
+      TreeFlat -> TreeHierarchy
+      TreeHierarchy -> TreeFlat
+    revealed = case (flipped, onPath) of
+      (TreeHierarchy, Just path) ->
+        Set.union (tvExpanded view) (Set.fromList (ancestorPaths path))
+      _ -> tvExpanded view
+    next = view {tvMode = flipped, tvExpanded = revealed}
+    landed = case onPath of
+      Just path -> findIndex ((== path) . trPath) (treeVisible st next)
+      Nothing -> Nothing
+  setTree next {tvSel = fromMaybe 0 landed}
 
 -- Fixed-width columns, so one long name cannot shove the numbers out of
 -- line. hLimit does what columnRow does for the pickers, but keeps the
@@ -4643,12 +4730,23 @@ treeLayer st view =
           , padLeft Max (withAttr hintAttr (txt (counter <> " ")))
           ]
       filler = replicate (visibleCount - length body) (txt " ")
-      hint =
+      flat = tvMode view == TreeFlat
+      title = if flat then "files" else "tree"
+      folding = if flat then "" else "\8594\8592 fold \183 "
+      leaving =
         if T.null (tvInput view)
-          then "\8593\8595 move \183 \8594\8592 fold \183 \9166 open \183 esc closes"
-          else "\8593\8595 move \183 \9166 open \183 esc clears the filter"
+          then "esc closes"
+          else "esc clears the filter"
+      other = if flat then "tree" else "flat"
+      hint =
+        "\8593\8595 move \183 "
+          <> folding
+          <> "\9166 open \183 \8633 "
+          <> other
+          <> " \183 "
+          <> leaving
     render $
-      floatFrame "tree" hint $
+      floatFrame title hint $
         hLimit boxWidth (vBox (inputRow : txt " " : (body ++ filler)))
 
 -- Accept everything under a directory (or one file) as reviewed — the
@@ -4827,13 +4925,6 @@ visitFile f mh = do
           }
 
 -- The fuzzy file finder -----------------------------------------------------------
-
-openPicker :: EventM Name St ()
-openPicker = do
-  st <- get
-  files <- liftIO (listFiles (stRoot st))
-  modify $ \s ->
-    s {stPicker = Just (refreshPicker (Picker PickFiles "" files [] [] 0))}
 
 -- The picker narrowed to what the session already has open.
 openBufferPicker :: EventM Name St ()
