@@ -2413,22 +2413,40 @@ runChanges fv h =
 -- Which hunk the cursor is standing in: the run of the cursor's display
 -- row, or — for a delete-only hunk, which owns no buffer rows — the run
 -- whose deletion rests at the cursor's line.
+-- Where each row sits in the buffer: its own line, or — for a removed
+-- line, which has none — the line it rests before.
+--
+-- A hunk that only removes occupies no buffer line whatsoever, so
+-- anything that reasons about rows by buffer position has to consult
+-- this or it will simply not see such a hunk.
+rowRestPoints :: FileView -> [(RowR, Int)]
+rowRestPoints fv =
+  let
+    rows = fvRows fv
+    bufferLen = length (bufferLines (fvEd fv))
+    points =
+      drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
+  in
+    zip rows points
+
+-- The buffer line a row answers to, whether it owns one or rests before
+-- one.
+rowAt :: (RowR, Int) -> Int
+rowAt (row, point) = fromMaybe point (rNewRow row)
+
 hunkUnderCursor :: St -> Maybe Int
 hunkUnderCursor st = do
   fv <- currentFileMay st
   let
     (cur, _) = cursorRC (fvEd fv)
-    rows = fvRows fv
-    bufferLen = length (bufferLines (fvEd fv))
-    points =
-      drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
-    directHit row =
+    resting = rowRestPoints fv
+    directHit (row, _) =
       if rNewRow row == Just cur then rRunIx row else Nothing
     restingHit (row, point) =
       if rNewRow row == Nothing && point == cur then rRunIx row else Nothing
-  case mapMaybe directHit rows of
+  case mapMaybe directHit resting of
     (h : _) -> Just h
-    [] -> case mapMaybe restingHit (zip rows points) of
+    [] -> case mapMaybe restingHit resting of
       (h : _) -> Just h
       [] -> Nothing
 
@@ -2523,14 +2541,21 @@ revertTarget = do
             lineSpan = selectionRows ed
             charSpan =
               fmap (\((lr, _), (hr, _)) -> (lr, hr)) (charSelection ed)
+            -- by where a row answers, not by where it owns a line: a
+            -- removal-only hunk has no line of its own, so matching on
+            -- rNewRow alone made it unselectable and left X-then-revert
+            -- reporting nothing to do
             touchedBySpan (a, b) =
               let
-                pick row = case (rRunIx row, rNewRow row) of
-                  (Just ix, Just n)
-                    | n >= a && n <= b -> Just ix
-                  _ -> Nothing
+                pick entry@(row, _) =
+                  let
+                    n = rowAt entry
+                  in
+                    case rRunIx row of
+                      Just ix | n >= a && n <= b -> Just ix
+                      _ -> Nothing
               in
-                Set.fromList (mapMaybe pick (fvRows fv))
+                Set.fromList (mapMaybe pick (rowRestPoints fv))
             targetIxs = case lineSpan <|> charSpan of
               Just spanRows -> touchedBySpan spanRows
               Nothing ->
