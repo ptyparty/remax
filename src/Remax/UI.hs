@@ -206,9 +206,40 @@ data RepoPlace = RepoPlace
   , rpFile :: FilePath
   , rpHunk :: Int
   , rpOnlyPending :: Bool
+  , rpRunFilter :: RunFilter
   , rpOpened :: Set.Set FilePath
   , rpAnchor :: Maybe (FilePath, Int)
   }
+
+-- Which hunks the session is walking. Orthogonal to the pending filter,
+-- so "the code hunks I have not looked at yet" is reachable.
+data RunFilter = FilterAll | FilterCode | FilterComments
+  deriving (Eq)
+
+filterCycle :: [RunFilter]
+filterCycle = [FilterAll, FilterCode, FilterComments]
+
+runFilterLabel :: RunFilter -> Text
+runFilterLabel f =
+  case f of
+    FilterAll -> "all"
+    FilterCode -> "code"
+    FilterComments -> "comments"
+
+-- Cycles all → code → comments → all.
+nextRunFilter :: RunFilter -> RunFilter
+nextRunFilter f =
+  case f of
+    FilterAll -> FilterCode
+    FilterCode -> FilterComments
+    FilterComments -> FilterAll
+
+runFilterAllows :: RunFilter -> Run -> Bool
+runFilterAllows f r =
+  case f of
+    FilterAll -> True
+    FilterCode -> runKind r == RunCode
+    FilterComments -> runKind r == RunComment
 
 data PopupPurpose
   = NoteFor [Text]
@@ -253,6 +284,7 @@ data St = St
   , stBorder :: V.Attr -- concrete attr for raw border fills
   , stHls :: TS.HighlighterTable
   , stOnlyPending :: Bool -- hide/skip hunks that already have verdicts
+  , stRunFilter :: RunFilter -- walk everything, only code, or only prose
   , stRebase :: Maybe RebaseStatus -- a paused rebase the session is following
   , stWritten :: Set.Set FilePath -- files written since the last commit-shaped action
   , stLastMarked :: [Text] -- keys of the most recent verdict, for :note
@@ -459,6 +491,7 @@ runReview mode root roots = do
           , stBorder = fgOnly (scopeAttr theme "ui.linenr" (fg V.brightBlack))
           , stHls = hls
           , stOnlyPending = True
+          , stRunFilter = FilterAll
           , stRebase = rebase0
           , stWritten = Set.empty
           , stLastMarked = []
@@ -585,15 +618,29 @@ pairUnvisited st pair =
     Just r -> runUnvisited (stVerdicts st) r
     Nothing -> False
 
+-- Does the code/comment filter let this hunk through? Unlike the pending
+-- filter, this one governs every way of arriving at a hunk — walking,
+-- auto-advance, and where a session opens — because "walk just the
+-- comment hunks" is the whole point of asking for it.
+pairInFilter :: St -> (Int, Int) -> Bool
+pairInFilter st pair =
+  case runAt st pair of
+    Just r -> runFilterAllows (stRunFilter st) r
+    Nothing -> False
+
+-- Every hunk the filter admits, in display order.
+filteredRunPairs :: St -> [(Int, Int)]
+filteredRunPairs st = filter (pairInFilter st) (allRunPairs st)
+
 -- Where a session begins: the first hunk nothing has been said about
 -- yet; only when every hunk has some response does the first still-
 -- pending (flagged/questioned) one win.
 firstUnrespondedOrPending :: St -> Maybe (Int, Int)
 firstUnrespondedOrPending st =
-  find (pairUnvisited st) (allRunPairs st) <|> firstPending st
+  find (pairUnvisited st) (filteredRunPairs st) <|> firstPending st
 
 firstPending :: St -> Maybe (Int, Int)
-firstPending st = find (pairPending st) (allRunPairs st)
+firstPending st = find (pairPending st) (filteredRunPairs st)
 
 printSummary :: St -> IO ()
 printSummary st = do
@@ -1112,6 +1159,7 @@ reviewGroup mode =
       , ("'", "back to the hunk under review")
       , ("\9251 h", "make this hunk the current one")
       , ("\9251 p", "show only hunks still pending")
+      , ("\9251 k", "walk all / code / comment hunks")
       ]
   in
     ( "review"
@@ -1130,6 +1178,7 @@ reviewGroup mode =
           , ("C-c x", "select the whole hunk")
           , ("C-c ] [", "next / previous hunk")
           , ("C-c p", "show only hunks still pending")
+          , ("C-c k", "walk all / code / comment hunks")
           ]
         KeysHelix ->
           [ ("\9166", "accept the selection as reviewed")
@@ -1325,6 +1374,7 @@ spaceMenuEntries =
   , ("n", "note popup", openNotePopup)
   , ("e", "$EDITOR here", editCurrent)
   , ("p", "pending filter", togglePendingOnly)
+  , ("k", "code / comment filter", cycleRunFilter)
   , ("u", "resolve note here", unnoteCmd)
   , ("h", "make this hunk current", setCurrentHunkHere)
   , ("r", "revert hunk to base", revertTarget)
@@ -1403,11 +1453,21 @@ headerBar st =
               if fvDeleted fv
                 then withAttr removedMarkAttr (txt "  ·  deleted")
                 else txt ""
+            -- a filtered session hides hunks; say so, or an empty-looking
+            -- tray reads as a finished review
+            filterSeg =
+              if stRunFilter st == FilterAll
+                then txt ""
+                else
+                  withAttr
+                    headerRebaseAttr
+                    (txt ("  ·  " <> runFilterLabel (stRunFilter st) <> " only"))
           in
             hBox
               [ txt lead
               , withAttr headerFileAttr (txt (T.pack (fvPath fv)))
               , deletedSeg
+              , filterSeg
               , withAttr
                   headerCountAttr
                   ( txt
@@ -1443,8 +1503,10 @@ trayEntries st =
       let
         mark = runMark (stVerdicts st) r
         isCurrent = fi == curF && hi == curH
+        settled = stOnlyPending st && mark == '\10003'
+        wrongKind = not (runFilterAllows (stRunFilter st) r)
       in
-        not isCurrent && stOnlyPending st && mark == '\10003'
+        not isCurrent && (settled || wrongKind)
     fileGroup (fi, fv) =
       let
         numbered = zip [0 ..] (fvRuns fv)
@@ -2030,6 +2092,28 @@ togglePendingOnly = do
         }
   scrollTrayToCurrent
 
+-- Space k cycles all → code → comments; :filter names one outright.
+-- Independent of the pending filter, so "the code hunks nobody has
+-- looked at yet" is one combination of the two.
+cycleRunFilter :: EventM Name St ()
+cycleRunFilter = do
+  st <- get
+  setRunFilter (nextRunFilter (stRunFilter st))
+
+setRunFilter :: RunFilter -> EventM Name St ()
+setRunFilter chosen = do
+  modify (\s -> s {stRunFilter = chosen, stMsg = filterMsg chosen})
+  -- the entry list reshapes under the viewport, so the current hunk has
+  -- to be found again
+  scrollTrayToCurrent
+
+filterMsg :: RunFilter -> Text
+filterMsg chosen =
+  case chosen of
+    FilterAll -> "walking every hunk"
+    FilterCode -> "walking code hunks only"
+    FilterComments -> "walking comment hunks only"
+
 -- With nothing on screen the only meaningful keys are quitting and the
 -- command line (to switch what the session is looking at).
 handleIdleKey :: V.Event -> EventM Name St ()
@@ -2156,6 +2240,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar '[') [] -> switchRun (-1)
         V.EvKey (V.KChar 'x') [] -> selectCurrentHunk
         V.EvKey (V.KChar 'p') [] -> togglePendingOnly
+        V.EvKey (V.KChar 'k') [] -> cycleRunFilter
         V.EvKey (V.KChar 'u') [] -> unnoteCmd
         V.EvKey (V.KChar 'h') [] -> setCurrentHunkHere
         V.EvKey (V.KChar 'v') [] -> revertTarget
@@ -2531,19 +2616,27 @@ scrollTrayToCurrent = do
     _ -> pure ()
 
 -- Walk hunks in (file, hunk) order, wrapping; with pending-only mode on,
--- hunks that already have verdicts are skipped entirely.
+-- hunks that already have verdicts are skipped entirely, and the
+-- code/comment filter skips whichever kind you are not reading.
 switchRun :: Int -> EventM Name St ()
 switchRun d = do
   st <- get
   let
-    eligible pair = not (stOnlyPending st) || pairPending st pair
+    eligible pair =
+      (not (stOnlyPending st) || pairPending st pair) && pairInFilter st pair
     pairs = filter eligible (allRunPairs st)
     here =
       ( stCurF st
       , clampH (fvRuns (currentFile st)) (stCurH st)
       )
+    -- name whichever filter emptied the list, so an empty walk is never
+    -- mistaken for a finished review
+    emptyMsg = case stRunFilter st of
+      FilterCode -> "no code hunks left"
+      FilterComments -> "no comment hunks left"
+      FilterAll -> "no pending hunks left"
   case pairs of
-    [] -> modify (\s -> s {stMsg = "no pending hunks left"})
+    [] -> modify (\s -> s {stMsg = emptyMsg})
     _ -> do
       let
         after = filter (> here) pairs
@@ -3236,7 +3329,7 @@ advanceToPending = do
     -- questioned ones only get circled back to once those run out
     wrapped =
       let
-        (upToHere, afterHere) = break (> here) (allRunPairs st)
+        (upToHere, afterHere) = break (> here) (filteredRunPairs st)
       in
         afterHere ++ upToHere
     unvisited = filter (pairUnvisited st) wrapped
@@ -3484,7 +3577,15 @@ refreshGit = do
 
 -- What each command is called, what it takes, and what to tell a human
 -- browsing the menu.
-data ArgKind = NoArg | ArgRef | ArgMode | ArgPath | ArgDir | ArgText | ArgSet
+data ArgKind
+  = NoArg
+  | ArgRef
+  | ArgMode
+  | ArgPath
+  | ArgDir
+  | ArgText
+  | ArgSet
+  | ArgFilter
 
 commandTable :: [(Text, ArgKind, Text)]
 commandTable =
@@ -3501,6 +3602,7 @@ commandTable =
   , ("unnote", NoArg, "remove the note from the target lines")
   , ("resolve", ArgText, "resolve the note here; 'all' sweeps answered ones")
   , ("revert", NoArg, "revert hunk under cursor (or selection) to base")
+  , ("filter", ArgFilter, "walk all | code | comments (also Space k)")
   , ("open", ArgPath, "open a file in the session")
   , ("close", NoArg, "drop the current file")
   , ("files", NoArg, "fuzzy file finder")
@@ -3540,6 +3642,7 @@ cmdCandidates st input =
         Just ArgMode -> prefixed ["head", "unstaged", "untracked"]
         Just ArgPath -> prefixed (stCmdFiles st)
         Just ArgDir -> prefixed (stCmdDirs st ++ stCmdFiles st)
+        Just ArgFilter -> prefixed (map runFilterLabel filterCycle)
         _ -> []
       _ -> []
 
@@ -3690,6 +3793,13 @@ runCommand input =
     ("note" : rest) -> noteCmd (T.unwords rest)
     ["unnote"] -> unnoteCmd
     ["revert"] -> revertTarget
+    ["filter"] -> cycleRunFilter
+    ["filter", which] ->
+      case filter ((== which) . runFilterLabel) filterCycle of
+        (chosen : _) -> setRunFilter chosen
+        [] ->
+          setMsg
+            ("filter = " <> T.intercalate " | " (map runFilterLabel filterCycle))
     ["resolve"] -> unnoteCmd
     ["resolve", "all"] -> resolveAllAnswered
     ["accept", path] -> acceptPath path
@@ -4530,6 +4640,7 @@ currentPlace st = do
         , rpFile = fvPath fv
         , rpHunk = stCurH st
         , rpOnlyPending = stOnlyPending st
+        , rpRunFilter = stRunFilter st
         , rpOpened = stOpened st
         , rpAnchor = stAnchor st
         }
@@ -4590,6 +4701,7 @@ switchRepo target = do
           , stAnchor = maybe Nothing rpAnchor remembered
           , stOpened = maybe Set.empty rpOpened remembered
           , stOnlyPending = maybe (stOnlyPending s) rpOnlyPending remembered
+          , stRunFilter = maybe (stRunFilter s) rpRunFilter remembered
           , stGrepNav = Nothing
           , stCmdFiles = []
           , stCmdDirs = []
