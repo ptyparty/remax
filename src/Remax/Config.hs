@@ -8,6 +8,9 @@
 module Remax.Config
   ( Config (..)
   , KeyMode (..)
+  , keyModeFromText
+  , keyModeToText
+  , keyModeNames
   , defaultConfig
   , loadConfig
   , persistSetting
@@ -29,10 +32,31 @@ import System.FilePath (dropTrailingPathSeparator)
 
 import Remax.DiffModel (SplitConfig (..), defaultSplitConfig)
 
--- Which keybinding family drives the buffer: helix-style modal, or
--- modeless emacs chords.
-data KeyMode = KeysHelix | KeysEmacs
+-- Which keybinding family drives the buffer: helix-style modal,
+-- vi-style modal, or modeless emacs chords.
+data KeyMode = KeysHelix | KeysVi | KeysEmacs
   deriving (Eq)
+
+-- The one place the keymap names are spelled, so the config file, `:set
+-- keys`, and its completion cannot drift apart. Anything unrecognized
+-- reads as the default, matching how the rest of the file is parsed.
+keyModeFromText :: Text -> KeyMode
+keyModeFromText raw =
+  case T.strip raw of
+    "emacs" -> KeysEmacs
+    "vi" -> KeysVi
+    "vim" -> KeysVi
+    _ -> KeysHelix
+
+keyModeToText :: KeyMode -> Text
+keyModeToText mode =
+  case mode of
+    KeysHelix -> "helix"
+    KeysVi -> "vi"
+    KeysEmacs -> "emacs"
+
+keyModeNames :: [Text]
+keyModeNames = ["helix", "vi", "emacs"]
 
 data Config = Config
   { cfgKeys :: KeyMode
@@ -149,10 +173,7 @@ fromEntries entries =
     baseSplit = cfgSplit base
   in
     Config
-      { cfgKeys =
-          if lookup "keys" entries == Just "emacs"
-            then KeysEmacs
-            else KeysHelix
+      { cfgKeys = keyModeFromText (maybe "" id (lookup "keys" entries))
       , cfgScrolloff = max 0 (getInt "scrolloff" (cfgScrolloff base))
       , cfgNoteWrap = max 20 (getInt "note-wrap" (cfgNoteWrap base))
       , cfgNoteOnFlag = getInt "note-on-flag" (1 :: Int) /= 0
