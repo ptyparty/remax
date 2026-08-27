@@ -75,7 +75,15 @@ import Control.Monad.State (get, modify, put)
 import Data.Char (isAlphaNum, isSpace, toLower)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
-import Data.List (find, findIndex, groupBy, isPrefixOf, maximumBy, sortOn)
+import Data.List
+  ( find
+  , findIndex
+  , groupBy
+  , isPrefixOf
+  , isSuffixOf
+  , maximumBy
+  , sortOn
+  )
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Ord (comparing)
@@ -494,20 +502,55 @@ runReview mode root roots = do
     -- colors get rounded to the nearest palette entry
     let
       buildVty = do
-        colorterm <- lookupEnv "COLORTERM"
+        full <- wantsFullColor
         let
-          vtyCfg = case colorterm of
-            Just v
-              | v `elem` ["truecolor", "24bit"] ->
-                  V.defaultConfig
-                    { V.configPreferredColorMode = Just V.FullColor
-                    }
-            _ -> V.defaultConfig
+          vtyCfg =
+            if full
+              then V.defaultConfig {V.configPreferredColorMode = Just V.FullColor}
+              else V.defaultConfig
         mkVty vtyCfg
     vty <- buildVty
     customMain vty buildVty (Just chan) (app theme) st1
   finishPass conn (stPassId final)
   printSummary final
+
+-- Whether to ask vty for 24-bit color.
+--
+-- COLORTERM alone is too thin a thread: it is a convention each shell
+-- and multiplexer has to remember to pass along, and one that does not
+-- (switching to a shell that manages its environment differently is
+-- enough) drops the whole UI into palette mode. That is not a subtle
+-- degradation — a popup's #151515 surface rounds to #5f5f5f, a mid-grey,
+-- and the theme stops being the theme.
+--
+-- So ask the terminal as well. These emulators are all unconditionally
+-- 24-bit, and a "-direct" terminfo entry says so by definition.
+wantsFullColor :: IO Bool
+wantsFullColor = do
+  colorterm <- lookupEnv "COLORTERM"
+  term <- lookupEnv "TERM"
+  let
+    saysColorterm = case colorterm of
+      Just v -> v `elem` ["truecolor", "24bit"]
+      Nothing -> False
+    saysTerm = case term of
+      Nothing -> False
+      Just t ->
+        t `elem` trueColorTerms
+          || "-direct" `isSuffixOf` t
+  pure (saysColorterm || saysTerm)
+
+trueColorTerms :: [String]
+trueColorTerms =
+  [ "xterm-kitty"
+  , "xterm-ghostty"
+  , "wezterm"
+  , "alacritty"
+  , "foot"
+  , "foot-extra"
+  , "contour"
+  , "rio"
+  ]
 
 fileDir :: FilePath -> FilePath -> FilePath
 fileDir root path = normalise (root </> takeDirectory path)
