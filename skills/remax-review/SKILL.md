@@ -18,13 +18,14 @@ something.
 remax -C /path/to/repo list --json
 ```
 
-This prints the punch list for that repository (run it from anywhere —
-`-C` points at the repo). Shape:
+This prints the punch list (run it from anywhere — `-C` points at the
+target). Shape:
 
 ```json
 {"repo": "/path/to/repo",
  "items": [
    {"file": "src/Foo.hs",
+    "repo": "/path/to/repo",
     "verdict": "flagged",
     "line": "+  let xs = map fromJust ys",
     "line_no": 42,
@@ -33,6 +34,26 @@ This prints the punch list for that repository (run it from anywhere —
                {"author": "agent", "body": "done — switched to mapMaybe"}],
     "updated_at": "2026-08-23 19:23:51"}]}
 ```
+
+### When `-C` points at a folder of checkouts
+
+A reviewer may run one remax over a directory that *holds* repositories
+rather than being one — a story directory with a checkout per repo the
+story touches — and switch between them with `:repo`. Point `-C` at
+whatever directory the human named and it works either way: at a
+repository you get that repository, at a folder of them you get **all of
+them at once**, which is usually what you want, since one story's
+feedback is spread across its repos.
+
+That is why every item carries its own **`repo`**. Read it rather than
+the top-level one: when the listing spans checkouts, the top level names
+the directory you asked about, and only `item.repo` tells you which
+checkout an item lives in. `cd` there before editing the file named by
+`item.file`, which is always relative to `item.repo`.
+
+`remax reply KEY TEXT` works from the folder too — a key belongs to
+exactly one repository, so remax finds the owner itself and tells you
+which one it landed in.
 
 - `verdict: "flagged"` (`!`) — the reviewer wants this changed. Fix it.
 - `verdict: "questioned"` (`?`) — the reviewer wants an explanation or a

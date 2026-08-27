@@ -2,7 +2,7 @@
 
 module Main (main) where
 
-import Control.Monad (forM_, unless)
+import Control.Monad (forM_, unless, when)
 import Data.Char (isControl, ord)
 import Data.List (nub)
 import Data.Maybe (fromMaybe)
@@ -18,7 +18,13 @@ import System.Directory
   )
 import System.Environment (getArgs)
 import System.Exit (die)
-import System.FilePath (isAbsolute, makeRelative, normalise, (</>))
+import System.FilePath
+  ( isAbsolute
+  , makeRelative
+  , normalise
+  , takeFileName
+  , (</>)
+  )
 import System.IO (hFlush, stdout)
 
 import Paths_remax (version)
@@ -126,27 +132,39 @@ requireRoot = do
     Just root -> pure root
     Nothing -> die "Not inside a git repository."
 
--- Where a review session starts: the repository we are inside, or — for
--- a directory that merely holds repositories, which is what a story
--- directory is — the first one beneath it, with the rest reachable by
--- :repo once the session is up.
-reviewStart :: IO (FilePath, [FilePath])
-reviewStart = do
+-- Every repository a command should act on: the one we are inside, or —
+-- for a directory that merely holds repositories, which is what a story
+-- directory is — all of them.
+--
+-- This matters most for agents. An agent gets pointed at whatever
+-- directory the human names, and when the human is reviewing a story
+-- that is the folder of checkouts rather than any one checkout. Refusing
+-- there would make the first command an agent runs fail.
+targetRepos :: IO [FilePath]
+targetRepos = do
   got <- repoRoot
   here <- getCurrentDirectory
   case got of
-    Just root -> do
-      pure (root, [root])
+    Just root -> pure [root]
     Nothing -> do
       children <- childRepos here
-      case children of
-        [] ->
+      if null children
+        then
           die
             ( "Not inside a git repository, and no repositories directly under "
                 ++ here
                 ++ "."
             )
-        (first : _) -> pure (first, children)
+        else pure children
+
+-- Where a review session starts: the first repository in reach, with the
+-- rest reachable by :repo once the session is up.
+reviewStart :: IO (FilePath, [FilePath])
+reviewStart = do
+  roots <- targetRepos
+  case roots of
+    (first : _) -> pure (first, roots)
+    [] -> die "No repository to review."
 
 -- Forget the verdicts recorded for files under the current directory, so
 -- those changes come up for review from scratch. At the top of the
@@ -200,69 +218,99 @@ forget mPath = do
 
 list :: Bool -> IO ()
 list asJson = do
-  root <- requireRoot
+  roots <- targetRepos
   conn <- openStore
-  rows <- punchRows conn (T.pack root)
+  here <- getCurrentDirectory
+  found <- mapM (\r -> fmap ((,) r) (punchRows conn (T.pack r))) roots
+  let
+    nonEmpty = filter (not . null . snd) found
+    scope = case roots of
+      [only] -> only
+      _ -> here
   if asJson
-    then TIO.putStrLn (punchJson (T.pack root) rows)
+    then TIO.putStrLn (punchJson (T.pack scope) found)
     else
-      if null rows
+      if null nonEmpty
         then putStrLn "No flagged or questioned lines recorded for this repository."
-        else forM_ rows $ \row -> do
+        else forM_ nonEmpty $ \(repo, rows) -> do
+          -- name the repository only when there is more than one in
+          -- play, so a single-repo listing reads exactly as before
+          when (length roots > 1) $
+            putStrLn ("── " ++ takeFileName repo ++ " ──")
+          printPunchRows rows
+
+printPunchRows :: [PunchRow] -> IO ()
+printPunchRows rows =
+  forM_ rows $ \row -> do
+    let
+      position = case punchLineNo row of
+        Just n -> ":" <> T.pack (show n)
+        Nothing -> ""
+    TIO.putStrLn
+      ( punchVerdict row
+          <> "  "
+          <> punchFile row
+          <> position
+          <> "  ("
+          <> punchAt row
+          <> ")"
+      )
+    TIO.putStrLn ("    " <> punchLine row)
+    forM_ (punchThread row) $ \post ->
+      case T.lines (postBody post) of
+        [] -> pure ()
+        (firstLine : more) -> do
           let
-            position = case punchLineNo row of
-              Just n -> ":" <> T.pack (show n)
-              Nothing -> ""
-          TIO.putStrLn
-            ( punchVerdict row
-                <> "  "
-                <> punchFile row
-                <> position
-                <> "  ("
-                <> punchAt row
-                <> ")"
-            )
-          TIO.putStrLn ("    " <> punchLine row)
-          forM_ (punchThread row) $ \post ->
-            case T.lines (postBody post) of
-              [] -> pure ()
-              (firstLine : more) -> do
-                let
-                  label = postAuthor post <> ": "
-                  indent = T.replicate (T.length label) " "
-                TIO.putStrLn ("    " <> label <> firstLine)
-                forM_ more (\l -> TIO.putStrLn ("    " <> indent <> l))
-          forM_ (punchCommitSha row) $ \sha ->
-            TIO.putStrLn
-              ( "    commit: "
-                  <> sha
-                  <> " "
-                  <> fromMaybe "" (punchCommitSubject row)
-              )
+            label = postAuthor post <> ": "
+            indent = T.replicate (T.length label) " "
+          TIO.putStrLn ("    " <> label <> firstLine)
+          forM_ more (\l -> TIO.putStrLn ("    " <> indent <> l))
+    forM_ (punchCommitSha row) $ \sha ->
+      TIO.putStrLn
+        ( "    commit: "
+            <> sha
+            <> " "
+            <> fromMaybe "" (punchCommitSubject row)
+        )
 
 -- An agent's post in a note conversation: KEY is the item's key from
 -- `list --json`; the post appends to the whole thread's group and
 -- renders in order, with its author, in a running session.
+-- A key belongs to exactly one repository — it hashes the repo path
+-- along with the line — so from a directory of checkouts we can simply
+-- offer the key to each and let the one that owns it answer.
 reply :: Text -> Text -> IO ()
 reply key text = do
-  root <- requireRoot
+  roots <- targetRepos
   conn <- openStore
-  n <- appendAgentPost conn (T.pack root) "agent" key text
-  if n == 0
-    then die "No such key recorded for this repository."
-    else putStrLn ("reply attached to " ++ show n ++ " line(s)")
+  attached <-
+    mapM (\r -> fmap ((,) r) (appendAgentPost conn (T.pack r) "agent" key text)) roots
+  case filter ((> 0) . snd) attached of
+    [] -> die "No such key recorded for this repository."
+    hits ->
+      forM_ hits $ \(repo, n) ->
+        putStrLn
+          ( "reply attached to "
+              ++ show n
+              ++ " line(s)"
+              ++ (if length roots > 1 then " in " ++ takeFileName repo else "")
+          )
 
 -- JSON output ------------------------------------------------------------------
 
 -- The punch list for machines (agents acting on review feedback). The
 -- line text carries its +/- marker; line numbers are advisory positions
 -- from when the verdict was recorded.
-punchJson :: Text -> [PunchRow] -> Text
-punchJson repo rows =
+-- Items carry their own repo, because a listing can now span several:
+-- an agent aggregating a story's feedback needs to know which checkout
+-- each item lives in before it can act on any of it.
+punchJson :: Text -> [(FilePath, [PunchRow])] -> Text
+punchJson scope found =
   let
-    item row =
+    item repo row =
       jsonObject
         [ ("key", jsonString (punchKey row))
+        , ("repo", jsonString (T.pack repo))
         , ("file", jsonString (punchFile row))
         , ("verdict", jsonString (punchVerdict row))
         , ("line", jsonString (punchLine row))
@@ -274,10 +322,12 @@ punchJson repo rows =
         , ("commit_subject", maybe "null" jsonString (punchCommitSubject row))
         , ("updated_at", jsonString (punchAt row))
         ]
+    items =
+      concatMap (\(repo, rows) -> map (item repo) rows) found
   in
     jsonObject
-      [ ("repo", jsonString repo)
-      , ("items", "[" <> T.intercalate ", " (map item rows) <> "]")
+      [ ("repo", jsonString scope)
+      , ("items", "[" <> T.intercalate ", " items <> "]")
       ]
 
 -- Compatibility views of the thread: the opening reviewer post is the
