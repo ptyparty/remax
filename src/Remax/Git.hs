@@ -77,14 +77,18 @@ repoRoot = do
     ExitSuccess -> Just (T.unpack (T.strip (T.pack out)))
     ExitFailure _ -> Nothing
 
+-- Every path the change set covers, deletions included: a file that was
+-- removed is a change like any other and has to be reviewable, so no
+-- --diff-filter culls it here. Its working copy is gone, which the
+-- loader recognizes and reviews as an all-removed file.
 changedFiles :: ReviewMode -> FilePath -> IO [FilePath]
 changedFiles mode root = do
   let
     args = case mode of
       VsRef ref ->
-        ["-C", root, "diff", "--name-only", "--diff-filter=d", "--no-color", T.unpack ref]
+        ["-C", root, "diff", "--name-only", "--no-color", T.unpack ref]
       VsIndex ->
-        ["-C", root, "diff", "--name-only", "--diff-filter=d", "--no-color"]
+        ["-C", root, "diff", "--name-only", "--no-color"]
       Untracked ->
         ["-C", root, "ls-files", "--others", "--exclude-standard"]
   (code, out, _) <- readProcessWithExitCode "git" args ""

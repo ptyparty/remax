@@ -89,6 +89,7 @@ import GHC.Clock (getMonotonicTime)
 import qualified Graphics.Vty as V
 import Graphics.Vty.CrossPlatform (mkVty)
 import qualified Remax.Zipper as Z
+import System.Directory (doesFileExist)
 import System.Environment (lookupEnv)
 import System.Exit (die)
 import qualified System.FSNotify as FS
@@ -215,6 +216,7 @@ data FileView = FileView
   , fvRuns :: [Run]
   , fvToks :: [[Seg]]
   , fvStale :: Bool
+  , fvDeleted :: Bool -- the change set removed this file; there is no working copy
   , fvHighlighted :: Bool -- real syntax colors computed yet? plain until shown
   , fvHl :: Maybe TS.Highlighter -- vendored tree-sitter grammar, when we have one
   , fvRunDecls :: [Text] -- per run: the top-level declaration it falls under
@@ -617,42 +619,72 @@ loadOne ::
   FilePath ->
   IO (Maybe FileView)
 loadOne cfg hls mode root path = do
-  readable <- try (looksBinary root path) :: IO (Either IOException Bool)
-  case readable of
-    Left _ -> pure Nothing
-    Right True -> pure Nothing
-    Right False -> do
+  let
+    build deleted base newLs = do
+      let
+        fv0 =
+          FileView
+            { fvPath = path
+            , fvBase = base
+            , fvEd = newEdState 0 newLs
+            , fvRows = []
+            , fvRuns = []
+            , fvToks = []
+            , fvStale = False
+            , fvDeleted = deleted
+            , fvHighlighted = False
+            , -- the shebang is the fallback for a file with no
+              -- extension to go on, so the first line comes along
+              fvHl = TS.highlighterFor hls path (listToMaybe newLs)
+            , fvRunDecls = []
+            }
+      (fv, _) <- rebuildFV (cfgSplit cfg) (T.pack root) fv0
+      let
+        anchor = case fvRuns fv of
+          (r : _) -> runAnchor r
+          [] -> 0
+      pure (Just fv {fvEd = newEdState anchor newLs})
+  present <- doesFileExist (root </> path)
+  if not present
+    then do
+      -- No working copy, but git still has the base: the change set
+      -- removed this file. It reviews as a file whose every line is a
+      -- removal, so accepting those lines is accepting the deletion.
+      -- Absent on both sides means there is nothing to say about it.
       base <- baseLines mode root path
-      gotNew <- try (TIO.readFile (root </> path)) :: IO (Either IOException Text)
-      case gotNew of
+      case base of
+        [] -> pure Nothing
+        _ -> build True base []
+    else do
+      readable <- try (looksBinary root path) :: IO (Either IOException Bool)
+      case readable of
         Left _ -> pure Nothing
-        Right newTxt -> do
-          let
-            newLs = T.lines newTxt
-            fv0 =
-              FileView
-                { fvPath = path
-                , fvBase = base
-                , fvEd = newEdState 0 newLs
-                , fvRows = []
-                , fvRuns = []
-                , fvToks = []
-                , fvStale = False
-                , fvHighlighted = False
-                , -- the shebang is the fallback for a file with no
-                  -- extension to go on, so the first line comes along
-                  fvHl = TS.highlighterFor hls path (listToMaybe newLs)
-                , fvRunDecls = []
-                }
-          (fv, _) <- rebuildFV (cfgSplit cfg) (T.pack root) fv0
-          let
-            anchor = case fvRuns fv of
-              (r : _) -> runAnchor r
-              [] -> 0
-          pure (Just fv {fvEd = newEdState anchor newLs})
+        Right True -> pure Nothing
+        Right False -> do
+          base <- baseLines mode root path
+          gotNew <- try (TIO.readFile (root </> path)) :: IO (Either IOException Text)
+          case gotNew of
+            Left _ -> pure Nothing
+            Right newTxt -> build False base (T.lines newTxt)
 
 diffBudgetUs :: Int
 diffBudgetUs = 400000
+
+-- The new side of the diff, and the buffer every row calculation is
+-- measured against. A deleted file has no working copy at all, but its
+-- editor buffer still holds the single empty line a text zipper cannot
+-- do without. Counting that line would diff it as an added blank and
+-- would push every removed row's resting point one line past the end of
+-- the buffer, where no cursor can ever reach it — so a deletion that
+-- nothing has typed into answers with no lines whatsoever.
+newSideLines :: FileView -> [Text]
+newSideLines fv =
+  let
+    ls = bufferLines (fvEd fv)
+  in
+    case (fvDeleted fv, ls) of
+      (True, [""]) -> []
+      _ -> ls
 
 -- Real tokenization is paid only for files that have actually been shown;
 -- everything else carries plain tokens until the cursor arrives. Shown
@@ -661,7 +693,7 @@ diffBudgetUs = 400000
 rebuildFV :: SplitConfig -> Text -> FileView -> IO (FileView, Bool)
 rebuildFV sc repo fv = do
   let
-    newLs = bufferLines (fvEd fv)
+    newLs = newSideLines fv
     plain = pure (plainLines newLs)
   toks <-
     case (fvHighlighted fv, fvHl fv) of
@@ -1195,10 +1227,17 @@ headerBar st =
                 | not (runPending (stVerdicts st) r) ->
                     withAttr headerOkAttr (txt "  ✓ done")
               _ -> txt " "
+            -- no working copy behind this screen: what is on it is the
+            -- file as it was, every line of it on its way out
+            deletedSeg =
+              if fvDeleted fv
+                then withAttr removedMarkAttr (txt "  ·  deleted")
+                else txt ""
           in
             hBox
               [ txt lead
               , withAttr headerFileAttr (txt (T.pack (fvPath fv)))
+              , deletedSeg
               , withAttr
                   headerCountAttr
                   ( txt
@@ -1399,8 +1438,15 @@ renderFile st fv =
             ( if nr == lr then lc else 0
             , if nr == hr then Just hc else Nothing
             )
+    -- Which display row the view keeps in sight. Normally the cursor's,
+    -- but an all-removed file owns no buffer rows at all, so nothing
+    -- carries the cursor and the view would be nailed to the top: there
+    -- the hunk under review is what the reader is looking at, and ] and
+    -- [ are how they move.
     cursorOut =
-      fromMaybe 0 (findIndex (\r -> rNewRow r == Just curRow) rows)
+      case findIndex (\r -> rNewRow r == Just curRow) rows of
+        Just out -> out
+        Nothing -> fromMaybe 0 (findIndex (\r -> rRunIx r == Just curH) rows)
     lo = max 0 (cursorOut - windowRows)
     hi = min (length rows) (cursorOut + windowRows)
     -- the buffer row each removed line now sits before, so a line-wise
@@ -1410,7 +1456,7 @@ renderFile st fv =
         1
         ( scanr
             (\row acc -> fromMaybe acc (rNewRow row))
-            (length (bufferLines ed))
+            (length (newSideLines fv))
             rows
         )
     noteRowsList = shownNoteLines st rows
@@ -2144,7 +2190,7 @@ firstUnacceptedRow :: St -> FileView -> Int -> Maybe Int
 firstUnacceptedRow st fv h =
   let
     rows = fvRows fv
-    bufferLen = length (bufferLines (fvEd fv))
+    bufferLen = length (newSideLines fv)
     points =
       drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
     unaccepted (row, point) = do
@@ -2377,7 +2423,7 @@ selectedChanges :: FileView -> Int -> Int -> [(Text, Text, Int)]
 selectedChanges fv lo hi =
   let
     rows = fvRows fv
-    bufferLen = length (bufferLines (fvEd fv))
+    bufferLen = length (newSideLines fv)
     points =
       drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
     inSpan row point = case rNewRow row of
@@ -2396,7 +2442,7 @@ runChanges :: FileView -> Int -> [(Text, Text, Int)]
 runChanges fv h =
   let
     rows = fvRows fv
-    bufferLen = length (bufferLines (fvEd fv))
+    bufferLen = length (newSideLines fv)
     points =
       drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
     pick (row, point) = do
@@ -2423,7 +2469,7 @@ rowRestPoints :: FileView -> [(RowR, Int)]
 rowRestPoints fv =
   let
     rows = fvRows fv
-    bufferLen = length (bufferLines (fvEd fv))
+    bufferLen = length (newSideLines fv)
     points =
       drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
   in
@@ -2444,11 +2490,18 @@ hunkUnderCursor st = do
       if rNewRow row == Just cur then rRunIx row else Nothing
     restingHit (row, point) =
       if rNewRow row == Nothing && point == cur then rRunIx row else Nothing
+    -- Several delete-only hunks can rest at one line — an all-removed
+    -- file rests every one of them at line 0 — and then the cursor
+    -- cannot say which is meant. The hunk under review is the honest
+    -- answer: it is the one ] and [ moved to and the one the bar marks.
+    restingOn = mapMaybe restingHit resting
+    onReview = clampH (fvRuns fv) (stCurH st)
   case mapMaybe directHit resting of
     (h : _) -> Just h
-    [] -> case mapMaybe restingHit resting of
-      (h : _) -> Just h
-      [] -> Nothing
+    [] ->
+      case find (== onReview) restingOn of
+        Just h -> Just h
+        Nothing -> listToMaybe restingOn
 
 -- The full message of the commit under review: the stopped commit's
 -- own sha during a rebase (HEAD differs at a conflict stop), HEAD
@@ -2903,15 +2956,24 @@ advanceToPending = do
     ((f, h) : _) -> parkAnchor f h
     [] -> modify (\s -> s {stMsg = "All hunks have verdicts — :q to quit."})
 
+-- Write the buffer through to the working file. remax writes eagerly —
+-- a normal-mode edit and Esc from insert both land here — which a
+-- deleted file cannot tolerate: its buffer is empty, so any write at all
+-- would recreate on disk the very file whose removal is under review,
+-- and call that an edit. Nothing but content deliberately put back
+-- (:revert restoring the base, or typing into the buffer) may resurrect
+-- it, and that write is what stops the file being deleted.
 applyToDisk :: Int -> EventM Name St ()
 applyToDisk i = do
   st <- get
   let
     fv = stFiles st !! i
-  when (edTouched (fvEd fv)) $ do
+    outLines = bufferLines (fvEd fv)
+    wouldRecreate = fvDeleted fv && all T.null outLines
+  when (edTouched (fvEd fv) && not wouldRecreate) $ do
     got <-
       liftIO
-        ( try (TIO.writeFile (stRoot st </> fvPath fv) (T.unlines (bufferLines (fvEd fv)))) ::
+        ( try (TIO.writeFile (stRoot st </> fvPath fv) (T.unlines outLines)) ::
             IO (Either IOException ())
         )
     modify $ \s ->
@@ -2923,6 +2985,9 @@ applyToDisk i = do
             Right () -> Set.insert (fvPath fv) (stWritten s)
             Left _ -> stWritten s
         }
+    case got of
+      Right () -> modify (updateFile i (\v -> v {fvDeleted = False}))
+      Left _ -> pure ()
 
 -- A file changed on disk. When the buffer holds no unapplied edits it is
 -- reloaded in place (cursor kept); mid-insert the local edit wins until
@@ -3041,17 +3106,25 @@ refreshGit = do
         existing =
           Map.fromList (map (\fv -> (fvPath fv, fv)) (stFiles stEff))
       let
+        reload name = loadOne (stConfig stEff) (stHls stEff) mode (stRoot stEff) name
         refreshOne name =
           case Map.lookup name existing of
-            Nothing -> loadOne (stConfig stEff) (stHls stEff) mode (stRoot stEff) name
+            Nothing -> reload name
             Just fv -> do
-              base <- baseLines mode (stRoot stEff) name
-              if base == fvBase fv
-                then pure (Just fv)
+              -- a file that has come or gone since it was loaded is a
+              -- different kind of view than the one in hand, so it is
+              -- read afresh rather than patched
+              present <- doesFileExist (stRoot stEff </> name)
+              if present == fvDeleted fv
+                then reload name
                 else do
-                  (rebuilt, _) <-
-                    rebuildFV (cfgSplit (stConfig stEff)) (repoText stEff) fv {fvBase = base}
-                  pure (Just rebuilt)
+                  base <- baseLines mode (stRoot stEff) name
+                  if base == fvBase fv
+                    then pure (Just fv)
+                    else do
+                      (rebuilt, _) <-
+                        rebuildFV (cfgSplit (stConfig stEff)) (repoText stEff) fv {fvBase = base}
+                      pure (Just rebuilt)
       refreshed <- liftIO (forMaybeBounded refreshOne names)
       let
         inChangeSet = catMaybes refreshed
@@ -4447,15 +4520,14 @@ handleTreeKey ev view = do
           case findIndex ((== trPath row) . fvPath) (stFiles st) of
             Just f -> parkAnchor f ix
             Nothing -> setMsg "that file has left the session"
-        RowFile mStat hasHunks open ->
+        -- a deletion opens like anything else now: the change set
+        -- carries it as a file whose every line is removed
+        RowFile _ hasHunks open ->
           if hasHunks && not open
             then unfold (trPath row)
-            else case fmap psChange mStat of
-              Just PathDeleted ->
-                setMsg "deleted in this change — nothing to open"
-              _ -> do
-                close
-                openFilePath (T.pack (trPath row))
+            else do
+              close
+              openFilePath (T.pack (trPath row))
   case ev of
     V.EvKey V.KEsc []
       | not (T.null (tvInput view)) -> retype ""
@@ -4890,6 +4962,7 @@ loadOpened cfg hls root path = do
                 , fvRuns = []
                 , fvToks = []
                 , fvStale = False
+                , fvDeleted = False
                 , fvHighlighted = False
                 , -- the shebang is the fallback for a file with no
                   -- extension to go on, so the first line comes along
