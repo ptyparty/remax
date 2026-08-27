@@ -191,8 +191,12 @@ killRegion alsoDelete ed = do
             , edSelAnchor = Nothing
             }
     else
+      -- M-w is the copy; C-w and C-k cut, and a cut is a removal rather
+      -- than a request to reach the system clipboard
       Just
-        (breakInsertRun ed {edKill = killed, edSelAnchor = Nothing})
+        ( breakInsertRun
+            ed {edKill = killed, edSelAnchor = Nothing, edCopied = True}
+        )
 
 extractRegion :: [Text] -> (Int, Int) -> (Int, Int) -> Text
 extractRegion ls (lr, lc) (hr, hc) =

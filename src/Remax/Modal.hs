@@ -35,6 +35,7 @@ module Remax.Modal
   , deleteSel
   , changeSel
   , yankSel
+  , yankInto
   , pasteSel
   , indentLines
   , joinLines
@@ -92,6 +93,7 @@ data EdState = EdState
   , edExtend :: Bool -- v: motions extend instead of replacing
   , edPending :: Pending
   , edKill :: Text -- the kill slot (emacs C-k/C-w/M-w; future helix yank)
+  , edCopied :: Bool -- the slot was just filled by a deliberate copy
   , edUndo :: [Z.TextZipper Text]
   , edRedo :: [Z.TextZipper Text] -- what undo stepped back over; edits clear it
   , edTouched :: Bool -- something was actually changed at least once
@@ -125,6 +127,7 @@ newEdState row ls =
     , edExtend = False
     , edPending = NoPending
     , edKill = T.empty
+    , edCopied = False
     , edUndo = []
     , edRedo = []
     , edTouched = False
@@ -240,9 +243,17 @@ handlePlain ev st =
 
 -- y: the selection (or the cursor cell) into the kill slot. Line-wise
 -- yanks keep a trailing newline, which is what makes p paste them as
--- whole lines.
+-- whole lines. A deliberate copy, so it is also what reaches the system
+-- clipboard.
 yankSel :: EdState -> EdState
-yankSel st =
+yankSel st = (yankInto st) {edCopied = True}
+
+-- The same, without claiming a copy was meant. vi's d and c take a copy
+-- of what they remove so that p can put it back, but pulling a line out
+-- of a file is not "I want this on the system clipboard" — it must not
+-- clobber whatever you copied from somewhere else.
+yankInto :: EdState -> EdState
+yankInto st =
   let
     ls = bufferLines st
     rowText i = case drop i ls of

@@ -99,6 +99,7 @@ flag ci
 executable remax
   main-is: Main.hs
   other-modules:
+      Remax.Clipboard
       Remax.Config
       Remax.DiffModel
       Remax.Emacs
