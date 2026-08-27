@@ -5686,6 +5686,19 @@ questionMarkAttr = attrName "questionMark"
 doneMarkAttr = attrName "doneMark"
 pendingMarkAttr = attrName "pendingMark"
 
+-- Nudge a colour up a little, for surfaces that should read as the same
+-- material under slightly more light. Only truecolor values can be
+-- lifted; a palette entry has no channels to add to, so it is left be.
+lighten :: Int -> V.Color -> V.Color
+lighten by c =
+  case c of
+    V.RGBColor r g b ->
+      let
+        bump v = min 255 (fromIntegral v + by)
+      in
+        V.linearColor (bump r) (bump g) (bump b)
+    _ -> c
+
 -- A theme scope may carry a background; the border glyphs must not, or
 -- the whole cell fills in and the thin bar reads as a thick one.
 fgOnly :: V.Attr -> V.Attr
@@ -5762,15 +5775,25 @@ mkAttrMap mth =
           (\s -> (tsScopeAttr s, scopeAttr mth s V.defAttr))
           (filter (hasScope th) tsDeepScopes)
     tsPairs = map topPair tsTopScopes ++ deepPairs
+    bgA = scopeAttr mth "ui.background" V.defAttr
     baseAttr =
       let
-        bgA = scopeAttr mth "ui.background" V.defAttr
         fgA = scopeAttr mth "ui.text" V.defAttr
       in
         V.defAttr
           { V.attrForeColor = V.attrForeColor fgA
           , V.attrBackColor = V.attrBackColor bgA
           }
+    -- A popup sits a hair above the body, and "a hair" has to be
+    -- measured from the body rather than fixed: the body colour comes
+    -- from the theme's ui.background, so a hardcoded surface drifts as
+    -- far from it as the theme happens to be dark. Against a #080808
+    -- background the old fixed #1e1e1e read as a different material
+    -- rather than the same one lit slightly.
+    floatBack = case V.attrBackColor bgA of
+      V.SetTo c -> V.SetTo (lighten 0x0d c)
+      _ -> V.SetTo surfFloat
+    onFloat a = a {V.attrBackColor = floatBack}
     selection =
       scopeAttr mth "ui.selection.primary" (V.defAttr `V.withStyle` V.reverseVideo)
     uiPairs =
@@ -5810,13 +5833,13 @@ mkAttrMap mth =
       , (pendingMarkAttr, fg inkBlue)
       , (noteInlineAttr, fg inkLavender)
       , (replyInlineAttr, fg inkMidBlue)
-      , (floatAttr, V.defAttr `V.withBackColor` surfFloat)
+      , (floatAttr, onFloat V.defAttr)
       , (floatSelAttr, V.defAttr `V.withBackColor` surfSel)
       , (floatSelBarAttr, fg inkLavender `V.withBackColor` surfSel)
-      , (floatTitleAttr, fg inkLavender `V.withBackColor` surfFloat)
+      , (floatTitleAttr, onFloat (fg inkLavender))
       , -- every popup is framed in the same lavender as its title; floatFrame
         -- is the only bordered widget, so this reaches exactly the popups
-        (B.borderAttr, fg inkLavender `V.withBackColor` surfFloat)
+        (B.borderAttr, onFloat (fg inkLavender))
       , (matchCharAttr, fg matchGold)
       , (meterOnAttr, fg inkGreen)
       , (meterOffAttr, fg meterRail)
@@ -5843,7 +5866,10 @@ inkFaint = V.linearColor (0x6e :: Int) 0x6e 0x68
 inkText = V.linearColor (0xb4 :: Int) 0xb4 0xaa
 inkFlag = V.linearColor (0xcf :: Int) 0x8a 0x6a
 trayFileInk = V.linearColor (0xd8 :: Int) 0xd3 0xc0
-surfFloat = V.linearColor (0x1e :: Int) 0x1e 0x1e
+
+-- Only used when the theme names no background at all, so there is
+-- nothing to measure a lift from.
+surfFloat = V.linearColor (0x15 :: Int) 0x15 0x15
 surfSel = V.linearColor (0x24 :: Int) 0x24 0x30
 cursorWash = V.linearColor (0x3a :: Int) 0x33 0x25
 hairInk = V.linearColor (0x2c :: Int) 0x2c 0x2c
