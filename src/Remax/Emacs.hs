@@ -197,27 +197,22 @@ killRegion alsoDelete ed = do
 extractRegion :: [Text] -> (Int, Int) -> (Int, Int) -> Text
 extractRegion ls (lr, lc) (hr, hc) =
   let
-    lineAt i = case drop i ls of
-      (l : _) -> l
-      [] -> T.empty
+    row = lineAt ls
   in
     if lr == hr
-      then T.take (hc - lc) (T.drop lc (lineAt lr))
+      then T.take (hc - lc) (T.drop lc (row lr))
       else
         T.intercalate
           "\n"
-          ( T.drop lc (lineAt lr)
-              : map lineAt [lr + 1 .. hr - 1]
-              ++ [T.take hc (lineAt hr)]
+          ( T.drop lc (row lr)
+              : map row [lr + 1 .. hr - 1]
+              ++ [T.take hc (row hr)]
           )
 
 deleteRegion :: [Text] -> (Int, Int) -> (Int, Int) -> [Text]
 deleteRegion ls (lr, lc) (hr, hc) =
   let
-    lineAt i = case drop i ls of
-      (l : _) -> l
-      [] -> T.empty
-    merged = T.take lc (lineAt lr) <> T.drop hc (lineAt hr)
+    merged = T.take lc (lineAt ls lr) <> T.drop hc (lineAt ls hr)
   in
     take lr ls ++ (merged : drop (hr + 1) ls)
 
@@ -257,14 +252,11 @@ backwardWord ed =
     ls = bufferLines ed
     back (r, c) =
       if c > 0
-        then Just ((r, c - 1), T.index (lineAt r) (c - 1))
+        then Just ((r, c - 1), T.index (lineAt ls r) (c - 1))
         else
           if r > 0
-            then Just ((r - 1, T.length (lineAt (r - 1))), '\n')
+            then Just ((r - 1, T.length (lineAt ls (r - 1))), '\n')
             else Nothing
-    lineAt i = case drop i ls of
-      (l : _) -> l
-      [] -> T.empty
     skip p pos = case back pos of
       Just (prev, ch)
         | p ch -> skip p prev

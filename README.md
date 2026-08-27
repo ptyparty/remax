@@ -5,8 +5,9 @@
 > been human reviewed. Read accordingly.
 
 Hunk-by-hunk code review with the **whole file on screen**: edit it
-**in place** with helix-flavored modal keys, and record per-line,
-content-keyed verdicts that survive rebases.
+**in place** with modal keys in whichever flavor your fingers already
+know — helix, vi, or emacs — and record per-line, content-keyed verdicts
+that survive rebases.
 
 ![remax reviewing a commit mid-rebase](hero.png)
 
@@ -153,7 +154,7 @@ Normal mode:
 | `u` | undo |
 | `y` | yank the selection (or cursor cell) — line-wise for `x` selections; the yank slot is session-wide, so paste works across files (and the note popup) |
 | `p` / `P` | paste after / before: whole lines below/above for a line-wise yank, after/at the cursor otherwise; the paste is selected |
-| `Space` | menu (helix-style infobox): `f` file picker, `b` open files, `t` project tree, `n` note popup, `e` `$EDITOR` here, `p` pending filter, `u` resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
+| `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `n` note popup, `e` `$EDITOR` here, `p` pending filter, `u` resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
 | `.` | repeat the last insert session (the entering command plus what was typed), helix-style — `c`-fix-`Esc` then `.` applies the same change at the cursor |
 | `Enter` | **accept the selection as reviewed** — a selection is required, so what you accept is always visibly highlighted (`X Enter` for the hunk you're looking at). Completing a hunk jumps to the next pending one; a partial mark steps to the next line |
 | `!` / `?` | flag-to-return-to / question — the selection's lines, or the whole current hunk with none. The note popup opens immediately for the reason (`note-on-flag = 0` in the config turns that off); discarding keeps the mark, and the jump to the next hunk waits until the popup closes |
@@ -199,6 +200,41 @@ normal mode and **writes the file to disk**. Normal-mode edits that don't
 enter insert (`d`, undo) write immediately; ones that do (`c`, `o`)
 write when insert exits. There is no explicit save and no dirty state in
 normal mode — what you see in normal mode is what's on disk.
+
+## Vi keys
+
+`keys = vi` in the config (or `:set keys vi`, live — `vim` works too)
+swaps the buffer to vi's grammar: the operator comes first and waits for
+its motion, which is the mirror image of the helix layer rather than a
+second editor. The verbs underneath are the same ones the helix keys
+drive; only the order of the keystrokes changes.
+
+| what | keys |
+|---|---|
+| operators | `d` `c` `y` `>` `<`, and `gu` / `gU` / `g~` for case — over any motion (`dw`, `d$`, `dfx`), doubled for the line (`dd`, `cc`, `yy`, `>>`), with counts on either side (`d2w`, `2dd`) |
+| text objects | `iw aw iW aW ip ap` and the pairs `i( a( i{ a{ i[ a[ i< a< i" a" i' a'` (`ib`/`aB` alias the brackets) — so `ciw`, `di(`, `ya"` all work |
+| motions | `h j k l`, `w b e` / `W B E`, `ge` / `gE`, `0 ^ $`, `gg` / `G` (with a count: `23G`), `f F t T` with `;` / `,`, `%` to the matching bracket |
+| shorthands | `x X D C s S Y`, `p` / `P`, `J`, `r`, `~`, `u` / `Ctrl-r`, `.` |
+| insert | `i a I A o O`; `Esc` returns to normal mode and writes the file, as everywhere else |
+| visual | `v` char-wise, `V` line-wise; motions extend, an operator acts on what is highlighted |
+| searching | `/` forward and `?` **backward** — the prompt wears the sigil it opened with, and `n` / `N` repeat along that grain. `*` / `#` take the word under the cursor either way |
+
+The review verbs move behind the `Space` leader, the way the emacs
+keymap puts them behind `C-c`: `Space ⏎` accept, `Space !` flag,
+`Space q` question, `Space x` select the hunk. Everything else on the
+`Space` menu is unchanged, and the note popup gets vi keys too.
+
+What keeps its remax meaning is **structural navigation** — `]` / `[`
+hunks, `)` / `(` files, `{` / `}` the tray, `'` back to the hunk under
+review (nearly what vi's `''` does anyway), `Tab`, `Ctrl-p`, `:`. That
+is the tool's own vocabulary rather than the editor's; vi's sentence and
+paragraph motions are the price. Everything else in the buffer is vi's:
+`?` searches backward, `X` deletes leftward, and `E` is the WORD motion
+(`Space e` opens `$EDITOR` here).
+
+Not implemented, and unlikely to be: registers (`"a`), marks and the
+jumplist, blockwise visual (the selection model is char- or line-wise
+only), and `R` replace mode.
 
 ## Emacs keys
 
@@ -314,6 +350,7 @@ so agents pick it up.
 every key optional (defaults shown):
 
 ```toml
+keys = helix          # helix | vi | emacs
 scrolloff = 5         # rows kept visible around the cursor
 note-wrap = 58        # auto-fill column in the note popup
 note-on-flag = 1      # ! and ? open the note popup immediately
@@ -322,7 +359,8 @@ piece-min = 6         # smaller pieces merge forward (within a function)
 piece-max = 32        # bigger pieces keep splitting
 ```
 
-`keys = helix` (default) or `keys = emacs` picks the keybinding family.
+`keys = helix` (default), `keys = vi`, or `keys = emacs` picks the
+keybinding family.
 Every setting can also be changed live from inside the session:
 `:set` lists current values, `:set KEY` shows one, and `:set KEY VALUE`
 applies immediately (split knobs re-split on the spot) and persists to
@@ -421,8 +459,9 @@ a scratch venv on first run. To eyeball or restage the state by hand,
 
 ## Known v1 edges
 
-- Word motions are line-local; the helix subset is deliberately small
-  ("finer points to be negotiated").
+- Word motions are line-local in the helix keymap; that subset is
+  deliberately small ("finer points to be negotiated"). The vi keymap's
+  motions do cross lines.
 - Files without a trailing newline gain one on first write.
 - The line being edited shows plain (uncolored) while insert mode is
   active; colors return on Esc when the full tree-sitter pass reruns.

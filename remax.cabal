@@ -111,6 +111,7 @@ executable remax
       Remax.Tree
       Remax.TreeSitter
       Remax.UI
+      Remax.Vi
       Remax.Zipper
       Paths_remax
   autogen-modules:

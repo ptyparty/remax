@@ -156,6 +156,7 @@ import Remax.Store
 import Remax.Theme
 import Remax.Tree
 import qualified Remax.TreeSitter as TS
+import Remax.Vi (ViKeys, ViResult (..), handleVi, viBusy, viIdle, viLabel)
 
 data Name = BodyVP | TrayVP | TheCursor
   deriving (Eq, Ord, Show)
@@ -266,6 +267,8 @@ data St = St
   , stCmdRefs :: [Text]
   , stPromptCycle :: Maybe (Text, Int) -- Tab cycling: typed base + applied index
   , stEmacsPrefix :: Maybe Char -- a pending C-c / C-x chord (emacs keymap)
+  , stVi :: ViKeys -- a half-typed vi command: count, operator, what it awaits
+  , stSearchDir :: Int -- which way / (or vi's ?) last searched: 1 or -1
   , stDeferAdvance :: Bool -- hold the post-mark jump until the note popup closes
   , stAltFile :: Maybe (FilePath, Int) -- where Space a bounces back to
   , stAnchor :: Maybe (FilePath, Int) -- the hunk under review; ' returns here
@@ -470,6 +473,8 @@ runReview mode root roots = do
           , stCmdRefs = []
           , stPromptCycle = Nothing
           , stEmacsPrefix = Nothing
+          , stVi = viIdle
+          , stSearchDir = 1
           , stDeferAdvance = False
           , stAltFile = Nothing
           , stAnchor = Nothing
@@ -928,7 +933,8 @@ draw st =
     rebaseRows = case stRebase st of
       Just rb -> [rebaseBar rb]
       Nothing -> [gitBar st]
-    helpRows = if stHelp st then [helpLayer] else []
+    helpRows =
+      if stHelp st then [helpLayer (cfgKeys (stConfig st))] else []
     infoRows = case stInfoPopup st of
       Just (title, infoBody) -> [infoPopupLayer title infoBody]
       Nothing -> []
@@ -1054,30 +1060,167 @@ infoPopupLayer title body =
 -- description — but the keys had nowhere to be discovered, so this is
 -- mostly keys, grouped by what you are trying to do rather than
 -- alphabetically.
-helpGroups :: [(Text, [(Text, Text)])]
-helpGroups =
+-- The keys differ by family, so the sheet does too — an emacs or vi
+-- session showing helix's keys would be worse than no sheet at all.
+helpGroups :: KeyMode -> [(Text, [(Text, Text)])]
+helpGroups mode =
+  (reviewGroup mode : sayingGroup : editingGroups mode)
+    ++ aroundGroups mode
+
+sayingGroup :: (Text, [(Text, Text)])
+sayingGroup =
+  ( "saying something"
+  ,
+    [ (":note TEXT", "a one-line note on what you marked")
+    , (":note", "the popup, with the thread so far")
+    , ("\9251 u", "drop the conversation here")
+    ]
+  )
+
+aroundGroups :: KeyMode -> [(Text, [(Text, Text)])]
+aroundGroups mode =
   [
-    ( "review"
+    ( "getting around"
     ,
-      [ ("\9166", "accept the selection as reviewed")
-      , ("!", "flag it — come back to this")
-      , ("?", "question it — explain or fix")
-      , ("X", "select the whole hunk")
-      , ("] [", "next / previous hunk")
+      [ ("Ctrl-p", "find a file, flat and ranked")
+      , ("\9251 t", "the same dialog, as a tree")
+      , ("\8633", "in either: flat \8596 tree, filter kept")
+      , ("\9251 b", "files already open in the session")
+      , ("Tab", "collapse / expand the tray")
+      , ("{ }", "scroll the tray")
+      , -- vi wants E for the WORD motion, so the leader carries $EDITOR
+        (if mode == KeysVi then "\9251 e" else "E", "suspend into $EDITOR here")
+      , ("\9251 a", "the alternate file")
+      ]
+    )
+  ,
+    ( "the : line"
+    ,
+      [ (":", "commands — a bare : lists them all")
+      , (":base", "pick what to diff against")
+      , (":rebase", "review commit by commit")
+      , (":q", "quit")
+      ]
+    )
+  ]
+
+reviewGroup :: KeyMode -> (Text, [(Text, Text)])
+reviewGroup mode =
+  let
+    common =
+      [ ("] [", "next / previous hunk")
       , ("'", "back to the hunk under review")
       , ("\9251 h", "make this hunk the current one")
       , ("\9251 p", "show only hunks still pending")
       ]
+  in
+    ( "review"
+    , case mode of
+        KeysVi ->
+          [ ("\9251 \9166", "accept the selection as reviewed")
+          , ("\9251 !", "flag it — come back to this")
+          , ("\9251 q", "question it — explain or fix")
+          , ("\9251 x", "select the whole hunk")
+          ]
+            ++ common
+        KeysEmacs ->
+          [ ("C-c \9166", "accept the selection as reviewed")
+          , ("C-c !", "flag it — come back to this")
+          , ("C-c ?", "question it — explain or fix")
+          , ("C-c x", "select the whole hunk")
+          , ("C-c ] [", "next / previous hunk")
+          , ("C-c p", "show only hunks still pending")
+          ]
+        KeysHelix ->
+          [ ("\9166", "accept the selection as reviewed")
+          , ("!", "flag it — come back to this")
+          , ("?", "question it — explain or fix")
+          , ("X", "select the whole hunk")
+          ]
+            ++ common
     )
-  ,
-    ( "saying something"
-    ,
-      [ (":note TEXT", "a one-line note on what you marked")
-      , (":note", "the popup, with the thread so far")
-      , ("\9251 u", "drop the conversation here")
+
+editingGroups :: KeyMode -> [(Text, [(Text, Text)])]
+editingGroups mode =
+  case mode of
+    KeysVi ->
+      [
+        ( "moving"
+        ,
+          [ ("h j k l", "left down up right")
+          , ("w b e / W B E", "words / WORDs")
+          , ("f F t T ; ,", "find / till a character, repeat")
+          , ("0 ^ $", "line start / first non-blank / end")
+          , ("gg G %", "file start / end / matching bracket")
+          , (":42", "go to line 42")
+          , (") (", "next / previous file")
+          ]
+        )
+      ,
+        ( "operators"
+        ,
+          [ ("d c y > <", "delete change yank indent unindent")
+          , ("dw d2w dd", "operator, motion, count — or doubled")
+          , ("ciw di( ya\"", "text objects: w W p ( { [ < \" ' `")
+          , ("gu gU g~", "lower / upper / swap case")
+          , ("x X D C s S Y", "the usual shorthands")
+          ]
+        )
+      ,
+        ( "editing"
+        ,
+          [ ("i a I A o O", "enter insert")
+          , ("v V", "visual, visual-line")
+          , ("p P J r ~", "paste / join / replace char / case")
+          , ("u  Ctrl-r", "undo / redo")
+          , (".", "repeat the last change")
+          ]
+        )
+      ,
+        ( "finding"
+        ,
+          [ ("/ ? n N", "search forward / back, repeat")
+          , ("* #", "the word under the cursor, either way")
+          , ("\9251 /", "search the whole project")
+          ]
+        )
       ]
-    )
-  ,
+    KeysEmacs ->
+      [
+        ( "moving"
+        ,
+          [ ("C-f C-b C-n C-p", "left right down up")
+          , ("C-a C-e", "line start / end")
+          , ("M-f M-b", "words")
+          , ("M-< M->", "file start / end")
+          , (":42", "go to line 42")
+          , ("C-c ) (", "next / previous file")
+          ]
+        )
+      ,
+        ( "editing"
+        ,
+          [ ("C-space", "set the mark; the region is the selection")
+          , ("C-w M-w", "kill / copy the region")
+          , ("C-k C-y", "kill to end of line / yank")
+          , ("C-_", "undo")
+          , ("C-x C-s", "save (edits already write through)")
+          ]
+        )
+      ,
+        ( "finding"
+        ,
+          [ ("C-s", "search this file")
+          , ("M-x", "the command line")
+          , ("\9251 /", "search the whole project")
+          ]
+        )
+      ]
+    KeysHelix -> helixEditingGroups
+
+helixEditingGroups :: [(Text, [(Text, Text)])]
+helixEditingGroups =
+  [
     ( "moving"
     ,
       [ ("h j k l", "left down up right")
@@ -1120,36 +1263,16 @@ helpGroups =
       , ("\9251 /", "search the whole project")
       ]
     )
-  ,
-    ( "getting around"
-    ,
-      [ ("Ctrl-p", "find a file, flat and ranked")
-      , ("\9251 t", "the same dialog, as a tree")
-      , ("\8633", "in either: flat \8596 tree, filter kept")
-      , ("\9251 b", "files already open in the session")
-      , ("Tab", "collapse / expand the tray")
-      , ("{ }", "scroll the tray")
-      , ("E", "suspend into $EDITOR here")
-      ]
-    )
-  ,
-    ( "the : line"
-    ,
-      [ (":", "commands — a bare : lists them all")
-      , (":base", "pick what to diff against")
-      , (":rebase", "review commit by commit")
-      , (":q", "quit")
-      ]
-    )
   ]
 
 -- Two columns, split where the row counts come out even, so the sheet is
 -- one glance rather than a scroll.
-helpLayer :: Widget Name
-helpLayer =
+helpLayer :: KeyMode -> Widget Name
+helpLayer mode =
   Widget Greedy Greedy $ do
     ctx <- getContext
     let
+      groups = helpGroups mode
       colWidth = max 36 (min 50 (div (availWidth ctx - 24) 2))
       keyWidth = 13
       entryRow (key, desc) =
@@ -1161,12 +1284,12 @@ helpLayer =
         (withAttr floatTitleAttr (txt (" " <> name)) : map entryRow entries)
           ++ [txt " "]
       height g = length (snd g) + 2
-      half = div (sum (map height helpGroups)) 2
+      half = div (sum (map height groups)) 2
       -- take a group into the left column while doing so lands closer to
       -- the halfway mark than stopping would; a plain "stop once over
       -- half" split leaves the columns lopsided
-      pack used groups =
-        case groups of
+      pack used pending =
+        case pending of
           [] -> ([], [])
           (g : rest)
             | used == 0
@@ -1176,8 +1299,8 @@ helpLayer =
                 in
                   (g : a, b)
             | otherwise -> ([], g : rest)
-      (leftGroups, rightGroups) = pack 0 helpGroups
-      column groups = vBox (concatMap groupRows groups)
+      (leftGroups, rightGroups) = pack 0 groups
+      column shown = vBox (concatMap groupRows shown)
     render $
       floatFrame "keys" "any key closes" $
         hBox
@@ -1191,7 +1314,11 @@ helpLayer =
 -- but invisible precisely because those used to be two lists.
 spaceMenuEntries :: [(Text, Text, EventM Name St ())]
 spaceMenuEntries =
-  [ ("f", "find a file", openFileFinder)
+  [ ("\9166", "accept as reviewed", acceptSelection)
+  , ("!", "flag it", markThenNote Flagged)
+  , ("q", "question it", markThenNote Questioned)
+  , ("x", "select the hunk", selectCurrentHunk)
+  , ("f", "find a file", openFileFinder)
   , ("b", "open files", openBufferPicker)
   , ("t", "project tree", openTree)
   , ("R", "switch repository", openRepoPicker)
@@ -1715,7 +1842,8 @@ statusBar :: St -> Widget Name
 statusBar st =
   let
     middle = case stPrompt st of
-      Just (SearchPrompt input) -> txt ("/" <> input <> "\9612")
+      Just (SearchPrompt input) ->
+        txt (searchSigil st <> input <> "\9612")
       Just (CmdPrompt input) -> txt (":" <> input <> "\9612")
       Nothing -> withAttr msgAttr (txt (padT (stMsg st)))
     chip dotAttr label =
@@ -1724,15 +1852,28 @@ statusBar st =
         , withAttr dotAttr (txt "\9679")
         , withAttr statusAttr (txt (" " <> label <> " "))
         ]
+    -- what the buffer is waiting for, most specific first: the space
+    -- menu, an emacs chord, a half-typed vi command, insert, then plain
+    -- normal — with vi's own resting label saying which keymap you are in
     modeChip =
       if stSpace st
         then chip modeDotNorAttr "spc\8230"
         else case stEmacsPrefix st of
           Just pfx -> chip modeDotNorAttr ("C-" <> T.singleton pfx <> "\8230")
           Nothing ->
-            if cfgKeys (stConfig st) == KeysEmacs
-              then chip modeDotNorAttr "emx"
-              else case currentFileMay st of
+            case cfgKeys (stConfig st) of
+              KeysEmacs -> chip modeDotNorAttr "emx"
+              KeysVi -> case currentFileMay st of
+                Nothing -> chip modeDotNorAttr "vi"
+                Just fv -> case edMode (fvEd fv) of
+                  Insert -> chip modeDotInsAttr "ins"
+                  Normal -> case viLabel (stVi st) of
+                    Just p -> chip modeDotNorAttr (p <> "\8230")
+                    Nothing ->
+                      if edExtend (fvEd fv)
+                        then chip modeDotNorAttr "vis"
+                        else chip modeDotNorAttr "vi"
+              KeysHelix -> case currentFileMay st of
                 Nothing -> chip modeDotNorAttr "nor"
                 Just fv -> case edMode (fvEd fv) of
                   Insert -> chip modeDotInsAttr "ins"
@@ -1752,11 +1893,14 @@ statusBar st =
             withAttr trayDeclAttr (txt (" " <> T.take 32 (declName d) <> " \183"))
           Nothing -> txt ""
       Nothing -> txt ""
+    -- in vi the verbs sit under the leader, so the hint has to say so
+    verbHint = case cfgKeys (stConfig st) of
+      KeysVi -> "\9251\9166 accept · \9251! flag · \9251q question · \9251? keys "
+      _ -> "\9166 accept · ! flag · ? question · \9251 menu · \9251? keys "
     hint = case currentFileMay st of
       Nothing -> ": command · \9251? keys · :q quit "
       Just fv ->
-        (if fvStale fv then "hunks refresh on Esc · " else "")
-          <> "\9166 accept · ! flag · ? question · \9251 menu · \9251? keys "
+        (if fvStale fv then "hunks refresh on Esc · " else "") <> verbHint
     meterSeg =
       let
         pairs = allRunPairs st
@@ -1857,12 +2001,19 @@ handleEvent brickEvent =
 handleSpaceKey :: V.Event -> EventM Name St ()
 handleSpaceKey ev = do
   modify (\s -> s {stSpace = False})
-  case ev of
-    V.EvKey (V.KChar c) [] ->
-      case find (\(key, _, _) -> key == T.singleton c) spaceMenuEntries of
+  let
+    -- the table is keyed by what the menu prints, so Enter has to become
+    -- its own glyph to find its row
+    typed = case ev of
+      V.EvKey (V.KChar c) [] -> Just (T.singleton c)
+      V.EvKey V.KEnter [] -> Just "\9166"
+      _ -> Nothing
+  case typed of
+    Nothing -> pure ()
+    Just key ->
+      case find (\(k, _, _) -> k == key) spaceMenuEntries of
         Just (_, _, action) -> action
         Nothing -> pure ()
-    _ -> pure ()
 
 togglePendingOnly :: EventM Name St ()
 togglePendingOnly = do
@@ -1920,7 +2071,8 @@ handlePromptKey ev prompt =
         case prompt of
           SearchPrompt t -> do
             modify (\s -> s {stLastSearch = t, stGrepNav = Nothing})
-            unless (T.null t) (searchStep 1 t)
+            st <- get
+            unless (T.null t) (searchStep (stSearchDir st) t)
           CmdPrompt t -> runCommand t
       V.EvKey (V.KChar '\t') [] | isCmd -> promptComplete 1 input
       V.EvKey V.KBackTab [] | isCmd -> promptComplete (-1) input
@@ -1951,9 +2103,10 @@ handleModalKey ev = do
     -- the kill slot is session state: whatever was yanked anywhere is
     -- pasteable here
     ed = (fvEd fv) {edKill = stKill st}
-  if cfgKeys (stConfig st) == KeysEmacs
-    then handleEmacsKey i ed ev
-    else handleHelixKey i fv ed ev
+  case cfgKeys (stConfig st) of
+    KeysEmacs -> handleEmacsKey i ed ev
+    KeysVi -> handleViKey i ed ev
+    KeysHelix -> handleHelixKey i fv ed ev
 
 -- Emacs keymap: editing chords go to Remax.Emacs; M-x and C-s open the
 -- prompts; C-c prefixes the review verbs (same letters as the helix
@@ -1968,8 +2121,7 @@ handleEmacsKey i ed ev = do
     Nothing ->
       case ev of
         V.EvKey (V.KChar 'x') [V.MMeta] -> openCmdPrompt
-        V.EvKey (V.KChar 's') [V.MCtrl] ->
-          modify (\s -> s {stPrompt = Just (SearchPrompt "")})
+        V.EvKey (V.KChar 's') [V.MCtrl] -> openSearchPrompt 1
         V.EvKey (V.KChar 'c') [V.MCtrl] ->
           modify (\s -> s {stEmacsPrefix = Just 'c'})
         V.EvKey (V.KChar 'x') [V.MCtrl] ->
@@ -2012,8 +2164,8 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'c') [] -> showCommitPopup
         V.EvKey (V.KChar '\'') [] -> jumpToAnchor
         V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
-        V.EvKey (V.KChar 'n') [] -> searchNext 1
-        V.EvKey (V.KChar 'N') [] -> searchNext (-1)
+        V.EvKey (V.KChar 'n') [] -> searchRepeat 1
+        V.EvKey (V.KChar 'N') [] -> searchRepeat (-1)
         V.EvKey (V.KChar 'f') [] -> openFileFinder
         V.EvKey (V.KChar 'b') [] -> openBufferPicker
         V.EvKey (V.KChar 'e') [] -> editCurrent
@@ -2023,31 +2175,37 @@ handleEmacsPrefixed pfx ev = do
           modify (\s -> s {stTray = not (stTray s)})
         _ -> pure ()
 
+-- Insert mode is the same in every modal keymap: type, and land the
+-- result back in the file view as cheaply as the edit allows — a
+-- same-shape edit patches one line rather than rebuilding the diff.
+handleInsertKey :: Int -> EdState -> V.Event -> EventM Name St ()
+handleInsertKey i ed ev =
+  case handleInsert ev ed of
+    InsertHandled edNext -> do
+      let
+        oldLs = bufferLines ed
+        newLs = bufferLines edNext
+      if newLs == oldLs
+        then setEd i edNext
+        else
+          if length newLs == length oldLs
+            then
+              modify
+                ( updateFile
+                    i
+                    (patchLine (fst (cursorRC edNext)) (currentLineOf edNext) . withEd edNext)
+                )
+            else rebuildWith i edNext
+    InsertExit edNext -> do
+      rebuildWith i edNext
+      applyToDisk i
+    InsertUnhandled -> pure ()
+
 handleHelixKey :: Int -> FileView -> EdState -> V.Event -> EventM Name St ()
 handleHelixKey i fv ed ev = do
   st <- get
   case edMode ed of
-    Insert ->
-      case handleInsert ev ed of
-        InsertHandled edNext -> do
-          let
-            oldLs = bufferLines ed
-            newLs = bufferLines edNext
-          if newLs == oldLs
-            then setEd i edNext
-            else
-              if length newLs == length oldLs
-                then
-                  modify
-                    ( updateFile
-                        i
-                        (patchLine (fst (cursorRC edNext)) (currentLineOf edNext) . withEd edNext)
-                    )
-                else rebuildWith i edNext
-        InsertExit edNext -> do
-          rebuildWith i edNext
-          applyToDisk i
-        InsertUnhandled -> pure ()
+    Insert -> handleInsertKey i ed ev
     -- a pending g/f/t prefix owns the next key outright; review keys
     -- must not steal its target character
     -- ga is review-level (goto alternate file), but the g prefix lives
@@ -2069,12 +2227,11 @@ handleHelixKey i fv ed ev = do
         V.EvKey (V.KChar 'R') [] -> clearVerdictBySelection
         V.EvKey (V.KChar ']') [] -> switchRun 1
         V.EvKey (V.KChar '[') [] -> switchRun (-1)
-        V.EvKey (V.KChar '/') [] ->
-          modify (\s -> s {stPrompt = Just (SearchPrompt "")})
+        V.EvKey (V.KChar '/') [] -> openSearchPrompt 1
         V.EvKey (V.KChar ':') [] -> openCmdPrompt
         V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
-        V.EvKey (V.KChar 'n') [] -> searchNext 1
-        V.EvKey (V.KChar 'N') [] -> searchNext (-1)
+        V.EvKey (V.KChar 'n') [] -> searchRepeat 1
+        V.EvKey (V.KChar 'N') [] -> searchRepeat (-1)
         V.EvKey (V.KChar '\'') [] -> jumpToAnchor
         V.EvKey (V.KChar 'X') [] -> selectCurrentHunk
         -- paste with an empty kill slot would be a silent no-op; the
@@ -2099,6 +2256,70 @@ handleHelixKey i fv ed ev = do
         V.EvKey (V.KChar '}') [] ->
           vScrollBy (viewportScroll TrayVP) 8
         _ -> deferToModal i ed ev
+
+-- Vi keymap: the buffer belongs to vi, and the review verbs live behind
+-- the Space leader the way the emacs keymap puts them behind C-c. What
+-- keeps its remax key is structural navigation — hunks, files, the tray,
+-- the anchor back to what is under review — because that is the tool's
+-- own vocabulary rather than the editor's, and vi's sentence and
+-- paragraph motions are a small price for it. Everything else is vi's:
+-- `?` searches backward, `X` deletes leftward, `E` is the WORD motion
+-- (Space e still opens $EDITOR here).
+handleViKey :: Int -> EdState -> V.Event -> EventM Name St ()
+handleViKey i ed ev = do
+  st <- get
+  case edMode ed of
+    Insert -> handleInsertKey i ed ev
+    -- a half-typed vi command owns the next keystroke outright, so `f]`
+    -- finds a bracket instead of walking to the next hunk, and `2` then
+    -- `}` counts rather than scrolling the tray
+    Normal | viBusy (stVi st) -> deferToVi i ed ev
+    Normal ->
+      case ev of
+        V.EvKey (V.KChar '\t') [] ->
+          modify (\s -> s {stTray = not (stTray s)})
+        V.EvKey (V.KChar ']') [] -> switchRun 1
+        V.EvKey (V.KChar '[') [] -> switchRun (-1)
+        V.EvKey (V.KChar ')') [] -> switchFile 1
+        V.EvKey (V.KChar '(') [] -> switchFile (-1)
+        V.EvKey (V.KChar '{') [] ->
+          vScrollBy (viewportScroll TrayVP) (-8)
+        V.EvKey (V.KChar '}') [] ->
+          vScrollBy (viewportScroll TrayVP) 8
+        V.EvKey (V.KChar '\'') [] -> jumpToAnchor
+        V.EvKey (V.KChar ':') [] -> openCmdPrompt
+        V.EvKey (V.KChar '/') [] -> openSearchPrompt 1
+        V.EvKey (V.KChar '?') [] -> openSearchPrompt (-1)
+        V.EvKey (V.KChar 'n') [] -> searchRepeat 1
+        V.EvKey (V.KChar 'N') [] -> searchRepeat (-1)
+        V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
+        V.EvKey (V.KChar '#') [] -> searchWordBackward
+        V.EvKey (V.KChar 'p') [V.MCtrl] -> openFileFinder
+        V.EvKey (V.KChar ' ') [] ->
+          modify (\s -> s {stSpace = True})
+        V.EvKey (V.KChar 'p') []
+          | T.null (edKill ed) ->
+              setMsg "kill slot is empty (y yanks) — the pending filter is Space p"
+        V.EvKey (V.KChar 'P') []
+          | T.null (edKill ed) ->
+              setMsg "kill slot is empty (y yanks) — the pending filter is Space p"
+        _ -> deferToVi i ed ev
+
+-- The vi layer's own state lives in St, so the result carries both a new
+-- key state and (when the command completed) a new buffer.
+deferToVi :: Int -> EdState -> V.Event -> EventM Name St ()
+deferToVi i ed ev = do
+  st <- get
+  case handleVi (stVi st) ev ed of
+    ViUnhandled -> pure ()
+    ViPending keys -> modify (\s -> s {stVi = keys})
+    ViDone keys edNext -> do
+      modify (\s -> s {stVi = keys})
+      if bufferLines edNext /= bufferLines ed
+        then do
+          rebuildWith i edNext
+          when (edMode edNext == Normal) (applyToDisk i)
+        else setEd i edNext
 
 deferToModal :: Int -> EdState -> V.Event -> EventM Name St ()
 deferToModal i ed ev =
@@ -2340,12 +2561,19 @@ switchRun d = do
 -- '*': prime the search with the selected text (single-line selections)
 -- or the identifier under the cursor, then jump to its next occurrence.
 searchWordUnderCursor :: EventM Name St ()
-searchWordUnderCursor = do
+searchWordUnderCursor = searchWordDir 1
+
+-- vi's '#': the same needle, walked the other way.
+searchWordBackward :: EventM Name St ()
+searchWordBackward = searchWordDir (-1)
+
+searchWordDir :: Int -> EventM Name St ()
+searchWordDir dir = do
   st <- get
   let
     ed = fvEd (currentFile st)
     ls = bufferLines ed
-    lineAt r = fromMaybe "" (safeIdx ls r)
+    rowText r = fromMaybe "" (safeIdx ls r)
     -- only a deliberate v-extend selection overrides the cursor word;
     -- the incidental selections that w/e-style motions leave behind drag
     -- neighboring punctuation along and are not what * means
@@ -2355,14 +2583,14 @@ searchWordUnderCursor = do
         then Nothing
         else
           let
-            l = lineAt lr
+            l = rowText lr
           in
             Just (T.take (hc + 1 - lc) (T.drop lc l))
     isIdent ch = isAlphaNum ch || ch == '_' || ch == '\''
     wordNeedle =
       let
         (row, col) = cursorRC ed
-        l = lineAt row
+        l = rowText row
         -- on punctuation, scan forward to the next word on the line
         -- (vim's * does the same) rather than giving up
         effCol =
@@ -2383,8 +2611,26 @@ searchWordUnderCursor = do
   case selectionNeedle <|> wordNeedle of
     Nothing -> modify (\s -> s {stMsg = "no word under cursor"})
     Just needle -> do
-      modify (\s -> s {stLastSearch = needle, stGrepNav = Nothing})
-      searchStep 1 needle
+      modify
+        (\s -> s {stLastSearch = needle, stGrepNav = Nothing, stSearchDir = dir})
+      searchStep dir needle
+
+-- `/` searches forward and vi's `?` backward; the prompt wears whichever
+-- sigil opened it, and n/N repeat along that grain rather than always
+-- downward. In the keymaps with no `?`, the direction is always forward
+-- and this is exactly the old behavior.
+openSearchPrompt :: Int -> EventM Name St ()
+openSearchPrompt dir =
+  modify (\s -> s {stPrompt = Just (SearchPrompt ""), stSearchDir = dir})
+
+searchSigil :: St -> Text
+searchSigil st = if stSearchDir st < 0 then "?" else "/"
+
+-- n keeps the search's own direction, N reverses it.
+searchRepeat :: Int -> EventM Name St ()
+searchRepeat sense = do
+  st <- get
+  searchNext (sense * stSearchDir st)
 
 -- n/N: when the last search came from the grep picker, walk its hit
 -- list across files without re-searching; otherwise repeat the in-file
@@ -3286,7 +3532,7 @@ cmdCandidates st input =
     case T.words done of
       [] -> prefixed (map (\(n, _, _) -> n) commandTable)
       ["set"] -> prefixed settingNames
-      ["set", "keys"] -> prefixed ["helix", "emacs"]
+      ["set", "keys"] -> prefixed keyModeNames
       ["set", "note-on-flag"] -> prefixed ["0", "1"]
       ["resolve"] -> prefixed ["all"]
       [cmd] -> case argKindOf cmd of
@@ -3489,7 +3735,7 @@ settingNames =
 settingValue :: Config -> Text -> Text
 settingValue cfg key =
   case key of
-    "keys" -> if cfgKeys cfg == KeysEmacs then "emacs" else "helix"
+    "keys" -> keyModeToText (cfgKeys cfg)
     "scrolloff" -> tshow (cfgScrolloff cfg)
     "note-wrap" -> tshow (cfgNoteWrap cfg)
     "note-on-flag" -> if cfgNoteOnFlag cfg then "1" else "0"
@@ -3532,9 +3778,10 @@ applySet key val = do
     splitWith f = f (cfgSplit cfg)
   case key of
     "keys"
-      | val == "helix" -> finish cfg {cfgKeys = KeysHelix} (pure ())
-      | val == "emacs" -> finish cfg {cfgKeys = KeysEmacs} (pure ())
-      | otherwise -> setMsg "keys = helix | emacs"
+      | val `elem` keyModeNames || val == "vim" ->
+          -- switching family mid-command would strand a half-typed one
+          finish cfg {cfgKeys = keyModeFromText val} (modify (\s -> s {stVi = viIdle}))
+      | otherwise -> setMsg ("keys = " <> T.intercalate " | " keyModeNames)
     "scrolloff" -> withInt (\n -> cfg {cfgScrolloff = max 0 n}) (pure ())
     "note-wrap" -> withInt (\n -> cfg {cfgNoteWrap = max 20 n}) (pure ())
     "note-on-flag" ->
@@ -3742,7 +3989,12 @@ amendHead = do
         ls = if T.null (T.strip msg) then [""] else T.lines msg
         ed = newEdState 0 ls
       modify
-        (\s -> s {stNotePopup = Just (NotePopup ed (AmendMessage folding))})
+        ( \s ->
+            s
+              { stNotePopup = Just (NotePopup ed (AmendMessage folding))
+              , stVi = viIdle
+              }
+        )
 
 applyAmendMessage :: [FilePath] -> Text -> EventM Name St ()
 applyAmendMessage folding text = do
@@ -3949,7 +4201,8 @@ openNotePopup = do
             { edZipper = Z.moveCursor (lastRow, lastCol) (edZipper ed0)
             , edMode = Insert
             }
-      modify (\s -> s {stNotePopup = Just (NotePopup ed1 (NoteFor keys))})
+      modify
+        (\s -> s {stNotePopup = Just (NotePopup ed1 (NoteFor keys)), stVi = viIdle})
 
 setNotePopupEd :: EdState -> EventM Name St ()
 setNotePopupEd ed =
@@ -3971,7 +4224,7 @@ handleNotePopupKey ev np0 = do
       NoteFor _ -> cfgNoteWrap (stConfig st0)
       AmendMessage _ -> 72
     saveBuffer = do
-      modify (\s -> s {stNotePopup = Nothing})
+      modify (\s -> s {stNotePopup = Nothing, stVi = viIdle})
       let
         text = T.strip (T.intercalate "\n" (bufferLines (npEd np)))
       case npPurpose np of
@@ -3983,7 +4236,8 @@ handleNotePopupKey ev np0 = do
     -- discard works from either popup mode; nobody should need to leave
     -- insert just to bail out
     V.EvKey (V.KChar 'c') [V.MCtrl] -> do
-      modify (\s -> s {stNotePopup = Nothing, stMsg = discardMsg})
+      modify
+        (\s -> s {stNotePopup = Nothing, stMsg = discardMsg, stVi = viIdle})
       runDeferredAdvance
     _ ->
       case edMode (npEd np) of
@@ -3992,18 +4246,40 @@ handleNotePopupKey ev np0 = do
             InsertHandled ed -> setNotePopupEd (wrapNoteLine wrapCol ed)
             InsertExit ed -> setNotePopupEd ed
             InsertUnhandled -> pure ()
+        -- a half-typed vi command owns its next key here too, so `f⏎`
+        -- looks for a character instead of posting the note
+        Normal
+          | cfgKeys (stConfig st0) == KeysVi
+          , viBusy (stVi st0) ->
+              notePopupVi st0 np ev
         Normal ->
           case ev of
             V.EvKey V.KEnter [] -> saveBuffer
             -- Esc from insert lands here in the popup's normal mode; Esc
             -- again cancels the dialog outright
             V.EvKey V.KEsc [] -> do
-              modify (\s -> s {stNotePopup = Nothing, stMsg = discardMsg})
+              modify
+                (\s -> s {stNotePopup = Nothing, stMsg = discardMsg, stVi = viIdle})
               runDeferredAdvance
+            -- the popup's normal mode follows the session's keymap, so a
+            -- vi user gets vi here too; emacs is modeless and never
+            -- reaches this branch
             _ ->
-              case handleNormal ev (npEd np) of
-                Just ed -> setNotePopupEd ed
-                Nothing -> pure ()
+              case cfgKeys (stConfig st0) of
+                KeysVi -> notePopupVi st0 np ev
+                _ ->
+                  case handleNormal ev (npEd np) of
+                    Just ed -> setNotePopupEd ed
+                    Nothing -> pure ()
+
+notePopupVi :: St -> NotePopup -> V.Event -> EventM Name St ()
+notePopupVi st np ev =
+  case handleVi (stVi st) ev (npEd np) of
+    ViUnhandled -> pure ()
+    ViPending keys -> modify (\s -> s {stVi = keys})
+    ViDone keys ed -> do
+      modify (\s -> s {stVi = keys})
+      setNotePopupEd ed
 
 -- Auto-fill for the note popup: typing past the popup width breaks the
 -- line at the last space, and the cursor rides the remainder down.

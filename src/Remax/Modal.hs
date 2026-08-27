@@ -5,6 +5,13 @@
 -- makes every motion extend, `x` selects lines, and d/c act on whatever
 -- is selected. Insert is entered by i/a/I/A/o/O/c; undo is a bounded
 -- stack of zipper snapshots, one per insert session or structural edit.
+--
+-- It is also the shared editing engine underneath the other keymap
+-- families: `handleNormal` is helix's own grammar, but the verbs below it
+-- (deleteSel, changeSel, yankSel, indentLines, …) all act on whatever
+-- edSelAnchor/edSelKind say, so Remax.Vi drives the same verbs by
+-- building the selection operator-first and Remax.Emacs by building it
+-- from the mark.
 module Remax.Modal
   ( Mode (..)
   , SelKind (..)
@@ -14,14 +21,32 @@ module Remax.Modal
   , newEdState
   , bufferLines
   , cursorRC
+  , lineAt
   , plainMove
   , greedyWrap
   , selectionRows
   , charSelection
+  , collapse
+  , selectLine
   , hasPending
   , pendingLabel
   , handleNormal
   , handleInsert
+  , deleteSel
+  , changeSel
+  , yankSel
+  , pasteSel
+  , indentLines
+  , joinLines
+  , toggleCase
+  , mapSelChars
+  , replaceSel
+  , openLine
+  , enterInsert
+  , deleteCharRange
+  , replaceRows
+  , undo
+  , redo
   ) where
 
 import Data.Char (isLower, isSpace, isUpper, toLower, toUpper)
@@ -813,10 +838,23 @@ greedyWrap w =
     go
 
 -- Swap the case of every letter in the selection (char- or line-wise), or
--- of the char under the cursor. Length never changes, so the cursor and
--- the selection both survive in place.
+-- of the char under the cursor.
 toggleCase :: EdState -> EdState
-toggleCase st =
+toggleCase =
+  let
+    flipChar c
+      | isUpper c = toLower c
+      | isLower c = toUpper c
+      | otherwise = c
+  in
+    mapSelChars flipChar
+
+-- Rewrite every character of the selection (char- or line-wise), or the
+-- char under the cursor, through the given function. Length never
+-- changes, so the cursor and the selection both survive in place. vi's
+-- gu/gU ride on this alongside helix's ~.
+mapSelChars :: (Char -> Char) -> EdState -> EdState
+mapSelChars f st =
   let
     (cr, cc) = cursorRC st
     ls = bufferLines st
@@ -832,16 +870,12 @@ toggleCase st =
           case charSelection st of
             Just spanPair -> spanPair
             Nothing -> ((cr, cc), (cr, cc))
-    flipChar c
-      | isUpper c = toLower c
-      | isLower c = toUpper c
-      | otherwise = c
     flipSpan s e l =
       let
         (pre, rest) = T.splitAt s l
         (mid, post) = T.splitAt (e + 1 - s) rest
       in
-        pre <> T.map flipChar mid <> post
+        pre <> T.map f mid <> post
     flipLine (r, l)
       | r < lr || r > hr = l
       | otherwise =
