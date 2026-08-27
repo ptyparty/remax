@@ -90,7 +90,8 @@ Everything still works while polling — it just arrives a beat late.
   count — and `]`/`[` skip them; flagged and
   questioned hunks still count as pending — they need another look — so
   they stay listed and navigable. `Space p` switches to showing (and walking)
-  every hunk. The current hunk always shows either
+  every hunk, and `Space k` narrows to code-only or comment-only hunks.
+  The current hunk always shows either
   way. `{` / `}` scroll the tray; it auto-centers on the current hunk
   when you jump. Long paths compress like `s/R/Quote.hs` so the file
   name always survives.
@@ -154,11 +155,12 @@ Normal mode:
 | `u` | undo |
 | `y` | yank the selection (or cursor cell) — line-wise for `x` selections; the yank slot is session-wide, so paste works across files (and the note popup) |
 | `p` / `P` | paste after / before: whole lines below/above for a line-wise yank, after/at the cursor otherwise; the paste is selected |
-| `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `n` note popup, `e` `$EDITOR` here, `p` pending filter, `u` resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
+| `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `n` note popup, `e` `$EDITOR` here, `p` pending filter, `k` code / comment filter, `u` resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
 | `.` | repeat the last insert session (the entering command plus what was typed), helix-style — `c`-fix-`Esc` then `.` applies the same change at the cursor |
 | `Enter` | **accept the selection as reviewed** — a selection is required, so what you accept is always visibly highlighted (`X Enter` for the hunk you're looking at). Completing a hunk jumps to the next pending one; a partial mark steps to the next line |
 | `!` / `?` | flag-to-return-to / question — the selection's lines, or the whole current hunk with none. The note popup opens immediately for the reason (`note-on-flag = 0` in the config turns that off); discarding keeps the mark, and the jump to the next hunk waits until the popup closes |
 | `]` / `[` | next / previous hunk, crossing file boundaries |
+| `Space k` | cycle what `]`/`[` and auto-advance walk: every hunk → only hunks that touch **code** → only hunks that are all **comment** (`:filter all\|code\|comments` names one outright). Reading a branch's prose and reading its logic are different passes. A hunk counts as comment when every non-blank line it changes is a line comment, opens a block comment, or sits inside one — so a hunk that adds a comment *beside* a code change is code. Independent of the pending filter, so "the code hunks nobody has looked at yet" is the two together; the header says which filter is on, and an exhausted walk says which one emptied it |
 | `/`, `n` / `N` | search the file (literal, helix-shaped: the match becomes the selection); repeat forward / back, wrapping |
 | `Space /` | project-wide search (`git grep` behind the picker; also `:grep TEXT`): type, pick a hit, Enter jumps to the file and line with the match selected — and `n`/`N` then walk the **hit list across files** without re-searching (a fresh `/` or `*` returns them to in-file duty). The results box stretches to the pane width so lines keep their context |
 | `:` | the command line — see below |
@@ -268,6 +270,7 @@ note popup keeps its modal keys in either keymap.
 | `:note` | open the note popup — a small modal buffer (full editing keys); text auto-wraps; `⏎` in its normal mode saves, `Ctrl-c` (any mode) or `Esc` in its normal mode discards, saving empty clears the whole conversation. Notes are a **conversation**, and the popup shows it: the thread so far sits above what you're typing (`≡ you`, `↪ them`, oldest first, the newest kept when a long thread won't fit), the frame names the line you're annotating, and the title and the verb say which of the three things is happening — a new `note`, `editing yours` when your post is the newest and reopens for rewriting, or `reply to NAME` with `⏎ post` once someone has answered. From any line of a hunk that carries a conversation, `:note` continues that thread |
 | `:unnote` / `:resolve` | drop the whole conversation from the same target |
 | `:resolve all` | sweep every **answered** conversation in the repository — any thread whose newest post isn't yours clears; threads awaiting an answer stay |
+| `:filter all` / `:filter code` / `:filter comments` | which hunks `]`/`[` and auto-advance walk; bare `:filter` cycles (also `Space k`) |
 | `:accept PATH` | mark every hunk under a directory (or in one file) reviewed — the bulk verb for generated code; matching is by path component |
 | `:open PATH` / `:close` | open any repository file in the session / drop it again |
 | `:repo` | switch which repository the session is looking at (also `Space R`, or `:repo NAME`). Start remax in a directory that *holds* checkouts rather than being one — a story directory of worktrees, say — and it opens the first and offers the rest here, with each row's branch and state (`clean`, `3 changed`, `rebasing 2/7`, `CONFLICT`) so you can see which one wants you. Your place in a repository is remembered, so leaving one mid-rebase and coming back lands you on the same hunk with the rebase still in progress — that state lives in `.git` and is read back on arrival, while buffers are re-read from disk, since the reason you stepped away may well have been to let an agent work there |
@@ -462,6 +465,10 @@ a scratch venv on first run. To eyeball or restage the state by hand,
 - Word motions are line-local in the helix keymap; that subset is
   deliberately small ("finer points to be negotiated"). The vi keymap's
   motions do cross lines.
+- The code/comment filter classifies textually (comment leaders and
+  block-comment tracking), not by tree-sitter: scoped tokens exist only
+  for files that have been displayed, and never for the removed side of
+  a diff, which is exactly the set the filter has to walk.
 - Files without a trailing newline gain one on first write.
 - The line being edited shows plain (uncolored) while insert mode is
   active; colors return on Esc when the full tree-sitter pass reruns.
