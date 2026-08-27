@@ -999,9 +999,11 @@ applyToSelection op ed =
   case op of
     -- vi's delete and change fill the unnamed register on their way out,
     -- which is what makes `dd`-then-`p` move a line. helix's d/c do not,
-    -- so the yank has to happen here rather than in the shared verb.
-    OpDelete -> deleteSel (yankSel ed)
-    OpChange -> changeSel (yankSel ed)
+    -- so the yank has to happen here rather than in the shared verb —
+    -- quietly, since removing a line is not a request to put it on the
+    -- system clipboard.
+    OpDelete -> deleteSel (yankInto ed)
+    OpChange -> changeSel (yankInto ed)
     -- vi leaves the cursor at the start of a yank and drops the
     -- selection; helix's yankSel keeps it highlighted
     OpYank ->

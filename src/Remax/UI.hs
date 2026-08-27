@@ -120,6 +120,7 @@ import System.Process
   )
 import System.Timeout (timeout)
 
+import Remax.Clipboard
 import Remax.Config
 import Remax.DiffModel
 import Remax.Emacs (handleEmacs)
@@ -307,6 +308,8 @@ data St = St
   , stGrepNav :: Maybe (Text, [(FilePath, Int)], Int) -- grep hits n/N walk
   , stInfoPopup :: Maybe (Text, Text) -- read-only text popup: title, body
   , stKill :: Text -- session-wide kill/yank slot, shared across files
+  , stClip :: Clipboard -- how this machine reaches the system clipboard
+  , stClipSent :: Text -- the text remax and the clipboard last agreed on
   , stPolling :: Bool -- the native watcher was refused; polling instead
   , stBranch :: Maybe Text -- Nothing when HEAD is detached
   , stHead :: Maybe (Text, Text) -- (short sha, subject) of HEAD
@@ -453,6 +456,13 @@ runReview mode root roots = do
           IO (Either IOException FS.StopListening)
       )
     forM_ files (watchDirOnce . fileDir root . fvPath)
+    -- probed once: doing it per yank would be a process spawn a keystroke
+    clip <- discoverClipboard
+    -- and read once on the way in, so whatever was already on the
+    -- clipboard counts as seen. Without this the first paste of a
+    -- session would treat months-old clipboard contents as newer than
+    -- the line you just cut, and `dd p` would not put the line back.
+    alreadyThere <- readClipboard clip
     let
       pendingCount =
         length
@@ -514,6 +524,8 @@ runReview mode root roots = do
           , stGrepNav = Nothing
           , stInfoPopup = Nothing
           , stKill = T.empty
+          , stClip = clip
+          , stClipSent = fromMaybe T.empty alreadyThere
           , stPolling = polling
           , stBranch = branch0
           , stHead = head0
@@ -2210,15 +2222,24 @@ handleEmacsKey i ed ev = do
           modify (\s -> s {stEmacsPrefix = Just 'c'})
         V.EvKey (V.KChar 'x') [V.MCtrl] ->
           modify (\s -> s {stEmacsPrefix = Just 'x'})
-        _ ->
-          case handleEmacs ev ed of
-            Just edNext ->
-              if bufferLines edNext /= bufferLines ed
-                then do
-                  rebuildWith i edNext
-                  applyToDisk i
-                else setEd i edNext
-            Nothing -> pure ()
+        -- C-y is emacs's paste, so it consults the clipboard the way
+        -- p does in the modal keymaps
+        V.EvKey (V.KChar 'y') [V.MCtrl] -> do
+          pullClipboard
+          refreshed <- get
+          emacsEdit i ed {edKill = stKill refreshed} ev
+        _ -> emacsEdit i ed ev
+
+emacsEdit :: Int -> EdState -> V.Event -> EventM Name St ()
+emacsEdit i ed ev =
+  case handleEmacs ev ed of
+    Just edNext ->
+      if bufferLines edNext /= bufferLines ed
+        then do
+          rebuildWith i edNext
+          applyToDisk i
+        else setEd i edNext
+    Nothing -> pure ()
 
 handleEmacsPrefixed :: Char -> V.Event -> EventM Name St ()
 handleEmacsPrefixed pfx ev = do
@@ -2319,14 +2340,8 @@ handleHelixKey i fv ed ev = do
         V.EvKey (V.KChar 'N') [] -> searchRepeat (-1)
         V.EvKey (V.KChar '\'') [] -> jumpToAnchor
         V.EvKey (V.KChar 'X') [] -> selectCurrentHunk
-        -- paste with an empty kill slot would be a silent no-op; the
-        -- message also catches fingers trained on the old p toggle
-        V.EvKey (V.KChar 'p') []
-          | T.null (edKill ed) ->
-              setMsg "kill slot is empty (y yanks) — the pending filter is Space p"
-        V.EvKey (V.KChar 'P') []
-          | T.null (edKill ed) ->
-              setMsg "kill slot is empty (y yanks) — the pending filter is Space p"
+        V.EvKey (V.KChar 'p') [] -> pasteKey deferToModal i ev
+        V.EvKey (V.KChar 'P') [] -> pasteKey deferToModal i ev
         V.EvKey (V.KChar ' ') [] ->
           modify (\s -> s {stSpace = True})
         V.EvKey (V.KChar 'E') [] -> do
@@ -2382,12 +2397,8 @@ handleViKey i ed ev = do
         V.EvKey (V.KChar 'p') [V.MCtrl] -> openFileFinder
         V.EvKey (V.KChar ' ') [] ->
           modify (\s -> s {stSpace = True})
-        V.EvKey (V.KChar 'p') []
-          | T.null (edKill ed) ->
-              setMsg "kill slot is empty (y yanks) — the pending filter is Space p"
-        V.EvKey (V.KChar 'P') []
-          | T.null (edKill ed) ->
-              setMsg "kill slot is empty (y yanks) — the pending filter is Space p"
+        V.EvKey (V.KChar 'p') [] -> pasteKey deferToVi i ev
+        V.EvKey (V.KChar 'P') [] -> pasteKey deferToVi i ev
         _ -> deferToVi i ed ev
 
 -- The vi layer's own state lives in St, so the result carries both a new
@@ -2405,6 +2416,29 @@ deferToVi i ed ev = do
           rebuildWith i edNext
           when (edMode edNext == Normal) (applyToDisk i)
         else setEd i edNext
+
+-- A paste key, whichever keymap asked: consult the system clipboard,
+-- then hand the key to the editor with the slot already refreshed. An
+-- empty slot after that really is empty, and the message says which of
+-- the two reasons applies.
+pasteKey ::
+  (Int -> EdState -> V.Event -> EventM Name St ()) ->
+  Int ->
+  V.Event ->
+  EventM Name St ()
+pasteKey deliver i ev = do
+  pullClipboard
+  st <- get
+  let
+    ed = (fvEd (stFiles st !! i)) {edKill = stKill st}
+  if T.null (edKill ed)
+    then
+      setMsg
+        ( if clipboardReadable (stClip st)
+            then "nothing to paste — y yanks (the pending filter is Space p)"
+            else "nothing to paste — no clipboard helper here (wl-copy, xclip, xsel, pbcopy)"
+        )
+    else deliver i ed ev
 
 deferToModal :: Int -> EdState -> V.Event -> EventM Name St ()
 deferToModal i ed ev =
@@ -2475,6 +2509,7 @@ currentRunOf st i = do
 rebuildWith :: Int -> EdState -> EventM Name St ()
 rebuildWith i ed = do
   modify (\s -> s {stKill = edKill ed})
+  publishCopy ed
   st <- get
   let
     fv = (stFiles st !! i) {fvEd = ed}
@@ -2488,8 +2523,41 @@ rebuildWith i ed = do
     modify (\s -> s {stMsg = "diff too large — file shown as one hunk"})
 
 setEd :: Int -> EdState -> EventM Name St ()
-setEd i ed =
-  modify (\s -> updateFile i (withEd ed) s {stKill = edKill ed})
+setEd i ed = do
+  modify (\s -> updateFile i (withEd (ed {edCopied = False})) s {stKill = edKill ed})
+  publishCopy ed
+
+-- Every keymap's copy lands in the same slot, so this is the one place
+-- the system clipboard has to be told: whatever was just deliberately
+-- copied goes out. Deletes never set the flag, so pulling a line out of
+-- a file cannot clobber what you copied from somewhere else.
+publishCopy :: EdState -> EventM Name St ()
+publishCopy ed = do
+  st <- get
+  let
+    copied = edKill ed
+  when (edCopied ed && not (T.null copied) && copied /= stClipSent st) $ do
+    vty <- getVtyHandle
+    ok <-
+      liftIO
+        (writeClipboard (stClip st) (V.outputByteBuffer (V.outputIface vty)) copied)
+    when ok (modify (\s -> s {stClipSent = copied}))
+
+-- The other direction, run just before a paste: if the clipboard holds
+-- something remax did not put there, that is what you meant to paste.
+-- Text arriving from outside carries its own line-wise sense — a copy of
+-- whole lines ends in a newline, which is exactly what makes p put them
+-- on their own lines.
+pullClipboard :: EventM Name St ()
+pullClipboard = do
+  st <- get
+  arrived <- liftIO (readClipboard (stClip st))
+  case arrived of
+    Just text
+      | not (T.null text)
+      , text /= stClipSent st ->
+          modify (\s -> s {stKill = text, stClipSent = text})
+    _ -> pure ()
 
 updateFile :: Int -> (FileView -> FileView) -> St -> St
 updateFile i f st =
@@ -4315,12 +4383,16 @@ openNotePopup = do
         (\s -> s {stNotePopup = Just (NotePopup ed1 (NoteFor keys)), stVi = viIdle})
 
 setNotePopupEd :: EdState -> EventM Name St ()
-setNotePopupEd ed =
+setNotePopupEd ed = do
   modify $ \s ->
     s
-      { stNotePopup = fmap (\np -> np {npEd = ed}) (stNotePopup s)
+      { stNotePopup =
+          fmap (\np -> np {npEd = ed {edCopied = False}}) (stNotePopup s)
       , stKill = edKill ed
       }
+  -- the popup shares the session's yank slot, so a copy made in a note
+  -- reaches the clipboard the same way one made in the buffer does
+  publishCopy ed
 
 handleNotePopupKey :: V.Event -> NotePopup -> EventM Name St ()
 handleNotePopupKey ev np0 = do

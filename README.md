@@ -153,8 +153,8 @@ Normal mode:
 | `Q` | reflow to 80 columns, comment-aware: the selection, or the same-prefixed paragraph around the cursor, keeping indentation + comment leader (`--`, `-- \|`, `//`, `#`, `;;`…) on every line |
 | `r` + char | replace every character of the selection (or under the cursor) with that character, helix-style |
 | `u` | undo |
-| `y` | yank the selection (or cursor cell) — line-wise for `x` selections; the yank slot is session-wide, so paste works across files (and the note popup) |
-| `p` / `P` | paste after / before: whole lines below/above for a line-wise yank, after/at the cursor otherwise; the paste is selected |
+| `y` | yank the selection (or cursor cell) — line-wise for `x` selections; the yank slot is session-wide, so paste works across files (and the note popup), and it goes to the **system clipboard** too |
+| `p` / `P` | paste after / before: whole lines below/above for a line-wise yank, after/at the cursor otherwise; the paste is selected. Pastes the **system clipboard** when it holds something copied outside the session, the yank slot otherwise |
 | `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `n` note popup, `e` `$EDITOR` here, `p` pending filter, `k` code / comment filter, `u` resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
 | `.` | repeat the last insert session (the entering command plus what was typed), helix-style — `c`-fix-`Esc` then `.` applies the same change at the cursor |
 | `Enter` | **accept the selection as reviewed** — a selection is required, so what you accept is always visibly highlighted (`X Enter` for the hunk you're looking at). Completing a hunk jumps to the next pending one; a partial mark steps to the next line |
@@ -203,6 +203,34 @@ enter insert (`d`, undo) write immediately; ones that do (`c`, `o`)
 write when insert exits. There is no explicit save and no dirty state in
 normal mode — what you see in normal mode is what's on disk.
 
+## The system clipboard
+
+Copying reaches it and pasting reads it, in every keymap, with no keys to
+learn: `y` (vi's `y`/`yy`/`Y`, emacs's `M-w`) puts the text on the system
+clipboard as well as the session's own yank slot, and `p`/`P` (emacs's
+`C-y`) paste the clipboard when it holds something copied outside the
+session, the yank slot otherwise.
+
+**Deletes never touch it.** `d`, `x`, `c` — and vi's registers, which
+fill on delete so that `dd` then `p` moves a line — stay session-local,
+so ripping a line out of a file cannot clobber what you copied from a
+browser. Emacs's `C-w` and `C-k` are cuts by the same reasoning; `M-w` is
+the copy.
+
+The route is picked once at startup: `wl-copy`/`wl-paste` on Wayland,
+`pbcopy`/`pbpaste` on macOS, `xclip` or `xsel` on X11 — and with no
+helper (or no display server at all, which is what an ssh session looks
+like) copying falls back to **OSC 52**, the escape sequence the terminal
+itself forwards, so a yank still reaches the clipboard of whatever
+machine you are sitting at. That route is write-only: terminals that
+implement the read side almost all disable it, since it would let
+anything on the far end of a pipe read what you last copied. Pasting
+there falls back to the session slot, and a paste with nothing in either
+place says which of the two reasons applies.
+
+Terminal paste (`Ctrl-Shift-V`) is unaffected — bracketed paste has
+always worked in insert mode, and in normal mode `p` is the answer.
+
 ## Vi keys
 
 `keys = vi` in the config (or `:set keys vi`, live — `vim` works too)
@@ -216,7 +244,7 @@ drive; only the order of the keystrokes changes.
 | operators | `d` `c` `y` `>` `<`, and `gu` / `gU` / `g~` for case — over any motion (`dw`, `d$`, `dfx`), doubled for the line (`dd`, `cc`, `yy`, `>>`), with counts on either side (`d2w`, `2dd`) |
 | text objects | `iw aw iW aW ip ap` and the pairs `i( a( i{ a{ i[ a[ i< a< i" a" i' a'` (`ib`/`aB` alias the brackets) — so `ciw`, `di(`, `ya"` all work |
 | motions | `h j k l`, `w b e` / `W B E`, `ge` / `gE`, `0 ^ $`, `gg` / `G` (with a count: `23G`), `f F t T` with `;` / `,`, `%` to the matching bracket |
-| shorthands | `x X D C s S Y`, `p` / `P`, `J`, `r`, `~`, `u` / `Ctrl-r`, `.` |
+| shorthands | `x X D C s S Y`, `p` / `P`, `J`, `r`, `~`, `u` / `Ctrl-r`, `.` — `y` reaches the system clipboard, `d`/`c` fill the unnamed register only |
 | insert | `i a I A o O`; `Esc` returns to normal mode and writes the file, as everywhere else |
 | visual | `v` char-wise, `V` line-wise; motions extend, an operator acts on what is highlighted |
 | searching | `/` forward and `?` **backward** — the prompt wears the sigil it opened with, and `n` / `N` repeat along that grain. `*` / `#` take the word under the cursor either way |
@@ -245,7 +273,8 @@ buffer to modeless emacs editing: printable keys self-insert and write
 through on every edit. `C-f/b/n/p` and arrows move, `C-a`/`C-e` line
 ends, `M-f`/`M-b` words, `M-<`/`M->` file ends; `C-space` sets the mark
 and the region is the selection the review verbs consume; `C-w`/`M-w`
-kill/copy the region, `C-k` kills to end of line, `C-y` yanks,
+kill/copy the region (`M-w` also reaches the system clipboard; the cuts
+do not), `C-k` kills to end of line, `C-y` yanks,
 `C-_` (aka `C-/`) undoes, `C-g`/`Esc` clears the mark. `M-x` opens the
 command line, `C-s` the search prompt. Review verbs live behind the
 `C-c` prefix with the same letters as the helix keys — `C-c Enter`
@@ -462,6 +491,8 @@ a scratch venv on first run. To eyeball or restage the state by hand,
 
 ## Known v1 edges
 
+- Clipboard reads spawn the helper on each paste, so a wedged `xclip`
+  costs a two-second timeout once rather than a hung session.
 - Word motions are line-local in the helix keymap; that subset is
   deliberately small ("finer points to be negotiated"). The vi keymap's
   motions do cross lines.
