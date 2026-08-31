@@ -125,7 +125,8 @@ import Remax.Config
 import Remax.DiffModel
 import Remax.Emacs (handleEmacs)
 import Remax.Git
-  ( PathChange (..)
+  ( FileScope (..)
+  , PathChange (..)
   , PathStat (..)
   , RebaseStatus (..)
   , ReviewMode (..)
@@ -287,6 +288,7 @@ data St = St
   , stHls :: TS.HighlighterTable
   , stOnlyPending :: Bool -- hide/skip hunks that already have verdicts
   , stRunFilter :: RunFilter -- walk everything, only code, or only prose
+  , stFileScope :: FileScope -- does the file dialog list ignored files too
   , stRebase :: Maybe RebaseStatus -- a paused rebase the session is following
   , stWritten :: Set.Set FilePath -- files written since the last commit-shaped action
   , stLastMarked :: [Text] -- keys of the most recent verdict, for :note
@@ -503,6 +505,7 @@ runReview mode root roots = do
           , stHls = hls
           , stOnlyPending = True
           , stRunFilter = FilterAll
+          , stFileScope = VisibleFiles
           , stRebase = rebase0
           , stWritten = Set.empty
           , stLastMarked = []
@@ -1183,6 +1186,7 @@ aroundGroups mode =
       [ ("Ctrl-p", "find a file, flat and ranked")
       , ("\9251 t", "the same dialog, as a tree")
       , ("\8633", "in either: flat \8596 tree, filter kept")
+      , ("Ctrl-a", "in either: show the ignored files too")
       , ("\9251 b", "files already open in the session")
       , ("Tab", "collapse / expand the tray")
       , ("{ }", "scroll the tray")
@@ -3799,7 +3803,7 @@ cmdCandidates st input =
 openCmdPrompt :: EventM Name St ()
 openCmdPrompt = do
   st <- get
-  files <- liftIO (listFiles (stRoot st))
+  files <- liftIO (listFiles VisibleFiles (stRoot st))
   refs <- liftIO (listRefs (stRoot st))
   let
     dirs =
@@ -4927,26 +4931,54 @@ openTree = openTreeIn TreeHierarchy
 openFileFinder :: EventM Name St ()
 openFileFinder = openTreeIn TreeFlat
 
+-- What the dialog lists, under whatever scope the session is in. Two
+-- exclusions hide a file: git's own, and .remaxignore's — and showing
+-- everything means dropping both, since a reader asking for the ignored
+-- files does not care which list did the ignoring.
+treeSources :: St -> IO ([FilePath], Map.Map FilePath PathStat)
+treeSources st = do
+  let
+    root = stRoot st
+    scope = stFileScope st
+  ignores <- loadIgnores root
+  files <- listFiles scope root
+  stats <- pathStats (effectiveMode st) root
+  let
+    hide path = case scope of
+      AllFiles -> False
+      VisibleFiles -> ignoredPath ignores path
+  pure
+    ( filter (not . hide) files
+    , Map.filterWithKey (\p _ -> not (hide p)) stats
+    )
+
+-- The rows of a dialog whose file list has just been rebuilt: flat mode
+-- wants every path, the tree wants them shaped, and both want the change
+-- set folded in so a deleted file still has somewhere to sit.
+treeContents ::
+  [FilePath] ->
+  Map.Map FilePath PathStat ->
+  (TreeNode, [(FilePath, Maybe PathStat)], [FilePath])
+treeContents paths statPaths =
+  let
+    changed = Map.keys statPaths
+    flat =
+      map
+        (\p -> (p, Map.lookup p statPaths))
+        (Set.toList (Set.fromList (paths ++ changed)))
+  in
+    (buildTree paths statPaths, flat, changed)
+
 openTreeIn :: TreeMode -> EventM Name St ()
 openTreeIn wanted = do
   st <- get
+  (paths, statPaths) <- liftIO (treeSources st)
   let
-    root = stRoot st
-  ignores <- liftIO (loadIgnores root)
-  files <- liftIO (listFiles root)
-  stats <- liftIO (pathStats (effectiveMode st) root)
-  let
-    keep = filter (not . ignoredPath ignores)
-    paths = keep files
-    statPaths = Map.filterWithKey (\p _ -> not (ignoredPath ignores p)) stats
-    node = buildTree paths statPaths
+    (node, flat, changed) = treeContents paths statPaths
     -- open the directories a change lives in, and the ones leading to
     -- the file under review, so the diff is on screen with no keystrokes
-    changed = Map.keys statPaths
     here = maybe [] (\fv -> [fvPath fv]) (currentFileMay st)
     opened = Set.fromList (concatMap ancestorPaths (changed ++ here))
-    flat =
-      map (\p -> (p, Map.lookup p statPaths)) (Set.toList (Set.fromList (paths ++ changed)))
     view =
       TreeView
         { tvMode = wanted
@@ -5141,9 +5173,50 @@ handleTreeKey ev view = do
     -- spend here: a path containing one is a problem no keybinding can
     -- fix.)
     V.EvKey (V.KChar '\t') [] -> switchTreeMode view
+    -- the ignored files, and back. A modified key because every
+    -- printable one belongs to the filter.
+    V.EvKey (V.KChar 'a') [V.MCtrl] -> toggleTreeScope view
     V.EvKey V.KBS [] -> retype (T.dropEnd 1 (tvInput view))
     V.EvKey (V.KChar c) [] -> retype (T.snoc (tvInput view) c)
     _ -> pure ()
+
+-- Ctrl-a: take the exclusions off, and put them back. The dialog is a
+-- browser as much as a finder, and the file you want is now and then one
+-- that .gitignore or .remaxignore keeps out of the review — a generated
+-- parser, something under a build directory. Nothing else changes: an
+-- ignored file stays out of the change set, and this only governs what
+-- the list offers.
+--
+-- The filter, the unfolded directories and the row under the cursor all
+-- survive the flip, so it reads as the same list growing rather than a
+-- new dialog. The wider listing is only asked for when it is wanted,
+-- which matters in a repository whose ignored files outnumber the rest.
+toggleTreeScope :: TreeView -> EventM Name St ()
+toggleTreeScope view = do
+  before <- get
+  let
+    was = fmap trPath (treeSelected before view)
+  modify (\s -> s {stFileScope = flipScope (stFileScope s)})
+  st <- get
+  (paths, statPaths) <- liftIO (treeSources st)
+  let
+    (node, flat, _) = treeContents paths statPaths
+    next = view {tvRoot = node, tvAll = flat}
+    rows = treeVisible st next
+    landed = do
+      path <- was
+      findIndex ((== path) . trPath) rows
+    -- hiding again can take the selected row away with it, so a row that
+    -- did not survive leaves the cursor where it stood rather than past
+    -- the end of a shorter list
+    stayed = max 0 (min (tvSel view) (length rows - 1))
+  setTree next {tvSel = fromMaybe stayed landed}
+
+flipScope :: FileScope -> FileScope
+flipScope scope =
+  case scope of
+    VisibleFiles -> AllFiles
+    AllFiles -> VisibleFiles
 
 -- Flip the view, keeping the filter and the row. Coming back to the tree
 -- opens the ancestors of wherever flat mode left you, so the file you
@@ -5400,12 +5473,19 @@ treeLayer st view =
       -- what a row has to play with once the frame and the selection
       -- bar have taken theirs
       rowWidth = max treeNameW (boxWidth - 6)
+      -- the scope is worth saying outright: an empty-looking search is
+      -- a different thing when the ignored files are in the haystack
+      scoped = case stFileScope st of
+        AllFiles -> " (all)"
+        VisibleFiles -> ""
       counter =
-        if T.null (tvInput view)
-          then tshow (length (tvAll view)) <> " files"
-          else -- files that matched, not rows: the directories kept to
-          -- hold them are structure, not results
-            tshow (treeFileCount visible) <> "/" <> tshow (length (tvAll view))
+        ( if T.null (tvInput view)
+            then tshow (length (tvAll view)) <> " files"
+            else -- files that matched, not rows: the directories kept to
+            -- hold them are structure, not results
+              tshow (treeFileCount visible) <> "/" <> tshow (length (tvAll view))
+        )
+          <> scoped
       inputRow =
         hBox
           [ withAttr statusAttr (txt (" " <> tvInput view <> "\9612"))
@@ -5420,12 +5500,16 @@ treeLayer st view =
           then "esc closes"
           else "esc clears the filter"
       other = if flat then "tree" else "flat"
+      showing = case stFileScope st of
+        AllFiles -> "^a hide ignored \183 "
+        VisibleFiles -> "^a all \183 "
       hint =
         "\8593\8595 move \183 "
           <> folding
           <> "\9166 open \183 \8633 "
           <> other
           <> " \183 "
+          <> showing
           <> leaving
     render $
       floatFrame title hint $

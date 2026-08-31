@@ -12,6 +12,7 @@ module Remax.Git
   , branchRoot
   , trackedChanges
   , hasStagedChanges
+  , FileScope (..)
   , listFiles
   , listRefs
   , childRepos
@@ -124,14 +125,26 @@ looksBinary root path =
     bytes <- BS.hGet h 8000
     pure (BS.elem 0 bytes)
 
+-- Whether a listing stops at the files git is willing to talk about, or
+-- takes in the ignored ones too. Browsing is not reviewing: a build
+-- directory has no business in the change set, and every so often it is
+-- exactly the file you need to open.
+data FileScope = VisibleFiles | AllFiles
+  deriving (Eq, Show)
+
 -- Everything the repository considers a file worth seeing: tracked plus
--- untracked-unignored — the fuzzy finder's haystack.
-listFiles :: FilePath -> IO [FilePath]
-listFiles root = do
+-- untracked-unignored — the fuzzy finder's haystack. Under AllFiles the
+-- exclusions come off and the ignored files come with it.
+listFiles :: FileScope -> FilePath -> IO [FilePath]
+listFiles scope root = do
+  let
+    excluding = case scope of
+      VisibleFiles -> ["--exclude-standard"]
+      AllFiles -> []
   (code, out, _) <-
     readProcessWithExitCode
       "git"
-      ["-C", root, "ls-files", "--cached", "--others", "--exclude-standard"]
+      (["-C", root, "ls-files", "--cached", "--others"] ++ excluding)
       ""
   pure $ case code of
     ExitSuccess -> filter (not . null) (lines out)
