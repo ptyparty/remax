@@ -265,6 +265,7 @@ data FileView = FileView
   , fvEd :: EdState
   , fvRows :: [RowR]
   , fvRowCount :: !Int -- length fvRows; wanted twice a frame, so carried
+  , fvOrigin :: !Int -- first display row the body draws; see bodyWindow
   , fvRuns :: [Run]
   , fvToks :: [[Seg]]
   , fvStale :: Bool
@@ -749,6 +750,7 @@ loadOne cfg hls mode root path = do
             , fvEd = newEdState 0 newLs
             , fvRows = []
             , fvRowCount = 0
+            , fvOrigin = 0
             , fvRuns = []
             , fvToks = []
             , fvStale = False
@@ -1008,7 +1010,7 @@ app theme =
     { appDraw = draw
     , appChooseCursor = showFirstCursor
     , appHandleEvent =
-        \ev -> handleEvent ev >> ensureCurrentHighlighted
+        \ev -> handleEvent ev >> ensureCurrentHighlighted >> reanchorBody
     , appStartEvent = do
         vty <- getVtyHandle
         let
@@ -1698,6 +1700,42 @@ shortPath w path =
 windowRows :: Int
 windowRows = 300
 
+-- Write the window's origin back after an event, and move the viewport
+-- by the same amount so nothing jumps.
+--
+-- The origin only changes when the cursor has drifted near an edge of
+-- what is drawn; the rows on screen are the same rows either side of
+-- that, so the view must not move. brick's scroll offset is in window
+-- coordinates, and shifting the window by n rows moves everything on
+-- screen by n unless the offset is shifted with it.
+--
+-- Deliberate jumps (a hunk, a reload) set the origin themselves before
+-- placing the viewport, so by the time this runs there is nothing left
+-- to reconcile and it does nothing.
+reanchorBody :: EventM Name St ()
+reanchorBody = do
+  st <- get
+  case currentFileMay st of
+    Nothing -> pure ()
+    Just fv -> do
+      let
+        (_, origin) = bodyWindow st fv
+        moved = origin - fvOrigin fv
+      unless (moved == 0) $ do
+        modify (updateFile (stCurF st) (\f -> f {fvOrigin = origin}))
+        mvp <- lookupViewport BodyVP
+        case mvp of
+          Just vp -> setTop (viewportScroll BodyVP) (max 0 (_vpTop vp - moved))
+          Nothing -> pure ()
+
+-- How many display rows the body draws at once, and how close the cursor
+-- may come to an edge before the window is moved.
+windowSpan :: Int
+windowSpan = 2 * windowRows
+
+windowSlack :: Int
+windowSlack = windowRows `div` 2
+
 -- The display row the body is framed on, and the first row of the render
 -- window.
 --
@@ -1708,8 +1746,17 @@ windowRows = 300
 -- padding consumed the whole allowance and the real rows were cropped
 -- away, leaving a blank pane on any file whose current hunk sat past
 -- line 100000. Everything the body renders is therefore in window
--- coordinates, and the two places that scroll the viewport subtract the
--- same origin so they agree with what was drawn.
+-- coordinates, and the places that scroll the viewport subtract the same
+-- origin so they agree with what was drawn.
+--
+-- The origin has to hold still while the cursor moves, which is why it
+-- is carried on the FileView rather than derived from the cursor. An
+-- origin that slid with the cursor kept it a fixed distance into the
+-- window, so the visibility request never changed, brick never scrolled
+-- again, and the file slid upward under a cursor nailed to one screen
+-- line. So a stored origin is kept as long as the cursor stays clear of
+-- the window's edges, and only when it does not is the window moved to
+-- sit around the cursor again.
 bodyWindow :: St -> FileView -> (Int, Int)
 bodyWindow st fv =
   let
@@ -1724,8 +1771,14 @@ bodyWindow st fv =
       case findIndex (\r -> rNewRow r == Just curRow) rows of
         Just out -> out
         Nothing -> fromMaybe 0 (findIndex (\r -> rRunIx r == Just curH) rows)
+    held = fvOrigin fv
+    inside =
+      cursorOut >= held + windowSlack
+        && cursorOut <= held + windowSpan - windowSlack
+    -- clear of both edges, or already showing the top of the file
+    settled = inside || (held == 0 && cursorOut <= windowSpan - windowSlack)
   in
-    (cursorOut, max 0 (cursorOut - windowRows))
+    (cursorOut, if settled then held else max 0 (cursorOut - windowRows))
 
 -- Where each row's reviewer note (and any agent reply to it) should
 -- render: annotations apply to every line of their target, so
@@ -1787,7 +1840,7 @@ renderFile st fv =
     -- that carries it starts. lo is the body's origin: nothing above it
     -- is drawn, so the pane never asks brick for a row it cannot reach.
     (cursorOut, lo) = bodyWindow st fv
-    hi = min (fvRowCount fv) (cursorOut + windowRows)
+    hi = min (fvRowCount fv) (lo + windowSpan)
     -- one walk to the window, shared by everything that reads it
     fromLo = drop lo rows
     windowed = take (hi - lo) fromLo
@@ -2755,7 +2808,9 @@ scrollHunkIntoViewOf fv = do
         len = length runRows
         vpH = snd (_vpSize vp)
         -- the body draws from its window's first row, so the viewport's
-        -- coordinates are relative to that same origin
+        -- coordinates are relative to that same origin. A jump can land
+        -- anywhere, so the window is moved with it and written back here
+        -- rather than left for the drift check to discover.
         origin = snd (bodyWindow st fv)
         startIn = max 0 (start - origin)
         -- best-effort correction for virtual note rows rendered above
@@ -2771,6 +2826,7 @@ scrollHunkIntoViewOf fv = do
           if len + 4 >= vpH
             then max 0 (renderStart - 2)
             else max 0 (renderStart - ((vpH - len) `div` 2))
+      modify (updateFile (stCurF st) (\f -> f {fvOrigin = origin}))
       setTop (viewportScroll BodyVP) top
     _ -> pure ()
   -- follow in the tray too — an explicit scroll on hunk jumps only, so
@@ -3599,6 +3655,7 @@ reloadFromDisk rel = do
                     reloadedFv = stFiles reloaded !! i
                     newOut = cursorDisplayRow (fvRows reloadedFv) newRow
                     origin = snd (bodyWindow reloaded reloadedFv)
+                  modify (updateFile i (\f -> f {fvOrigin = origin}))
                   setTop
                     (viewportScroll BodyVP)
                     (max 0 (newOut - origin - screenOff))
@@ -5950,6 +6007,7 @@ loadOpened cfg hls root path = do
                 , fvEd = newEdState 0 newLs
                 , fvRows = []
                 , fvRowCount = 0
+                , fvOrigin = 0
                 , fvRuns = []
                 , fvToks = []
                 , fvStale = False
