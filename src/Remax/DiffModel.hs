@@ -10,6 +10,8 @@ module Remax.DiffModel
   , SplitConfig (..)
   , defaultSplitConfig
   , diffRows
+  , DiffParts (..)
+  , diffParts
   , assemble
   , forceRows
   , forceTokLines
@@ -81,7 +83,25 @@ runKindOf ls =
 -- One display row per diff row, with equal prefix/suffix trimmed off
 -- before Myers so ordinary edits diff only the touched region.
 diffRows :: [Text] -> [Text] -> [(Char, Maybe Int, Text)]
-diffRows old new =
+diffRows old new = dpRows (diffParts old new)
+
+-- A diff taken apart, so a caller can put a clock on the only part that
+-- warrants one.
+--
+-- dpGrouped is the Myers run over the trimmed middles: the sole piece
+-- whose cost is not linear in the file. dpRows is the decoration built
+-- from it. dpCoarse is the answer when that run cannot be afforded —
+-- the equal prefix and suffix stay context and only the middle is
+-- reported as wholly rewritten, so giving up stays proportional to what
+-- actually differs.
+data DiffParts = DiffParts
+  { dpGrouped :: [Diff [Text]]
+  , dpRows :: [(Char, Maybe Int, Text)]
+  , dpCoarse :: [(Char, Maybe Int, Text)]
+  }
+
+diffParts :: [Text] -> [Text] -> DiffParts
+diffParts old new =
   let
     pre = length (takeWhile id (zipWith (==) old new))
     oldTail = drop pre old
@@ -90,6 +110,7 @@ diffRows old new =
       length (takeWhile id (zipWith (==) (reverse oldTail) (reverse newTail)))
     oldMid = take (length oldTail - suf) oldTail
     newMid = take (length newTail - suf) newTail
+    grouped = getGroupedDiff oldMid newMid
     contextRow n (k, l) = (' ', Just (n + k), l)
     preRows = map (contextRow 0) (zip [0 ..] (take pre new))
     sufStart = pre + length newMid
@@ -107,7 +128,15 @@ diffRows old new =
           map (\(k, l) -> ('+', Just (n + k), l)) (zip [0 ..] ns)
             ++ go (n + length ns) rest
   in
-    preRows ++ go pre (getGroupedDiff oldMid newMid) ++ sufRows
+    DiffParts
+      { dpGrouped = grouped
+      , dpRows = preRows ++ go pre grouped ++ sufRows
+      , dpCoarse =
+          preRows
+            ++ map (\o -> ('-', Nothing, o)) oldMid
+            ++ zipWith (\k l -> ('+', Just (pre + k), l)) [0 ..] newMid
+            ++ sufRows
+      }
 
 -- Attach run indexes, syntax tokens, and content keys to raw diff rows in
 -- single tandem walks (the row streams are aligned by construction, so no
