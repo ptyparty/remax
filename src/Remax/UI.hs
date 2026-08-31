@@ -141,6 +141,7 @@ import Remax.Git
   , baseLines
   , branchRoot
   , changedFiles
+  , childRepos
   , commitBody
   , commitMessage
   , currentBranch
@@ -329,6 +330,7 @@ data St = St
   , stTree :: Maybe TreeView -- the project tree overlay, while it is open
   , stHelp :: Bool -- the keybinding cheat sheet is up
   , stRoots :: [FilePath] -- repositories this session can switch between
+  , stStory :: Maybe FilePath -- the folder they sit in, when this is a story
   , stPlaces :: Map.Map FilePath RepoPlace -- where you were in each
   }
 
@@ -424,8 +426,8 @@ watcherFailure nativeErr polledErr =
 
 -- Entry point ---------------------------------------------------------------
 
-runReview :: ReviewMode -> FilePath -> [FilePath] -> IO ()
-runReview mode root roots = do
+runReview :: ReviewMode -> FilePath -> [FilePath] -> Maybe FilePath -> IO ()
+runReview mode root roots story = do
   conn <- openStore
   verdicts <- loadVerdicts conn (T.pack root)
   hls <- TS.initHighlighters
@@ -546,6 +548,7 @@ runReview mode root roots = do
           , stTree = Nothing
           , stHelp = False
           , stRoots = roots
+          , stStory = story
           , stPlaces = Map.empty
           }
       st1 = case firstUnrespondedOrPending st0 of
@@ -4121,6 +4124,7 @@ runCommand input =
     ["help"] -> showHelp
     ["repo"] -> openRepoPicker
     ["repo", name] -> do
+      rescanRepos
       st <- get
       case filter ((== T.unpack name) . takeFileName) (stRoots st) of
         (root : _) -> switchRepo root
@@ -6248,8 +6252,27 @@ applyBaseChoice ref
 -- git calls, which is fine for the handful of checkouts a story
 -- directory holds and is worth it: choosing between five repos by name
 -- alone tells you nothing about which one needs you.
+-- Which checkouts the story holds, asked again. A story directory is a
+-- working set rather than a fixed one — a repository gets cloned into it
+-- partway through a review, or tidied away — and the session was going on
+-- believing the list it was handed at startup.
+--
+-- Asked at the two moments the list is about to be used rather than kept
+-- current in the background: a directory listing is cheap, it cannot go
+-- stale between here and the answer, and nothing else in the session
+-- consults the list unprompted.
+rescanRepos :: EventM Name St ()
+rescanRepos = do
+  st <- get
+  case stStory st of
+    Nothing -> pure ()
+    Just dir -> do
+      found <- liftIO (childRepos dir)
+      unless (found == stRoots st) (modify (\s -> s {stRoots = found}))
+
 openRepoPicker :: EventM Name St ()
 openRepoPicker = do
+  rescanRepos
   st <- get
   case stRoots st of
     [] -> setMsg "no other repositories here"

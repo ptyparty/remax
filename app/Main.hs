@@ -109,7 +109,7 @@ parseArgs args0 =
 
 review :: ModeArg -> IO ()
 review marg = do
-  (root, roots) <- reviewStart
+  (root, roots, story) <- reviewStart
   mode <- case marg of
     ArgHead -> pure (VsRef "HEAD")
     ArgUnstaged -> pure VsIndex
@@ -123,7 +123,7 @@ review marg = do
       case got of
         Left e -> die (T.unpack e)
         Right sha -> pure (VsRef (T.take 10 sha))
-  runReview mode root roots
+  runReview mode root roots story
 
 requireRoot :: IO FilePath
 requireRoot = do
@@ -159,11 +159,18 @@ targetRepos = do
 
 -- Where a review session starts: the first repository in reach, with the
 -- rest reachable by :repo once the session is up.
-reviewStart :: IO (FilePath, [FilePath])
+-- Also where the checkouts sit, when they are a story rather than one
+-- repository: the session watches that folder so a clone arriving
+-- partway through a review is noticed.
+reviewStart :: IO (FilePath, [FilePath], Maybe FilePath)
 reviewStart = do
+  inRepo <- repoRoot
   roots <- targetRepos
+  story <- case inRepo of
+    Just _ -> pure Nothing
+    Nothing -> fmap Just getCurrentDirectory
   case roots of
-    (first : _) -> pure (first, roots)
+    (first : _) -> pure (first, roots, story)
     [] -> die "No repository to review."
 
 -- Forget the verdicts recorded for files under the current directory, so
