@@ -1026,7 +1026,11 @@ draw :: St -> [Widget Name]
 draw st =
   let
     body = case currentFileMay st of
-      Just fv -> viewport BodyVP Vertical (renderFile st fv)
+      Just fv ->
+        viewport BodyVP Vertical $
+          Widget Greedy Fixed $ do
+            ctx <- getContext
+            render (renderFile (availWidth ctx) st fv)
       Nothing -> idleBody
     panes =
       if stTray st && not (null (stFiles st))
@@ -1787,20 +1791,47 @@ bodyWindow st fv =
 -- entry per row, [] where nothing renders. Each rendered line knows its
 -- post's author and whether it opens that post, so the conversation
 -- reads in order with a sense of who said what.
-shownNoteLines :: St -> [RowR] -> [[NoteLine]]
-shownNoteLines st rows =
+-- The line-number gutter's width, and with it the indent every note row
+-- carries. The render and the scroll correction both have to reckon a
+-- note's height the same way or their idea of what is above the cursor
+-- drifts apart, so both ask here.
+gutterWidth :: FileView -> Int
+gutterWidth fv = length (show (max 1 (bufferLineCount (fvEd fv))))
+
+noteTextWidth :: Int -> FileView -> Int
+noteTextWidth paneWidth fv = max 12 (paneWidth - (gutterWidth fv + 4))
+
+shownNoteLines :: Int -> St -> [RowR] -> [[NoteLine]]
+shownNoteLines width st rows =
   let
     annOf r = do
       k <- rKey r
       Map.lookup k (stThreads st)
     anns = map annOf rows
     nexts = drop 1 anns ++ [Nothing]
+    -- A note is prose and the pane is narrow, so it is folded to fit
+    -- rather than run off the edge where nobody can read it. The
+    -- author's own line breaks are kept and each of their lines folded
+    -- in turn, so a deliberate paragraph survives while a long one still
+    -- lands on screen.
+    --
+    -- The opening row carries the glyph, and an agent's name besides;
+    -- folding to what that leaves means no row overflows, and the
+    -- continuations simply have more room than they use.
     postLines post =
-      case T.lines (postBody post) of
-        [] -> []
-        (first : rest) ->
-          NoteLine (postAuthor post) True first
-            : map (NoteLine (postAuthor post) False) rest
+      let
+        author = postAuthor post
+        lead = if author == "reviewer" then 4 else 2 + T.length author + 3
+        room = max 12 (width - lead)
+        fold ln = case greedyWrap room (T.words ln) of
+          [] -> [""]
+          wss -> map T.unwords wss
+        flowed = concatMap fold (T.lines (postBody post))
+      in
+        case flowed of
+          [] -> []
+          (first : rest) ->
+            NoteLine author True first : map (NoteLine author False) rest
     pick (ma, mnext) = case ma of
       Just posts
         | mnext /= Just posts -> concatMap postLines posts
@@ -1815,8 +1846,8 @@ data NoteLine = NoteLine
   }
   deriving (Eq)
 
-renderFile :: St -> FileView -> Widget Name
-renderFile st fv =
+renderFile :: Int -> St -> FileView -> Widget Name
+renderFile paneWidth st fv =
   let
     rows = fvRows fv
     ed = fvEd fv
@@ -1858,9 +1889,10 @@ renderFile st fv =
       drop
         1
         (scanr (\row acc -> fromMaybe acc (rNewRow row)) seedPoint windowed)
-    noteRowsList = take (hi - lo) (drop lo (shownNoteLines st rows))
+    noteRowsList =
+      take (hi - lo) (drop lo (shownNoteLines (noteTextWidth paneWidth fv) st rows))
     rowsWithPoints = zip3 windowed points noteRowsList
-    numW = length (show (max 1 (bufferLineCount ed)))
+    numW = gutterWidth fv
     -- padding rows carry the border too, so the tray/body divider runs
     -- unbroken through regions the render window skips
     pad k =
@@ -2812,6 +2844,7 @@ scrollHunkIntoViewOf fv = do
         -- anywhere, so the window is moved with it and written back here
         -- rather than left for the drift check to discover.
         origin = snd (bodyWindow st fv)
+        noteRoom = noteTextWidth (fst (_vpSize vp)) fv
         startIn = max 0 (start - origin)
         -- best-effort correction for virtual note rows rendered above
         -- the hunk (exact when the render window covers them)
@@ -2820,7 +2853,13 @@ scrollHunkIntoViewOf fv = do
             + sum
               ( map
                   length
-                  (take startIn (drop origin (shownNoteLines st (fvRows fv))))
+                  ( take
+                      startIn
+                      ( drop
+                          origin
+                          (shownNoteLines noteRoom st (fvRows fv))
+                      )
+                  )
               )
         top =
           if len + 4 >= vpH
