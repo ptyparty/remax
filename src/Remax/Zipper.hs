@@ -11,6 +11,8 @@ module Remax.Zipper
   ( TextZipper
   , textZipper
   , getText
+  , lineCount
+  , linesUpward
   , currentLine
   , cursorPosition
   , moveCursor
@@ -31,12 +33,18 @@ import Data.Text (Text)
 import qualified Data.Text as T
 
 -- Invariant: the buffer always holds at least one line (tzLeft/tzRight
--- form the current one); tzAbove is reversed.
+-- form the current one); tzAbove is reversed. tzAboveLen and tzBelowLen
+-- are the lengths of their lists, carried rather than recomputed: the
+-- cursor's row and the buffer's line count are both wanted on every
+-- frame, and walking a million-line list twice a redraw is the kind of
+-- cost that only shows up on the files least able to afford it.
 data TextZipper a = TextZipper
   { tzAbove :: [Text]
+  , tzAboveLen :: !Int
   , tzLeft :: Text
   , tzRight :: Text
   , tzBelow :: [Text]
+  , tzBelowLen :: !Int
   }
 
 -- The second argument mirrors Data.Text.Zipper's line limit; the review
@@ -44,33 +52,44 @@ data TextZipper a = TextZipper
 textZipper :: [Text] -> Maybe Int -> TextZipper Text
 textZipper ls _limit =
   case ls of
-    [] -> TextZipper [] T.empty T.empty []
-    (first : rest) -> TextZipper [] T.empty first rest
+    [] -> TextZipper [] 0 T.empty T.empty [] 0
+    (first : rest) -> TextZipper [] 0 T.empty first rest (length rest)
 
 getText :: TextZipper Text -> [Text]
 getText tz =
   reverse (tzAbove tz) ++ (currentLine tz : tzBelow tz)
 
+-- O(1), and always equal to length (getText tz).
+lineCount :: TextZipper Text -> Int
+lineCount tz = tzAboveLen tz + 1 + tzBelowLen tz
+
+-- The cursor's line and everything above it, nearest first. tzAbove is
+-- already held in that order, so a search upward from the cursor walks
+-- only as far as its answer instead of rebuilding the whole buffer to
+-- look at the near end of it.
+linesUpward :: TextZipper Text -> [Text]
+linesUpward tz = currentLine tz : tzAbove tz
+
 currentLine :: TextZipper Text -> Text
 currentLine tz = tzLeft tz <> tzRight tz
 
 cursorPosition :: TextZipper Text -> (Int, Int)
-cursorPosition tz = (length (tzAbove tz), T.length (tzLeft tz))
+cursorPosition tz = (tzAboveLen tz, T.length (tzLeft tz))
 
 -- Clamps to the buffer, like the library it replaces.
 moveCursor :: (Int, Int) -> TextZipper Text -> TextZipper Text
 moveCursor (row, col) tz =
   let
+    total = lineCount tz
     ls = getText tz
-    lastRow = length ls - 1
-    r = max 0 (min row lastRow)
+    r = max 0 (min row (total - 1))
     above = reverse (take r ls)
     (line, below) = case drop r ls of
       (l : rest) -> (l, rest)
       [] -> (T.empty, [])
     c = max 0 (min col (T.length line))
   in
-    TextZipper above (T.take c line) (T.drop c line) below
+    TextZipper above r (T.take c line) (T.drop c line) below (total - r - 1)
 
 moveLeft :: TextZipper Text -> TextZipper Text
 moveLeft tz =
@@ -98,9 +117,11 @@ moveUp tz =
       in
         TextZipper
           rest
+          (tzAboveLen tz - 1)
           (T.take col prev)
           (T.drop col prev)
           (currentLine tz : tzBelow tz)
+          (tzBelowLen tz + 1)
 
 moveDown :: TextZipper Text -> TextZipper Text
 moveDown tz =
@@ -112,9 +133,11 @@ moveDown tz =
       in
         TextZipper
           (currentLine tz : tzAbove tz)
+          (tzAboveLen tz + 1)
           (T.take col next)
           (T.drop col next)
           rest
+          (tzBelowLen tz - 1)
 
 gotoBOL :: TextZipper Text -> TextZipper Text
 gotoBOL tz = tz {tzLeft = T.empty, tzRight = currentLine tz}
@@ -141,6 +164,7 @@ insertMany t tz =
         (final : revMiddle) ->
           tz
             { tzAbove = revMiddle ++ ((tzLeft tz <> first) : tzAbove tz)
+            , tzAboveLen = tzAboveLen tz + 1 + length revMiddle
             , tzLeft = final
             }
 
@@ -148,6 +172,7 @@ breakLine :: TextZipper Text -> TextZipper Text
 breakLine tz =
   tz
     { tzAbove = tzLeft tz : tzAbove tz
+    , tzAboveLen = tzAboveLen tz + 1
     , tzLeft = T.empty
     }
 
@@ -160,7 +185,8 @@ deleteChar tz =
     Nothing ->
       case tzBelow tz of
         [] -> tz
-        (next : rest) -> tz {tzRight = next, tzBelow = rest}
+        (next : rest) ->
+          tz {tzRight = next, tzBelow = rest, tzBelowLen = tzBelowLen tz - 1}
 
 -- Backspace; at column zero the line joins the one above, cursor at the
 -- junction.
@@ -169,5 +195,6 @@ deletePrevChar tz =
   if T.null (tzLeft tz)
     then case tzAbove tz of
       [] -> tz
-      (prev : rest) -> tz {tzAbove = rest, tzLeft = prev}
+      (prev : rest) ->
+        tz {tzAbove = rest, tzAboveLen = tzAboveLen tz - 1, tzLeft = prev}
     else tz {tzLeft = T.init (tzLeft tz)}

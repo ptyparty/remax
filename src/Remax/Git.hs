@@ -42,6 +42,7 @@ import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import qualified System.Environment as Env
 import System.Exit (ExitCode (..))
 import System.FilePath (isAbsolute, (</>))
+import System.IO (IOMode (ReadMode), withFile)
 import System.IO.Error (catchIOError)
 import System.Process
   ( CreateProcess (env)
@@ -113,11 +114,15 @@ baseLines mode root path =
         ExitSuccess -> T.lines (T.pack out)
         ExitFailure _ -> []
 
--- NUL in the first 8k is the same heuristic git uses.
+-- NUL in the first 8k is the same heuristic git uses. Only those 8k are
+-- read: the caller reads the whole file straight afterwards, and pulling
+-- forty megabytes off disk to look at the first page of it is a cost the
+-- largest files paid twice.
 looksBinary :: FilePath -> FilePath -> IO Bool
-looksBinary root path = do
-  bytes <- BS.readFile (root </> path)
-  pure (BS.elem 0 (BS.take 8000 bytes))
+looksBinary root path =
+  withFile (root </> path) ReadMode $ \h -> do
+    bytes <- BS.hGet h 8000
+    pure (BS.elem 0 bytes)
 
 -- Everything the repository considers a file worth seeing: tracked plus
 -- untracked-unignored — the fuzzy finder's haystack.

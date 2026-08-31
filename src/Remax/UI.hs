@@ -254,6 +254,7 @@ data FileView = FileView
   , fvBase :: [Text]
   , fvEd :: EdState
   , fvRows :: [RowR]
+  , fvRowCount :: !Int -- length fvRows; wanted twice a frame, so carried
   , fvRuns :: [Run]
   , fvToks :: [[Seg]]
   , fvStale :: Bool
@@ -735,6 +736,7 @@ loadOne cfg hls mode root path = do
             , fvBase = base
             , fvEd = newEdState 0 newLs
             , fvRows = []
+            , fvRowCount = 0
             , fvRuns = []
             , fvToks = []
             , fvStale = False
@@ -793,6 +795,18 @@ newSideLines fv =
       (True, [""]) -> []
       _ -> ls
 
+-- length (newSideLines fv), without rebuilding the buffer to count it.
+-- The one case that has to look at content is a single-line buffer,
+-- where looking is free.
+newSideLineCount :: FileView -> Int
+newSideLineCount fv =
+  let
+    n = bufferLineCount (fvEd fv)
+  in
+    if fvDeleted fv && n == 1 && bufferLines (fvEd fv) == [""]
+      then 0
+      else n
+
 -- Real tokenization is paid only for files that have actually been shown;
 -- everything else carries plain tokens until the cursor arrives. Shown
 -- files use the vendored tree-sitter grammar when one claims the file,
@@ -818,10 +832,11 @@ rebuildFV sc repo fv = do
   (rows3, degraded) <- diffIO (fvBase fv) newLs
   let
     (rows, runs) = assemble sc repo (T.pack (fvPath fv)) rows3 toks
-    decls = map (fromMaybe "" . declAt newLs . runAnchor) runs
+    decls = declsForAnchors newLs (map runAnchor runs)
   pure
     ( fv
         { fvRows = rows
+        , fvRowCount = length rows
         , fvRuns = runs
         , fvToks = toks
         , fvStale = False
@@ -836,19 +851,41 @@ rebuildFV sc repo fv = do
 -- already trusts. A tree-sitter walk could be exact; this is right
 -- nearly always and costs one upward scan at rebuild time.
 declAt :: [Text] -> Int -> Maybe Text
-declAt ls row =
+declAt ls row = find isDeclLine (reverse (take (row + 1) ls))
+
+isDeclLine :: Text -> Bool
+isDeclLine l =
+  case T.uncons l of
+    Just (c, _) ->
+      not (isSpace c)
+        && not
+          ( any
+              (`T.isPrefixOf` l)
+              ["--", "//", "#", ";", "{-", "/*", "*", "<!--", "}", ")", "]"]
+          )
+    Nothing -> False
+
+-- declAt for every run's anchor at once, in a single walk of the buffer
+-- rather than one upward scan per run. A diff that blows its budget
+-- falls back to marking every line in the file, which splits into tens
+-- of thousands of runs; a scan apiece is quadratic in the file, and the
+-- difference between a load that takes seconds and one that never
+-- finishes at all. Anchors arrive in file order — buildRuns walks the
+-- rows forward and every anchor is a buffer row at or after the last —
+-- which is what lets one pass answer them all.
+declsForAnchors :: [Text] -> [Int] -> [Text]
+declsForAnchors ls anchors =
   let
-    isDecl l = case T.uncons l of
-      Just (c, _) ->
-        not (isSpace c)
-          && not
-            ( any
-                (`T.isPrefixOf` l)
-                ["--", "//", "#", ";", "{-", "/*", "*", "<!--", "}", ")", "]"]
-            )
-      Nothing -> False
+    go _ _ [] _ = []
+    go ix seen pending@(a : more) rest =
+      if ix > a
+        then seen : go ix seen more rest
+        else case rest of
+          [] -> map (const seen) pending
+          (l : further) ->
+            go (ix + 1) (if isDeclLine l then l else seen) pending further
   in
-    find isDecl (reverse (take (row + 1) ls))
+    go (0 :: Int) T.empty anchors ls
 
 -- Just the name from a declaration line: its first word, or two when
 -- the first is a defining keyword (data Foo, def foo, class Bar ...).
@@ -881,14 +918,16 @@ declName decl =
 diffIO :: [Text] -> [Text] -> IO ([(Char, Maybe Int, Text)], Bool)
 diffIO old new = do
   let
-    rows = diffRows old new
-    wholeFileFallback =
-      map (\o -> ('-', Nothing, o)) old
-        ++ zipWith (\i l -> ('+', Just i, l)) [0 ..] new
-  got <- timeout diffBudgetUs (evaluate (forceRows rows `seq` rows))
+    parts = diffParts old new
+  -- The clock belongs on the diff, not on the file: forcing every row
+  -- under the same budget let a million-line file that differs by one
+  -- line blow it. And the budget is wall-clock, so on a large heap a
+  -- major GC pause can spend it on nobody's behalf — which is survivable
+  -- only because giving up now costs about what the diff would have.
+  got <- timeout diffBudgetUs (evaluate (length (dpGrouped parts)))
   pure $ case got of
-    Just r -> (r, False)
-    Nothing -> (wholeFileFallback, True)
+    Just _ -> (dpRows parts, False)
+    Nothing -> (dpCoarse parts, True)
 
 patchLine :: Int -> Text -> FileView -> FileView
 patchLine row newText fv =
@@ -1626,6 +1665,35 @@ shortPath w path =
 windowRows :: Int
 windowRows = 300
 
+-- The display row the body is framed on, and the first row of the render
+-- window.
+--
+-- That first row is also the body's coordinate origin. brick renders a
+-- vertical viewport's contents with a fixed available height of 100000
+-- rows (Brick.Widgets.Core.unrestricted), so a body that padded its way
+-- down to an absolute display row fell off the end of that budget: the
+-- padding consumed the whole allowance and the real rows were cropped
+-- away, leaving a blank pane on any file whose current hunk sat past
+-- line 100000. Everything the body renders is therefore in window
+-- coordinates, and the two places that scroll the viewport subtract the
+-- same origin so they agree with what was drawn.
+bodyWindow :: St -> FileView -> (Int, Int)
+bodyWindow st fv =
+  let
+    rows = fvRows fv
+    curH = clampH (fvRuns fv) (stCurH st)
+    curRow = fst (cursorRC (fvEd fv))
+    -- Normally the cursor's row, but an all-removed file owns no buffer
+    -- rows at all, so nothing carries the cursor and the view would be
+    -- nailed to the top: there the hunk under review is what the reader
+    -- is looking at, and ] and [ are how they move.
+    cursorOut =
+      case findIndex (\r -> rNewRow r == Just curRow) rows of
+        Just out -> out
+        Nothing -> fromMaybe 0 (findIndex (\r -> rRunIx r == Just curH) rows)
+  in
+    (cursorOut, max 0 (cursorOut - windowRows))
+
 -- Where each row's reviewer note (and any agent reply to it) should
 -- render: annotations apply to every line of their target, so
 -- consecutive rows carrying the same pair show it once, under the last
@@ -1682,30 +1750,31 @@ renderFile st fv =
             ( if nr == lr then lc else 0
             , if nr == hr then Just hc else Nothing
             )
-    -- Which display row the view keeps in sight. Normally the cursor's,
-    -- but an all-removed file owns no buffer rows at all, so nothing
-    -- carries the cursor and the view would be nailed to the top: there
-    -- the hunk under review is what the reader is looking at, and ] and
-    -- [ are how they move.
-    cursorOut =
-      case findIndex (\r -> rNewRow r == Just curRow) rows of
-        Just out -> out
-        Nothing -> fromMaybe 0 (findIndex (\r -> rRunIx r == Just curH) rows)
-    lo = max 0 (cursorOut - windowRows)
-    hi = min (length rows) (cursorOut + windowRows)
+    -- Which display row the view keeps in sight, and where the window
+    -- that carries it starts. lo is the body's origin: nothing above it
+    -- is drawn, so the pane never asks brick for a row it cannot reach.
+    (cursorOut, lo) = bodyWindow st fv
+    hi = min (fvRowCount fv) (cursorOut + windowRows)
+    -- one walk to the window, shared by everything that reads it
+    fromLo = drop lo rows
+    windowed = take (hi - lo) fromLo
+    beyond = drop (hi - lo) fromLo
     -- the buffer row each removed line now sits before, so a line-wise
-    -- selection can honestly include the deletions it would verdict
+    -- selection can honestly include the deletions it would verdict.
+    -- The scan only has to cover the window, seeded with the answer for
+    -- the row just past it: the first real row that follows, or the end
+    -- of the buffer when nothing does.
+    seedPoint =
+      case mapMaybe rNewRow beyond of
+        (p : _) -> p
+        [] -> newSideLineCount fv
     points =
       drop
         1
-        ( scanr
-            (\row acc -> fromMaybe acc (rNewRow row))
-            (length (newSideLines fv))
-            rows
-        )
-    noteRowsList = shownNoteLines st rows
-    rowsWithPoints = zip3 rows points noteRowsList
-    numW = length (show (max 1 (length (bufferLines ed))))
+        (scanr (\row acc -> fromMaybe acc (rNewRow row)) seedPoint windowed)
+    noteRowsList = take (hi - lo) (drop lo (shownNoteLines st rows))
+    rowsWithPoints = zip3 windowed points noteRowsList
+    numW = length (show (max 1 (bufferLineCount ed)))
     -- padding rows carry the border too, so the tray/body divider runs
     -- unbroken through regions the render window skips
     pad k =
@@ -1836,20 +1905,20 @@ renderFile st fv =
     -- keep a margin of context visible around the cursor, so the view
     -- scrolls before the cursor reaches the top or bottom edge; virtual
     -- note rows above the cursor shift where it lands in the rendering
-    notesAbove =
-      sum (map length (take (cursorOut - lo) (drop lo noteRowsList)))
-    cursorRender = cursorOut + notesAbove
+    notesAbove = sum (map length (take (cursorOut - lo) noteRowsList))
+    cursorRender = (cursorOut - lo) + notesAbove
     scrollOff = cfgScrolloff (stConfig st)
     marginTop = max 0 (cursorRender - scrollOff)
     marginHeight = cursorRender + scrollOff - marginTop + 1
   in
     visibleRegion (Location (0, marginTop)) (1, marginHeight) $
       vBox
-        [ pad lo
-        , vBox (map lineWidget (take (hi - lo) (drop lo rowsWithPoints)))
-        , -- always leave border tail below the file so the divider spans
-          -- the pane even when the content is shorter than the screen
-          pad (max (length rows - hi) 60)
+        [ vBox (map lineWidget rowsWithPoints)
+        , -- always leave border tail below the window so the divider
+          -- spans the pane even when the content is shorter than the
+          -- screen. Rows past the window are never addressed, so the
+          -- tail only has to outlast the pane, not the file.
+          pad (max (min (fvRowCount fv - hi) windowRows) 60)
         ]
 
 -- How far the view is shifted right: zero until the cursor closes in on
@@ -1962,7 +2031,9 @@ statusBar st =
         else txt ""
     declSeg = case currentFileMay st of
       Just fv ->
-        case declAt (bufferLines (fvEd fv)) (fst (cursorRC (fvEd fv))) of
+        -- nearest decl at or above the cursor, found by walking up
+        -- from it rather than rebuilding the buffer every frame
+        case find isDeclLine (bufferUpward (fvEd fv)) of
           Just d ->
             withAttr trayDeclAttr (txt (" " <> T.take 32 (declName d) <> " \183"))
           Nothing -> txt ""
@@ -2607,7 +2678,7 @@ firstUnacceptedRow :: St -> FileView -> Int -> Maybe Int
 firstUnacceptedRow st fv h =
   let
     rows = fvRows fv
-    bufferLen = length (newSideLines fv)
+    bufferLen = newSideLineCount fv
     points =
       drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
     unaccepted (row, point) = do
@@ -2650,11 +2721,19 @@ scrollHunkIntoViewOf fv = do
       let
         len = length runRows
         vpH = snd (_vpSize vp)
+        -- the body draws from its window's first row, so the viewport's
+        -- coordinates are relative to that same origin
+        origin = snd (bodyWindow st fv)
+        startIn = max 0 (start - origin)
         -- best-effort correction for virtual note rows rendered above
         -- the hunk (exact when the render window covers them)
         renderStart =
-          start
-            + sum (map length (take start (shownNoteLines st (fvRows fv))))
+          startIn
+            + sum
+              ( map
+                  length
+                  (take startIn (drop origin (shownNoteLines st (fvRows fv))))
+              )
         top =
           if len + 4 >= vpH
             then max 0 (renderStart - 2)
@@ -2873,7 +2952,7 @@ selectedChanges :: FileView -> Int -> Int -> [(Text, Text, Int)]
 selectedChanges fv lo hi =
   let
     rows = fvRows fv
-    bufferLen = length (newSideLines fv)
+    bufferLen = newSideLineCount fv
     points =
       drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
     inSpan row point = case rNewRow row of
@@ -2892,7 +2971,7 @@ runChanges :: FileView -> Int -> [(Text, Text, Int)]
 runChanges fv h =
   let
     rows = fvRows fv
-    bufferLen = length (newSideLines fv)
+    bufferLen = newSideLineCount fv
     points =
       drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
     pick (row, point) = do
@@ -2919,7 +2998,7 @@ rowRestPoints :: FileView -> [(RowR, Int)]
 rowRestPoints fv =
   let
     rows = fvRows fv
-    bufferLen = length (newSideLines fv)
+    bufferLen = newSideLineCount fv
     points =
       drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
   in
@@ -3329,7 +3408,7 @@ applyVerdictLines v = do
         else unless (stDeferAdvance settled) $ do
           let
             ed = fvEd fvSettled
-            nextRow = min (hi + 1) (length (bufferLines ed) - 1)
+            nextRow = min (hi + 1) (bufferLineCount ed - 1)
             stepped =
               (collapseSelection ed)
                 { edZipper = Z.moveCursor (nextRow, 0) (edZipper ed)
@@ -3484,9 +3563,12 @@ reloadFromDisk rel = do
                   rebuildWith i placed
                   reloaded <- get
                   let
-                    newOut =
-                      cursorDisplayRow (fvRows (stFiles reloaded !! i)) newRow
-                  setTop (viewportScroll BodyVP) (max 0 (newOut - screenOff))
+                    reloadedFv = stFiles reloaded !! i
+                    newOut = cursorDisplayRow (fvRows reloadedFv) newRow
+                    origin = snd (bodyWindow reloaded reloadedFv)
+                  setTop
+                    (viewportScroll BodyVP)
+                    (max 0 (newOut - origin - screenOff))
                   modify (\s -> s {stMsg = "\8635 reloaded " <> T.pack rel})
 
 cursorDisplayRow :: [RowR] -> Int -> Int
@@ -5462,6 +5544,7 @@ loadOpened cfg hls root path = do
                 , fvBase = newLs
                 , fvEd = newEdState 0 newLs
                 , fvRows = []
+                , fvRowCount = 0
                 , fvRuns = []
                 , fvToks = []
                 , fvStale = False

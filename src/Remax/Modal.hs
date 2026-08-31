@@ -20,6 +20,8 @@ module Remax.Modal
   , InsertResult (..)
   , newEdState
   , bufferLines
+  , bufferLineCount
+  , bufferUpward
   , cursorRC
   , lineAt
   , plainMove
@@ -138,6 +140,15 @@ newEdState row ls =
 
 bufferLines :: EdState -> [Text]
 bufferLines = Z.getText . edZipper
+
+-- length (bufferLines st), without rebuilding the list to count it.
+bufferLineCount :: EdState -> Int
+bufferLineCount = Z.lineCount . edZipper
+
+-- The cursor's line and everything above it, nearest first: what a
+-- search upward from the cursor wants, without building the buffer.
+bufferUpward :: EdState -> [Text]
+bufferUpward = Z.linesUpward . edZipper
 
 cursorRC :: EdState -> (Int, Int)
 cursorRC = Z.cursorPosition . edZipper
