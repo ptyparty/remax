@@ -3055,6 +3055,23 @@ selectedChanges fv lo hi =
   in
     mapMaybe pick (zip rows points)
 
+-- Which hunks a line span actually touches, by the same reckoning
+-- selectedChanges uses — a removed line counts against the buffer row it
+-- now rests before, so a deletion is selectable at all.
+selectedRuns :: FileView -> Int -> Int -> Set.Set Int
+selectedRuns fv lo hi =
+  let
+    rows = fvRows fv
+    bufferLen = newSideLineCount fv
+    points =
+      drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
+    inSpan row point = case rNewRow row of
+      Just nr -> nr >= lo && nr <= hi
+      Nothing -> point >= lo && point <= hi
+    pick (row, point) = if inSpan row point then rRunIx row else Nothing
+  in
+    Set.fromList (mapMaybe pick (zip rows points))
+
 -- Every changed line of one run, same shape as selectedChanges.
 runChanges :: FileView -> Int -> [(Text, Text, Int)]
 runChanges fv h =
@@ -3484,17 +3501,29 @@ applyVerdictLines v = do
       let
         fvSettled = currentFile settled
         rs = fvRuns fvSettled
+        curIx = clampH rs (stCurH settled)
+        -- A verdict says something only about the hunks its lines belong
+        -- to. Marking a line somewhere else leaves the current hunk
+        -- exactly as unreviewed as it was, so asking whether that hunk is
+        -- finished is asking about the wrong thing: it would move the
+        -- review on off the back of a verdict that never touched it.
+        onCurrent = Set.member curIx (selectedRuns fvSettled lo hi)
         hunkDone =
-          case safeIdx rs (clampH rs (stCurH settled)) of
+          case safeIdx rs curIx of
             Just r -> not (runUnvisited (stVerdicts settled) r)
             Nothing -> True
-      if hunkDone
+      -- including the advance a flag would otherwise have deferred until
+      -- its note was written
+      unless onCurrent (modify (\s -> s {stDeferAdvance = False}))
+      let
+        deferring = stDeferAdvance settled && onCurrent
+      if onCurrent && hunkDone
         then do
           modify
             (\s -> s {stCounts = Map.insertWith (+) v 1 (stCounts s)})
           setEd (stCurF settled) (collapseSelection (fvEd fvSettled))
-          unless (stDeferAdvance settled) advanceToPending
-        else unless (stDeferAdvance settled) $ do
+          unless deferring advanceToPending
+        else unless deferring $ do
           let
             ed = fvEd fvSettled
             nextRow = min (hi + 1) (bufferLineCount ed - 1)
