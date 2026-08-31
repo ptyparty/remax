@@ -97,7 +97,15 @@ import GHC.Clock (getMonotonicTime)
 import qualified Graphics.Vty as V
 import Graphics.Vty.CrossPlatform (mkVty)
 import qualified Remax.Zipper as Z
-import System.Directory (doesFileExist)
+import System.Directory
+  ( copyFile
+  , createDirectoryIfMissing
+  , doesDirectoryExist
+  , doesFileExist
+  , removeDirectoryRecursive
+  , removeFile
+  , renamePath
+  )
 import System.Environment (lookupEnv)
 import System.Exit (die)
 import qualified System.FSNotify as FS
@@ -139,6 +147,7 @@ import Remax.Git
   , gitStateWatchDirs
   , hasStagedChanges
   , headCommit
+  , isTracked
   , listFiles
   , listRefs
   , localBranches
@@ -1024,6 +1033,7 @@ draw st =
     overlays =
       catMaybes
         [ fmap (notePopupLayer st) (stNotePopup st)
+        , fileMenuLayer =<< stTree st
         , fmap (treeLayer st) (stTree st)
         , fmap pickerLayer (stPicker st)
         , if stSpace st then Just spaceMenu else Nothing
@@ -1187,6 +1197,7 @@ aroundGroups mode =
       , ("\9251 t", "the same dialog, as a tree")
       , ("\8633", "in either: flat \8596 tree, filter kept")
       , ("Ctrl-a", "in either: show the ignored files too")
+      , ("Ctrl-x", "in either: new / rename / duplicate / delete")
       , ("\9251 b", "files already open in the session")
       , ("Tab", "collapse / expand the tray")
       , ("{ }", "scroll the tray")
@@ -1453,6 +1464,24 @@ spaceMenu =
   in
     floatFrame "space" "any other key cancels" . hLimit 26 . padRight Max $
       vBox (map item spaceMenuEntries)
+
+-- Ctrl-x's menu, drawn from the same table that dispatches it.
+fileMenuLayer :: TreeView -> Maybe (Widget Name)
+fileMenuLayer view =
+  case tvOp view of
+    Just OpMenu ->
+      let
+        item (key, label, _) =
+          hBox
+            [ withAttr noteInlineAttr (txt (" " <> key))
+            , withAttr statusAttr (txt ("  " <> label))
+            ]
+      in
+        Just
+          ( floatFrame "file" "any other key cancels" . hLimit 24 . padRight Max $
+              vBox (map item fileMenuEntries)
+          )
+    _ -> Nothing
 
 -- The persistent session's resting state: nothing to review, but the
 -- watcher is live and new work will wake the screen on its own.
@@ -4922,7 +4951,30 @@ data TreeView = TreeView
   , tvExpanded :: Set.Set FilePath -- directories and files alike
   , tvSel :: Int
   , tvInput :: Text
+  , tvOp :: Maybe TreeOp -- the file menu, mid-operation
   }
+
+-- Making, moving and unmaking files, from the list that already shows
+-- them. Reviewing turns up work — a file wants splitting, a scratch file
+-- has served its purpose — and dropping to a shell to do it loses the
+-- session's place.
+--
+-- OpMenu is the leader's list. OpNaming carries the action and the path
+-- typed so far. OpConfirming is the one irreversible action asking
+-- first: everything else can be undone by doing the opposite, and a
+-- delete cannot.
+data TreeOp
+  = OpMenu
+  | OpNaming FileAction Text
+  | OpConfirming FilePath
+
+-- Each carries the path it works from: the directory a new thing lands
+-- in, or the path being renamed, copied or removed.
+data FileAction
+  = NewFile FilePath
+  | NewDir FilePath
+  | RenamePath FilePath
+  | DuplicatePath FilePath
 
 openTree :: EventM Name St ()
 openTree = openTreeIn TreeHierarchy
@@ -4987,6 +5039,7 @@ openTreeIn wanted = do
         , tvExpanded = opened
         , tvSel = 0
         , tvInput = ""
+        , tvOp = Nothing
         }
     onCurrent = case here of
       (p : _) -> selectTreePath st view p
@@ -5101,8 +5154,63 @@ treeHunkInfo st path ix = do
     , any (`Map.member` stThreads st) (runKeys r)
     )
 
+-- The dialog is modal while an operation is under way: the menu, then a
+-- path to type or a deletion to confirm. Browsing keys only apply when
+-- none of that is open.
 handleTreeKey :: V.Event -> TreeView -> EventM Name St ()
-handleTreeKey ev view = do
+handleTreeKey ev view =
+  case tvOp view of
+    Just OpMenu -> fileMenuKey ev view
+    Just (OpNaming action typed) -> namingKey ev view action typed
+    Just (OpConfirming path) -> confirmKey ev view path
+    Nothing -> browseTreeKey ev view
+
+-- Any key not in the table cancels, which is what the frame promises.
+fileMenuKey :: V.Event -> TreeView -> EventM Name St ()
+fileMenuKey ev view =
+  case ev of
+    V.EvKey (V.KChar c) [] ->
+      case find (\(key, _, _) -> key == T.singleton c) fileMenuEntries of
+        Just (_, _, act) -> act view
+        Nothing -> setTree view {tvOp = Nothing}
+    _ -> setTree view {tvOp = Nothing}
+
+namingKey :: V.Event -> TreeView -> FileAction -> Text -> EventM Name St ()
+namingKey ev view action typed = do
+  st <- get
+  let
+    retype next = setTree view {tvOp = Just (OpNaming action next)}
+  case ev of
+    V.EvKey V.KEsc [] -> setTree view {tvOp = Nothing}
+    V.EvKey V.KBS [] -> retype (T.dropEnd 1 typed)
+    V.EvKey (V.KChar c) [] -> retype (T.snoc typed c)
+    V.EvKey V.KEnter [] ->
+      case resolveInRepo (stRoot st) typed of
+        Left err -> do
+          setTree view {tvOp = Nothing}
+          setMsg err
+        Right rel -> do
+          outcome <- liftIO (runFileAction (stRoot st) action rel)
+          -- a rename takes the old path out of the session; the other
+          -- three leave what is already open alone
+          let
+            gone = case action of
+              RenamePath src -> Just src
+              _ -> Nothing
+          finishFileOp view gone outcome
+    _ -> pure ()
+
+confirmKey :: V.Event -> TreeView -> FilePath -> EventM Name St ()
+confirmKey ev view path = do
+  st <- get
+  case ev of
+    V.EvKey (V.KChar 'y') [] -> do
+      outcome <- liftIO (runDelete (stRoot st) path)
+      finishFileOp view (Just path) outcome
+    _ -> setTree view {tvOp = Nothing}
+
+browseTreeKey :: V.Event -> TreeView -> EventM Name St ()
+browseTreeKey ev view = do
   st <- get
   let
     visible = treeVisible st view
@@ -5176,6 +5284,7 @@ handleTreeKey ev view = do
     -- the ignored files, and back. A modified key because every
     -- printable one belongs to the filter.
     V.EvKey (V.KChar 'a') [V.MCtrl] -> toggleTreeScope view
+    V.EvKey (V.KChar 'x') [V.MCtrl] -> setTree view {tvOp = Just OpMenu}
     V.EvKey V.KBS [] -> retype (T.dropEnd 1 (tvInput view))
     V.EvKey (V.KChar c) [] -> retype (T.snoc (tvInput view) c)
     _ -> pure ()
@@ -5193,10 +5302,18 @@ handleTreeKey ev view = do
 -- which matters in a repository whose ignored files outnumber the rest.
 toggleTreeScope :: TreeView -> EventM Name St ()
 toggleTreeScope view = do
+  modify (\s -> s {stFileScope = flipScope (stFileScope s)})
+  refreshTreeView view
+
+-- Rebuild the dialog's list from disk, keeping the filter, the unfolded
+-- directories and the row the cursor was on. Both the scope toggle and
+-- the file operations end here: either way the list under the cursor has
+-- changed and the dialog should read as the same one, moved on.
+refreshTreeView :: TreeView -> EventM Name St ()
+refreshTreeView view = do
   before <- get
   let
     was = fmap trPath (treeSelected before view)
-  modify (\s -> s {stFileScope = flipScope (stFileScope s)})
   st <- get
   (paths, statPaths) <- liftIO (treeSources st)
   let
@@ -5206,9 +5323,9 @@ toggleTreeScope view = do
     landed = do
       path <- was
       findIndex ((== path) . trPath) rows
-    -- hiding again can take the selected row away with it, so a row that
-    -- did not survive leaves the cursor where it stood rather than past
-    -- the end of a shorter list
+    -- a row can go away under the cursor — hidden again, renamed,
+    -- deleted — and then the cursor stays where it stood rather than
+    -- past the end of a shorter list
     stayed = max 0 (min (tvSel view) (length rows - 1))
   setTree next {tvSel = fromMaybe stayed landed}
 
@@ -5217,6 +5334,196 @@ flipScope scope =
   case scope of
     VisibleFiles -> AllFiles
     AllFiles -> VisibleFiles
+
+-- Making and unmaking files ---------------------------------------------------
+
+-- Ctrl-x's menu. One table, rendered and dispatched from the same place,
+-- so a key cannot be bound here without appearing in the list — the
+-- lesson the space menu already learned.
+fileMenuEntries :: [(Text, Text, TreeView -> EventM Name St ())]
+fileMenuEntries =
+  [ ("n", "new file", startNaming NewFile)
+  , ("d", "new directory", startNaming NewDir)
+  , ("r", "rename / move", startActing RenamePath)
+  , ("c", "duplicate", startActing DuplicatePath)
+  , ("x", "delete", startDelete)
+  ]
+
+-- Where a new thing lands: a directory row is itself the destination, and
+-- anything else offers the directory it sits in.
+treeTargetDir :: St -> TreeView -> FilePath
+treeTargetDir st view =
+  let
+    home row = case trKind row of
+      RowDir _ _ -> trPath row
+      _ -> takeDirectory (trPath row)
+  in
+    case fmap home (treeSelected st view) of
+      Just "." -> ""
+      Just dir -> dir
+      Nothing -> ""
+
+-- The two creating actions start from a directory and a trailing slash,
+-- so the path is already where the cursor was and only the name is left
+-- to type.
+startNaming :: (FilePath -> FileAction) -> TreeView -> EventM Name St ()
+startNaming build view = do
+  st <- get
+  let
+    dir = treeTargetDir st view
+    seeded = if null dir then "" else T.pack dir <> "/"
+  setTree view {tvOp = Just (OpNaming (build dir) seeded)}
+
+-- The two acting-on-a-path actions start from the path itself, so
+-- renaming is editing what is already written.
+startActing :: (FilePath -> FileAction) -> TreeView -> EventM Name St ()
+startActing build view = do
+  st <- get
+  case treeSelected st view of
+    Nothing -> setTree view {tvOp = Nothing} >> setMsg "nothing selected"
+    Just row ->
+      setTree
+        view {tvOp = Just (OpNaming (build (trPath row)) (T.pack (trPath row)))}
+
+startDelete :: TreeView -> EventM Name St ()
+startDelete view = do
+  st <- get
+  case treeSelected st view of
+    Nothing -> setTree view {tvOp = Nothing} >> setMsg "nothing selected"
+    Just row -> setTree view {tvOp = Just (OpConfirming (trPath row))}
+
+namingLabel :: FileAction -> Text
+namingLabel action =
+  case action of
+    NewFile _ -> "new file"
+    NewDir _ -> "new directory"
+    RenamePath _ -> "rename to"
+    DuplicatePath _ -> "duplicate to"
+
+-- Keep an operation inside the repository. A typed path is normalised
+-- and has to come out relative and free of ..; makeRelative hands back an
+-- absolute path when the target is not under the root, which is exactly
+-- the case worth refusing.
+resolveInRepo :: FilePath -> Text -> Either Text FilePath
+resolveInRepo root typed =
+  let
+    given = T.unpack (T.strip typed)
+    rel =
+      normalise
+        (makeRelative root (if isAbsolute given then given else root </> given))
+  in
+    if T.null (T.strip typed)
+      then Left "no path given"
+      else
+        if isAbsolute rel || ".." `elem` splitDirectories rel
+          then Left "that path leaves the repository"
+          else Right rel
+
+-- Filesystem work fails in the ordinary ways, and the dialog would
+-- rather say why on its status line than take the session down.
+tryFileIO :: IO Text -> IO (Either Text Text)
+tryFileIO act = do
+  got <- try act :: IO (Either IOException Text)
+  pure $ case got of
+    Left e -> Left (T.pack (show e))
+    Right msg -> Right msg
+
+-- A tracked path moves and disappears through git, so a rename stays a
+-- rename in the diff instead of arriving as an unrelated delete and add.
+-- Everything else — new files, anything untracked, anything ignored —
+-- is plain filesystem work.
+runFileAction :: FilePath -> FileAction -> FilePath -> IO (Either Text Text)
+runFileAction root action rel = do
+  let
+    full = root </> rel
+    named = T.pack rel
+  taken <- (||) <$> doesFileExist full <*> doesDirectoryExist full
+  case action of
+    NewFile _
+      | taken -> pure (Left ("already there: " <> named))
+      | otherwise -> tryFileIO $ do
+          createDirectoryIfMissing True (takeDirectory full)
+          TIO.writeFile full ""
+          pure ("new file " <> named)
+    NewDir _
+      | taken -> pure (Left ("already there: " <> named))
+      | otherwise -> tryFileIO $ do
+          createDirectoryIfMissing True full
+          pure ("new directory " <> named)
+    RenamePath src
+      | src == rel -> pure (Left "that is where it already is")
+      | taken -> pure (Left ("already there: " <> named))
+      | otherwise -> do
+          tracked <- isTracked root src
+          let
+            done = "renamed to " <> named
+          if tracked
+            then do
+              createDirectoryIfMissing True (takeDirectory full)
+              fmap (fmap (const done)) (runGit root ["mv", "--", src, rel])
+            else tryFileIO $ do
+              createDirectoryIfMissing True (takeDirectory full)
+              renamePath (root </> src) full
+              pure done
+    DuplicatePath src
+      | src == rel -> pure (Left "give the copy a different name")
+      | taken -> pure (Left ("already there: " <> named))
+      | otherwise -> do
+          srcIsDir <- doesDirectoryExist (root </> src)
+          if srcIsDir
+            then pure (Left "only files can be duplicated")
+            else tryFileIO $ do
+              createDirectoryIfMissing True (takeDirectory full)
+              copyFile (root </> src) full
+              pure ("copied to " <> named)
+
+runDelete :: FilePath -> FilePath -> IO (Either Text Text)
+runDelete root rel = do
+  let
+    full = root </> rel
+    done = "deleted " <> T.pack rel
+  tracked <- isTracked root rel
+  isDir <- doesDirectoryExist full
+  if tracked
+    then fmap (fmap (const done)) (runGit root ["rm", "-r", "-f", "--", rel])
+    else tryFileIO $ do
+      if isDir then removeDirectoryRecursive full else removeFile full
+      pure done
+
+-- A path that has just been renamed away or deleted is not worth holding
+-- open: its buffer describes a file that is no longer there. A directory
+-- takes everything under it.
+dropFromSession :: FilePath -> EventM Name St ()
+dropFromSession path = do
+  let
+    under p = p == path || (path ++ "/") `isPrefixOf` p
+  modify $ \s ->
+    let
+      kept = filter (not . under . fvPath) (stFiles s)
+    in
+      s
+        { stFiles = kept
+        , stOpened = Set.filter (not . under) (stOpened s)
+        , stCurF = max 0 (min (stCurF s) (length kept - 1))
+        , stCurH = 0
+        }
+
+-- Run it, then let everything catch up: the dialog rebuilds from disk,
+-- a path that went away stops being held open, and git is asked again so
+-- the change set reflects what just happened.
+finishFileOp :: TreeView -> Maybe FilePath -> Either Text Text -> EventM Name St ()
+finishFileOp view gone outcome = do
+  setTree view {tvOp = Nothing}
+  case outcome of
+    Left err -> setMsg err
+    Right msg -> do
+      mapM_ dropFromSession gone
+      setMsg msg
+      forceGitRefresh
+      grown <- get
+      case stTree grown of
+        Just current -> refreshTreeView current
+        Nothing -> pure ()
 
 -- Flip the view, keeping the filter and the row. Coming back to the tree
 -- opens the ancestors of wherever flat mode left you, so the file you
@@ -5486,11 +5793,21 @@ treeLayer st view =
               tshow (treeFileCount visible) <> "/" <> tshow (length (tvAll view))
         )
           <> scoped
-      inputRow =
-        hBox
-          [ withAttr statusAttr (txt (" " <> tvInput view <> "\9612"))
-          , padLeft Max (withAttr hintAttr (txt (counter <> " ")))
-          ]
+      inputRow = case tvOp view of
+        Just (OpNaming action typed) ->
+          hBox
+            [ withAttr hintAttr (txt (" " <> namingLabel action <> " "))
+            , withAttr statusAttr (txt (typed <> "\9612"))
+            ]
+        Just (OpConfirming path) ->
+          withAttr
+            statusAttr
+            (txt (" delete " <> T.pack path <> " ?"))
+        _ ->
+          hBox
+            [ withAttr statusAttr (txt (" " <> tvInput view <> "\9612"))
+            , padLeft Max (withAttr hintAttr (txt (counter <> " ")))
+            ]
       filler = replicate (visibleCount - length body) (txt " ")
       flat = tvMode view == TreeFlat
       title = if flat then "files" else "tree"
@@ -5503,14 +5820,18 @@ treeLayer st view =
       showing = case stFileScope st of
         AllFiles -> "^a hide ignored \183 "
         VisibleFiles -> "^a all \183 "
-      hint =
-        "\8593\8595 move \183 "
-          <> folding
-          <> "\9166 open \183 \8633 "
-          <> other
-          <> " \183 "
-          <> showing
-          <> leaving
+      hint = case tvOp view of
+        Just (OpNaming _ _) -> "\9166 does it \183 esc cancels"
+        Just (OpConfirming _) -> "y deletes it \183 any other key cancels"
+        _ ->
+          "\8593\8595 move \183 "
+            <> folding
+            <> "\9166 open \183 \8633 "
+            <> other
+            <> " \183 "
+            <> showing
+            <> "^x file \183 "
+            <> leaving
     render $
       floatFrame title hint $
         hLimit boxWidth (vBox (inputRow : txt " " : (body ++ filler)))
