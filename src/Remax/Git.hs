@@ -14,6 +14,7 @@ module Remax.Git
   , hasStagedChanges
   , FileScope (..)
   , listFiles
+  , isTracked
   , listRefs
   , childRepos
   , PathChange (..)
@@ -149,6 +150,19 @@ listFiles scope root = do
   pure $ case code of
     ExitSuccess -> filter (not . null) (lines out)
     ExitFailure _ -> []
+
+-- Whether git has this path in the index — for a directory, whether it
+-- holds anything git knows about. It decides whether a move or a removal
+-- goes through git or straight to the filesystem: a tracked rename told
+-- to git stays a rename, while the same move done behind its back reads
+-- as an unrelated delete and add until someone stages it.
+isTracked :: FilePath -> FilePath -> IO Bool
+isTracked root path = do
+  (code, out, _) <-
+    readProcessWithExitCode "git" ["-C", root, "ls-files", "--", path] ""
+  pure $ case code of
+    ExitSuccess -> any (not . null) (lines out)
+    ExitFailure _ -> False
 
 -- Short ref names for completion: local branches first, then remotes.
 listRefs :: FilePath -> IO [Text]
