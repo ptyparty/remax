@@ -63,6 +63,7 @@ data Config = Config
   , cfgScrolloff :: Int
   , cfgNoteWrap :: Int
   , cfgNoteOnFlag :: Bool -- ! and ? open the note popup immediately
+  , cfgIgnoreWs :: Bool -- compare lines with their whitespace removed
   , cfgSplit :: SplitConfig
   }
 
@@ -73,6 +74,7 @@ defaultConfig =
     , cfgScrolloff = 5
     , cfgNoteWrap = 58
     , cfgNoteOnFlag = True
+    , cfgIgnoreWs = False
     , cfgSplit = defaultSplitConfig
     }
 
@@ -177,6 +179,7 @@ fromEntries entries =
       , cfgScrolloff = max 0 (getInt "scrolloff" (cfgScrolloff base))
       , cfgNoteWrap = max 20 (getInt "note-wrap" (cfgNoteWrap base))
       , cfgNoteOnFlag = getInt "note-on-flag" (1 :: Int) /= 0
+      , cfgIgnoreWs = getInt "ignore-whitespace" (0 :: Int) /= 0
       , cfgSplit =
           SplitConfig
             { splitThreshold =

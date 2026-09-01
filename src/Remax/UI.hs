@@ -764,7 +764,7 @@ loadOne cfg hls mode root path = do
               fvHl = TS.highlighterFor hls path (listToMaybe newLs)
             , fvRunDecls = []
             }
-      (fv, _) <- rebuildFV (cfgSplit cfg) (T.pack root) fv0
+      (fv, _) <- rebuildFV cfg (T.pack root) fv0
       let
         anchor = case fvRuns fv of
           (r : _) -> runAnchor r
@@ -828,8 +828,11 @@ newSideLineCount fv =
 -- everything else carries plain tokens until the cursor arrives. Shown
 -- files use the vendored tree-sitter grammar when one claims the file,
 -- and render plain when there is none or the parse blew its budget.
-rebuildFV :: SplitConfig -> Text -> FileView -> IO (FileView, Bool)
-rebuildFV sc repo fv = do
+rebuildFV :: Config -> Text -> FileView -> IO (FileView, Bool)
+rebuildFV cfg repo fv = do
+  let
+    sc = cfgSplit cfg
+    ws = if cfgIgnoreWs cfg then WhitespaceIgnored else WhitespaceMatters
   let
     newLs = newSideLines fv
     plain = pure (plainLines newLs)
@@ -846,7 +849,7 @@ rebuildFV sc repo fv = do
             pure segs
           Nothing -> plain
       _ -> plain
-  (rows3, degraded) <- diffIO (fvBase fv) newLs
+  (rows3, degraded) <- diffIO ws (fvBase fv) newLs
   let
     (rows, runs) = assemble sc repo (T.pack (fvPath fv)) rows3 toks
     decls = declsForAnchors newLs (map runAnchor runs)
@@ -932,10 +935,11 @@ declName decl =
     (w1 : _) -> w1
     [] -> ""
 
-diffIO :: [Text] -> [Text] -> IO ([(Char, Maybe Int, Text)], Bool)
-diffIO old new = do
+diffIO ::
+  WhitespaceMode -> [Text] -> [Text] -> IO ([(Char, Maybe Int, Text)], Bool)
+diffIO mode old new = do
   let
-    parts = diffParts old new
+    parts = diffParts mode old new
   -- The clock belongs on the diff, not on the file: forcing every row
   -- under the same budget let a million-line file that differs by one
   -- line blow it. And the budget is wall-clock, so on a large heap a
@@ -2656,7 +2660,7 @@ ensureCurrentHighlighted = do
       unless (fvHighlighted fv) $ do
         (colored, _) <-
           liftIO
-            (rebuildFV (cfgSplit (stConfig st)) (repoText st) fv {fvHighlighted = True})
+            (rebuildFV (stConfig st) (repoText st) fv {fvHighlighted = True})
         modify (updateFile i (const colored))
 
 currentLineOf :: EdState -> Text
@@ -2707,7 +2711,7 @@ rebuildWith i ed = do
     fv = (stFiles st !! i) {fvEd = ed}
     oldCur =
       if i == stCurF st then currentRunOf st i else Nothing
-  (rebuilt, degraded) <- liftIO (rebuildFV (cfgSplit (stConfig st)) (repoText st) fv)
+  (rebuilt, degraded) <- liftIO (rebuildFV (stConfig st) (repoText st) fv)
   modify (updateFile i (const rebuilt))
   when (i == stCurF st) $
     modify (\s -> s {stCurH = matchRun oldCur (fvRuns rebuilt)})
@@ -3743,7 +3747,9 @@ cursorDisplayRow rows row =
 -- falls back toward the top.
 mapRowThroughEdit :: [Text] -> [Text] -> Int -> IO Int
 mapRowThroughEdit oldLs newLs target = do
-  (rows, _) <- diffIO oldLs newLs
+  -- tracking where a line went, not what counts as a change: spacing
+  -- is part of the line's identity here whatever the setting says
+  (rows, _) <- diffIO WhitespaceMatters oldLs newLs
   let
     clamp r = max 0 (min r (length newLs - 1))
     bufferRowOf (_, mnr, _) = mnr
@@ -3816,7 +3822,7 @@ refreshGit = do
                     then pure (Just fv)
                     else do
                       (rebuilt, _) <-
-                        rebuildFV (cfgSplit (stConfig stEff)) (repoText stEff) fv {fvBase = base}
+                        rebuildFV (stConfig stEff) (repoText stEff) fv {fvBase = base}
                       pure (Just rebuilt)
       refreshed <- liftIO (forMaybeBounded refreshOne names)
       let
@@ -3839,7 +3845,7 @@ refreshGit = do
                 if base == buf && fvBase fv /= buf
                   then do
                     (rebuilt, _) <-
-                      rebuildFV (cfgSplit (stConfig stEff)) (repoText stEff) fv {fvBase = buf}
+                      rebuildFV (stConfig stEff) (repoText stEff) fv {fvBase = buf}
                     pure (Just rebuilt)
                   else pure (Just fv)
       let
@@ -4149,6 +4155,7 @@ settingNames =
   , "scrolloff"
   , "note-wrap"
   , "note-on-flag"
+  , "ignore-whitespace"
   , "split-threshold"
   , "piece-min"
   , "piece-max"
@@ -4161,6 +4168,7 @@ settingValue cfg key =
     "scrolloff" -> tshow (cfgScrolloff cfg)
     "note-wrap" -> tshow (cfgNoteWrap cfg)
     "note-on-flag" -> if cfgNoteOnFlag cfg then "1" else "0"
+    "ignore-whitespace" -> if cfgIgnoreWs cfg then "1" else "0"
     "split-threshold" -> tshow (splitThreshold (cfgSplit cfg))
     "piece-min" -> tshow (pieceMin (cfgSplit cfg))
     "piece-max" -> tshow (pieceMax (cfgSplit cfg))
@@ -4208,6 +4216,9 @@ applySet key val = do
     "note-wrap" -> withInt (\n -> cfg {cfgNoteWrap = max 20 n}) (pure ())
     "note-on-flag" ->
       withInt (\n -> cfg {cfgNoteOnFlag = n /= 0}) (pure ())
+    -- both change what the diff says, so every file is decorated again
+    "ignore-whitespace" ->
+      withInt (\n -> cfg {cfgIgnoreWs = n /= 0}) rebuildAllFiles
     "split-threshold" ->
       withInt
         (\n -> cfg {cfgSplit = splitWith (\sc -> sc {splitThreshold = max 1 n})})
@@ -4228,12 +4239,12 @@ rebuildAllFiles :: EventM Name St ()
 rebuildAllFiles = do
   st <- get
   let
-    sc = cfgSplit (stConfig st)
+    cfg = stConfig st
     oldCur = currentRunOf st (stCurF st)
   rebuilt <-
     liftIO
       ( forMaybeBounded
-          (\fv -> fmap (Just . fst) (rebuildFV sc (repoText st) fv))
+          (\fv -> fmap (Just . fst) (rebuildFV cfg (repoText st) fv))
           (stFiles st)
       )
   let
@@ -6090,7 +6101,7 @@ loadOpened cfg hls root path = do
                   fvHl = TS.highlighterFor hls path (listToMaybe newLs)
                 , fvRunDecls = []
                 }
-          (fv, _) <- rebuildFV (cfgSplit cfg) (T.pack root) fv0
+          (fv, _) <- rebuildFV cfg (T.pack root) fv0
           pure (Just fv)
 
 closeCurrent :: EventM Name St ()
