@@ -64,6 +64,7 @@ data Config = Config
   , cfgNoteWrap :: Int
   , cfgNoteOnFlag :: Bool -- ! and ? open the note popup immediately
   , cfgIgnoreWs :: Bool -- compare lines with their whitespace removed
+  , cfgWordDiff :: Bool -- mark the words that differ within a changed line (on)
   , cfgSplit :: SplitConfig
   }
 
@@ -75,6 +76,7 @@ defaultConfig =
     , cfgNoteWrap = 58
     , cfgNoteOnFlag = True
     , cfgIgnoreWs = False
+    , cfgWordDiff = True
     , cfgSplit = defaultSplitConfig
     }
 
@@ -180,6 +182,7 @@ fromEntries entries =
       , cfgNoteWrap = max 20 (getInt "note-wrap" (cfgNoteWrap base))
       , cfgNoteOnFlag = getInt "note-on-flag" (1 :: Int) /= 0
       , cfgIgnoreWs = getInt "ignore-whitespace" (0 :: Int) /= 0
+      , cfgWordDiff = getInt "word-diff" (1 :: Int) /= 0
       , cfgSplit =
           SplitConfig
             { splitThreshold =
