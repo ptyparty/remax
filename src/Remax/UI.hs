@@ -2100,17 +2100,26 @@ nonEmptySegs :: [Seg] -> [Seg]
 nonEmptySegs = filter (not . T.null . snd)
 
 -- Words, for the purpose of telling two versions of a line apart: runs of
--- identifier characters, runs of space, and punctuation a character at a
--- time. Each carries the column it starts at, so a difference can be
--- pointed at on screen.
+-- identifier characters, runs of space, runs of operator characters, and
+-- brackets and separators one at a time. Each carries the column it
+-- starts at, so a difference can be pointed at on screen.
+--
+-- An operator is a word in its own right — >>= and <$> are read as units
+-- and change as units — but the brackets around one are not part of it.
+-- Lumping all punctuation together made ")+(" a single token, so
+-- changing the operator between two parenthesised terms marked the
+-- parentheses along with it.
 wordTokens :: Text -> [(Int, Text)]
 wordTokens t =
   let
     kind c
       | isAlphaNum c || c == '_' = 0 :: Int
       | isSpace c = 1
-      | otherwise = 2
-    groups = T.groupBy (\a b -> kind a == kind b) t
+      | c `elem` ("()[]{},;" :: String) = 2
+      | otherwise = 3
+    -- kind 2 never joins anything, itself included: "))" is two brackets
+    sameWord a b = kind a == kind b && kind a /= 2
+    groups = T.groupBy sameWord t
     starts = scanl (\n g -> n + T.length g) 0 groups
   in
     zip starts groups
@@ -2165,18 +2174,32 @@ wordSpans mode oldLine newLine =
           in
             (a, spanOf news ni (length ns) ++ b)
   in
-    if biggest == 0 || kept * 3 < biggest
+    -- less than half the words in common and it is a rewrite, not an
+    -- edit. A third was too generous: a line whose binding name and =
+    -- survive already has a third of itself in common, so everything
+    -- after the = could change and still be marked word by word, which
+    -- says no more than the + and - did and drowns the real edits nearby.
+    if biggest == 0 || kept * 2 < biggest
       then ([], [])
       else walk 0 0 grouped
 
 -- Which columns to mark on each row of the window. Rows arrive as a block
--- of removals followed by a block of additions, and only a block that
--- replaced its counterpart one for one is read as a set of rewritten
--- lines: with the counts unequal there is no honest way to say which line
--- replaced which, and guessing would mark the wrong words.
+-- of removals followed by a block of additions, and the nth removal is
+-- read against the nth addition.
+--
+-- Blocks of unequal size are paired too, as far as the shorter one goes.
+-- Requiring them to match one for one looked like the careful choice and
+-- was not: editing a line and adding another beside it makes a block of
+-- one against two, which is an ordinary thing to do and left the edited
+-- line with no marks at all. Nothing is risked by pairing anyway, because
+-- a pair that does not resemble each other is dropped by wordSpans on the
+-- way — the guard against marking the wrong words already lives there.
 intralineSpans :: WhitespaceMode -> [RowR] -> [[(Int, Int)]]
 intralineSpans mode =
   let
+    -- zipWith stops at the shorter side; the rows past it never had a
+    -- counterpart to be read against
+    pad n xs = take n (xs ++ repeat [])
     go [] = []
     go rows@(r : _)
       | rMark r == '-' =
@@ -2186,9 +2209,9 @@ intralineSpans mode =
             paired =
               zipWith (\o n -> wordSpans mode (rText o) (rText n)) removed added
           in
-            if length removed == length added && not (null added)
-              then map fst paired ++ map snd paired ++ go rest
-              else map (const []) (removed ++ added) ++ go rest
+            pad (length removed) (map fst paired)
+              ++ pad (length added) (map snd paired)
+              ++ go rest
       | otherwise = [] : go (drop 1 rows)
   in
     go
