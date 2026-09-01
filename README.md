@@ -9,12 +9,16 @@ Hunk-by-hunk code review with the **whole file on screen**: edit it
 know — helix, vi, or emacs — and record per-line, content-keyed verdicts
 that survive rebases.
 
-![remax reviewing a commit mid-rebase](hero.png)
+![remax reviewing a commit mid-rebase while an agent answers](hero.gif)
 
-*A commit-by-commit `:rebase` review in progress: the bar under the
+*A commit-by-commit `:rebase` review in progress. The bar under the
 header tracks the rebase and the commit under review, the tray lists
 hunks by file with their verdicts, notes, and progress meters, and
-removed lines float inline beside what replaced them.*
+removed lines float inline beside what replaced them — with the words
+that differ inside a changed line marked in place. A hunk is accepted,
+a line is flagged with a note, and then an agent working from outside
+the session edits the file and answers: the rewritten line and the reply
+both arrive without a keystroke, because the session is watching.*
 
 Prebuilt Linux binaries: every push to main updates the rolling
 [`latest` release](../../releases/tag/latest) — download
@@ -476,18 +480,32 @@ builds in the `haskell-tools` dev container (`compose.yaml`), and
 source of truth — `remax.cabal` is hpack-generated. Plain `cabal build`
 also works outside the container.
 
-### The hero screenshot
+### The hero recording
 
-`scripts/hero-shot` regenerates `hero.png` with no human at a
-terminal: it builds the standard state with `scripts/hero --no-launch`
-(a scratch repo at `/tmp/remax-hero` mid-rebase, stopped on its first
-commit, seeded with accepted files, a flagged hunk and a questioned
-hunk with notes, and the current file's hunks left pending — store and
-config sandboxed under the scratch directory), captures the remax frame
-through a pty, and renders it to a 2x PNG via pyte and headless Chrome.
-It needs `python3` and Chrome or Chromium; pyte and pillow install into
-a scratch venv on first run. To eyeball or restage the state by hand,
-`scripts/hero` builds the same state and launches remax in it.
+`scripts/hero-cast` regenerates `hero.gif` with no human at a terminal:
+it builds the standard state with `scripts/hero --no-launch` (a scratch
+repo at `/tmp/remax-hero` mid-rebase, stopped on its first commit,
+seeded with accepted files, a flagged hunk and a questioned hunk with
+notes, and the current file's hunks left pending — store and config
+sandboxed under the scratch directory), then drives a short review
+through a pty and records the emulated screen.
+
+The recording is scripted in `tour` in `scripts/lib/hero_cast.py`: a
+hunk accepted, a line flagged with a note, and then an agent editing the
+file and posting a reply from outside the session while it watches. The
+frames are drawn cell by cell with Pillow rather than screenshotted, so
+it needs `python3` and a monospace TTF and no browser; pyte and pillow
+install into a scratch venv on first run.
+
+Two things the tour depends on, if you rewrite it. The agent's edit
+lands on the line *below* the flagged one on purpose — a verdict is
+keyed by the content of its own line, so an agent that rewrites the line
+it was asked about takes the note off it. And it ends resting on the
+answer rather than accepting, because accepting advances to the next
+hunk and scrolls the answer off the screen.
+
+To eyeball or restage the state by hand, `scripts/hero` builds the same
+state and launches remax in it.
 
 ## Known v1 edges
 
