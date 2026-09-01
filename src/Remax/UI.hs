@@ -2124,20 +2124,30 @@ wordTokens t =
   in
     zip starts groups
 
--- The words that differ between a line and the line that replaced it, as
--- inclusive column ranges on each side.
+-- Whether two lines resemble each other enough to be read as one edited
+-- into the other. Below half their words in common they are a rewrite,
+-- and pointing at every word says no more than the + and - already did.
+--
+-- Half rather than a third: a line whose binding name and = survive
+-- already has a third of itself in common, so everything after the =
+-- could change and still be marked word by word.
+worthMarking :: Int -> Int -> Bool
+worthMarking kept biggest = biggest > 0 && kept * 2 >= biggest
+
+-- How much two lines have in common, and where they differ: the words
+-- shared, the length of the longer, and the columns to mark on each side.
 --
 -- Whole words rather than characters: a renamed identifier should light
--- up as a name, not as a scatter of letters inside one. And a line that
--- has little left in common with its counterpart is a rewrite rather than
--- an edit, so it is left unmarked — highlighting nearly all of it says
--- nothing the + and - did not already say, at the cost of a lot of noise.
--- Under WhitespaceIgnored the blanks are dropped before the comparison
--- rather than merely discounted: having said spacing is not a difference,
--- pointing at it anyway would be the noise this setting exists to avoid.
-wordSpans ::
-  WhitespaceMode -> Text -> Text -> ([(Int, Int)], [(Int, Int)])
-wordSpans mode oldLine newLine =
+-- up as a name, not as a scatter of letters inside one. Under
+-- WhitespaceIgnored the blanks are dropped before the comparison rather
+-- than merely discounted — having said spacing is not a difference,
+-- pointing at it anyway would be the noise that setting exists to avoid.
+wordMatch ::
+  WhitespaceMode ->
+  Text ->
+  Text ->
+  (Int, Int, ([(Int, Int)], [(Int, Int)]))
+wordMatch mode oldLine newLine =
   let
     tokensOf line = case mode of
       WhitespaceMatters -> wordTokens line
@@ -2174,14 +2184,7 @@ wordSpans mode oldLine newLine =
           in
             (a, spanOf news ni (length ns) ++ b)
   in
-    -- less than half the words in common and it is a rewrite, not an
-    -- edit. A third was too generous: a line whose binding name and =
-    -- survive already has a third of itself in common, so everything
-    -- after the = could change and still be marked word by word, which
-    -- says no more than the + and - did and drowns the real edits nearby.
-    if biggest == 0 || kept * 2 < biggest
-      then ([], [])
-      else walk 0 0 grouped
+    (kept, biggest, walk 0 0 grouped)
 
 -- Which columns to mark on each row of the window. Rows arrive as a block
 -- of removals followed by a block of additions, and the nth removal is
@@ -2194,23 +2197,74 @@ wordSpans mode oldLine newLine =
 -- line with no marks at all. Nothing is risked by pairing anyway, because
 -- a pair that does not resemble each other is dropped by wordSpans on the
 -- way — the guard against marking the wrong words already lives there.
+-- Above this many candidate pairings a block goes unmarked.
+--
+-- Matching is quadratic in the size of the block, and a block that large
+-- is a wholesale rewrite where the marks would say nothing anyway. It
+-- also cannot be matched honestly: only the rows in the render window
+-- are on hand, so a block running past both ends of it offers the tail
+-- of the removals against the head of the additions, and pairing those
+-- produces marks that are confident and wrong.
+pairingBudget :: Int
+pairingBudget = 2500
+
+-- Which added line each removed line was edited into. Not the one in the
+-- same position: removing a line and editing the one below it is an
+-- everyday shape, and by position that reads the deleted line against
+-- the edited one's replacement, finds no resemblance, and leaves the
+-- edit unmarked.
+--
+-- So every pairing is scored and the best taken first, then the best of
+-- what is left, and so on. A line with no partner it resembles keeps
+-- none, which is the honest answer for one that was purely added or
+-- purely deleted.
+bestPairs ::
+  WhitespaceMode ->
+  [RowR] ->
+  [RowR] ->
+  [(Int, Int, ([(Int, Int)], [(Int, Int)]))]
+bestPairs mode removed added =
+  let
+    scored =
+      [ (share, i, j, spans)
+      | (i, o) <- zip [0 :: Int ..] removed
+      , (j, n) <- zip [0 :: Int ..] added
+      , let
+          (kept, biggest, spans) = wordMatch mode (rText o) (rText n)
+      , worthMarking kept biggest
+      , let
+          share = (kept * 1000) `div` max 1 biggest
+      ]
+    -- best resemblance first; ties go to the earlier rows, which keeps
+    -- equal-sized blocks pairing straight down as they read
+    ranked = sortOn (\(share, i, j, _) -> (negate share, i, j)) scored
+    take' _ _ [] = []
+    take' usedO usedN ((_, i, j, spans) : rest)
+      | Set.member i usedO || Set.member j usedN = take' usedO usedN rest
+      | otherwise =
+          (i, j, spans) : take' (Set.insert i usedO) (Set.insert j usedN) rest
+  in
+    take' Set.empty Set.empty ranked
+
 intralineSpans :: WhitespaceMode -> [RowR] -> [[(Int, Int)]]
 intralineSpans mode =
   let
-    -- zipWith stops at the shorter side; the rows past it never had a
-    -- counterpart to be read against
-    pad n xs = take n (xs ++ repeat [])
     go [] = []
     go rows@(r : _)
       | rMark r == '-' =
           let
             (removed, afterRemoved) = span ((== '-') . rMark) rows
             (added, rest) = span ((== '+') . rMark) afterRemoved
-            paired =
-              zipWith (\o n -> wordSpans mode (rText o) (rText n)) removed added
+            chosen =
+              if length removed * length added > pairingBudget
+                then []
+                else bestPairs mode removed added
+            olds = Map.fromList [(i, fst sp) | (i, _, sp) <- chosen]
+            news = Map.fromList [(j, snd sp) | (_, j, sp) <- chosen]
+            spansFor m n = [Map.findWithDefault [] k m | k <- [0 .. n - 1]]
           in
-            pad (length removed) (map fst paired)
-              ++ pad (length added) (map snd paired)
+            spansFor olds (length removed)
+              ++ spansFor news (length added)
               ++ go rest
       | otherwise = [] : go (drop 1 rows)
   in
