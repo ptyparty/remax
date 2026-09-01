@@ -1213,6 +1213,7 @@ aroundGroups mode =
       , ("Ctrl-a", "in either: show the ignored files too")
       , ("Ctrl-x", "in either: new / rename / duplicate / delete")
       , ("gr", "switch repository, starting on the next")
+      , ("gn gp", "the next / previous file, as ) and ( do")
       , ("\9251 b", "files already open in the session")
       , ("Tab", "collapse / expand the tray")
       , ("{ }", "scroll the tray")
@@ -2676,6 +2677,20 @@ handleHelixKey i fv ed ev = do
       , V.EvKey (V.KChar 'r') [] <- ev -> do
           deferToModal i ed ev
           openRepoPicker
+    -- gn/gp: the next and previous file. helix spends these on buffers,
+    -- and a file under review is what remax has instead of one, so they
+    -- keep the meaning a reader arrives with. ) and ( are the same move
+    -- in one keystroke; these are for the hand that already knows helix.
+    Normal
+      | pendingLabel ed == Just "g"
+      , V.EvKey (V.KChar 'n') [] <- ev -> do
+          deferToModal i ed ev
+          switchFile 1
+    Normal
+      | pendingLabel ed == Just "g"
+      , V.EvKey (V.KChar 'p') [] <- ev -> do
+          deferToModal i ed ev
+          switchFile (-1)
     Normal | hasPending ed -> deferToModal i ed ev
     Normal ->
       case ev of
