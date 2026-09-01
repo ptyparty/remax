@@ -2124,15 +2124,37 @@ wordTokens t =
   in
     zip starts groups
 
--- Whether two lines resemble each other enough to be read as one edited
--- into the other. Below half their words in common they are a rewrite,
--- and pointing at every word says no more than the + and - already did.
+-- What two lines have in common, counted two ways, because the two
+-- questions asked of it want different answers.
 --
--- Half rather than a third: a line whose binding name and = survive
--- already has a third of itself in common, so everything after the =
--- could change and still be marked word by word.
-worthMarking :: Int -> Int -> Bool
-worthMarking kept biggest = biggest > 0 && kept * 2 >= biggest
+-- Whether to mark at all is about words: a line where one long
+-- identifier was renamed has little of its text left in common and is
+-- still plainly an edit, so counting characters there would call it a
+-- rewrite and say nothing.
+--
+-- Which of several candidates to pair is about characters: two lines can
+-- share the same number of words and not be equally alike. Choosing
+-- between "keeps <$>" and "keeps createdAtField" is a tie by the word,
+-- and not remotely a tie to a reader.
+data WordMatch = WordMatch
+  { wmKeptWords :: !Int
+  , wmWords :: !Int
+  , wmKeptChars :: !Int
+  , wmChars :: !Int
+  , wmSpans :: ([(Int, Int)], [(Int, Int)])
+  }
+
+-- Below half their words in common two lines are a rewrite rather than an
+-- edit, and pointing at every word says no more than the + and - already
+-- did. Half rather than a third: a line whose binding name and = survive
+-- already has a third of itself in common.
+worthMarking :: WordMatch -> Bool
+worthMarking wm = wmWords wm > 0 && wmKeptWords wm * 2 >= wmWords wm
+
+-- How alike two lines are, for choosing between candidates. Nothing
+-- compares this across different pairs of lines except bestPairs.
+matchShare :: WordMatch -> Int
+matchShare wm = (wmKeptChars wm * 1000) `div` max 1 (wmChars wm)
 
 -- How much two lines have in common, and where they differ: the words
 -- shared, the length of the longer, and the columns to mark on each side.
@@ -2142,11 +2164,7 @@ worthMarking kept biggest = biggest > 0 && kept * 2 >= biggest
 -- WhitespaceIgnored the blanks are dropped before the comparison rather
 -- than merely discounted — having said spacing is not a difference,
 -- pointing at it anyway would be the noise that setting exists to avoid.
-wordMatch ::
-  WhitespaceMode ->
-  Text ->
-  Text ->
-  (Int, Int, ([(Int, Int)], [(Int, Int)]))
+wordMatch :: WhitespaceMode -> Text -> Text -> WordMatch
 wordMatch mode oldLine newLine =
   let
     tokensOf line = case mode of
@@ -2160,10 +2178,10 @@ wordMatch mode oldLine newLine =
     -- nothing whatever in common still share their spaces, and counting
     -- those as common was enough to call a rewrite an edit
     solid = filter (not . T.all isSpace)
-    kept =
-      length
-        (solid (concatMap (\g -> case g of Both bs _ -> bs; _ -> []) grouped))
-    biggest = max (length (solid (map snd olds))) (length (solid (map snd news)))
+    shared = solid (concatMap (\g -> case g of Both bs _ -> bs; _ -> []) grouped)
+    oldWords = solid (map snd olds)
+    newWords = solid (map snd news)
+    chars = sum . map T.length
     spanOf toks i n =
       case (drop i toks, drop (i + n - 1) toks) of
         ((start, _) : _, (end, endText) : _) ->
@@ -2184,7 +2202,13 @@ wordMatch mode oldLine newLine =
           in
             (a, spanOf news ni (length ns) ++ b)
   in
-    (kept, biggest, walk 0 0 grouped)
+    WordMatch
+      { wmKeptWords = length shared
+      , wmWords = max (length oldWords) (length newWords)
+      , wmKeptChars = chars shared
+      , wmChars = max (chars oldWords) (chars newWords)
+      , wmSpans = walk 0 0 grouped
+      }
 
 -- Which columns to mark on each row of the window. Rows arrive as a block
 -- of removals followed by a block of additions, and the nth removal is
@@ -2226,16 +2250,14 @@ bestPairs ::
 bestPairs mode removed added =
   let
     scored =
-      [ (share, i, j, spans)
+      [ (matchShare wm, i, j, wmSpans wm)
       | (i, o) <- zip [0 :: Int ..] removed
       , (j, n) <- zip [0 :: Int ..] added
       , let
-          (kept, biggest, spans) = wordMatch mode (rText o) (rText n)
-      , worthMarking kept biggest
-      , let
-          share = (kept * 1000) `div` max 1 biggest
+          wm = wordMatch mode (rText o) (rText n)
+      , worthMarking wm
       ]
-    -- best resemblance first; ties go to the earlier rows, which keeps
+    -- most text in common first; ties go to the earlier rows, which keeps
     -- equal-sized blocks pairing straight down as they read
     ranked = sortOn (\(share, i, j, _) -> (negate share, i, j)) scored
     take' _ _ [] = []
