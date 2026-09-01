@@ -72,6 +72,7 @@ import Control.Exception (IOException, evaluate, finally, try)
 import Control.Monad (forM, forM_, unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State (get, modify, put)
+import Data.Algorithm.Diff (PolyDiff (..), getGroupedDiff)
 import Data.Char (isAlphaNum, isSpace, toLower)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
@@ -1898,7 +1899,19 @@ renderFile paneWidth st fv =
         (scanr (\row acc -> fromMaybe acc (rNewRow row)) seedPoint windowed)
     noteRowsList =
       take (hi - lo) (drop lo (shownNoteLines (noteTextWidth paneWidth fv) st rows))
-    rowsWithPoints = zip3 windowed points noteRowsList
+    -- worked out for the window only: the pairing needs neighbouring
+    -- rows, and the rows on screen are the ones that can show a mark
+    emphList =
+      if cfgWordDiff (stConfig st)
+        then
+          intralineSpans
+            ( if cfgIgnoreWs (stConfig st)
+                then WhitespaceIgnored
+                else WhitespaceMatters
+            )
+            windowed
+        else map (const []) windowed
+    rowsWithPoints = zip (zip3 windowed points noteRowsList) emphList
     numW = gutterWidth fv
     -- padding rows carry the border too, so the tray/body divider runs
     -- unbroken through regions the render window skips
@@ -1906,7 +1919,7 @@ renderFile paneWidth st fv =
       if k <= 0
         then txt T.empty
         else raw (V.charFill (stBorder st) '\9614' (1 :: Int) k)
-    lineWidget (r, point, shownNotes) =
+    lineWidget ((r, point, shownNotes), emph) =
       let
         isCurRun = case rRunIx r of
           Just runIx -> runIx == curH
@@ -1966,24 +1979,37 @@ renderFile paneWidth st fv =
         -- the view follows the cursor horizontally while the gutter
         -- stays pinned
         contentFor hOff =
-          if rMark r == '-'
-            then withAttr removedTextAttr (txt (padT (T.drop hOff (rText r))))
-            else
-              let
-                sliced = snd (splitAtCol hOff (effRuns r))
-              in
-                case rowSpan r of
-                  Just (s, mEnd)
-                    | fromMaybe maxBound mEnd >= hOff ->
-                        selTokensWidget
-                          sliced
-                          (max 0 (s - hOff))
-                          (fmap (subtract hOff) mEnd)
-                  _ ->
-                    case nonEmptySegs sliced of
-                      [] -> txt " "
-                      filled ->
-                        hBox (map (\(a, t) -> withAttr a (txt t)) filled)
+          let
+            marks = shiftSpans hOff emph
+          in
+            if rMark r == '-'
+              then
+                let
+                  shown = [(removedTextAttr, padT (T.drop hOff (rText r)))]
+                in
+                  if null marks
+                    then withAttr removedTextAttr (txt (padT (T.drop hOff (rText r))))
+                    else emphSegsWidget marks shown
+              else
+                let
+                  sliced = snd (splitAtCol hOff (effRuns r))
+                in
+                  case rowSpan r of
+                    -- a live selection outranks the marks: it is what the
+                    -- reader is pointing at this instant
+                    Just (s, mEnd)
+                      | fromMaybe maxBound mEnd >= hOff ->
+                          selTokensWidget
+                            sliced
+                            (max 0 (s - hOff))
+                            (fmap (subtract hOff) mEnd)
+                    _
+                      | not (null marks) -> emphSegsWidget marks sliced
+                    _ ->
+                      case nonEmptySegs sliced of
+                        [] -> txt " "
+                        filled ->
+                          hBox (map (\(a, t) -> withAttr a (txt t)) filled)
         -- reviewed lines keep their full syntax colors; the gutter dot
         -- and the tray checkmark already say "answered for", and dimming
         -- whole regions made the buffer feel murky
@@ -2060,6 +2086,129 @@ hScrollFor ctx numW curCol =
 
 nonEmptySegs :: [Seg] -> [Seg]
 nonEmptySegs = filter (not . T.null . snd)
+
+-- Words, for the purpose of telling two versions of a line apart: runs of
+-- identifier characters, runs of space, and punctuation a character at a
+-- time. Each carries the column it starts at, so a difference can be
+-- pointed at on screen.
+wordTokens :: Text -> [(Int, Text)]
+wordTokens t =
+  let
+    kind c
+      | isAlphaNum c || c == '_' = 0 :: Int
+      | isSpace c = 1
+      | otherwise = 2
+    groups = T.groupBy (\a b -> kind a == kind b) t
+    starts = scanl (\n g -> n + T.length g) 0 groups
+  in
+    zip starts groups
+
+-- The words that differ between a line and the line that replaced it, as
+-- inclusive column ranges on each side.
+--
+-- Whole words rather than characters: a renamed identifier should light
+-- up as a name, not as a scatter of letters inside one. And a line that
+-- has little left in common with its counterpart is a rewrite rather than
+-- an edit, so it is left unmarked — highlighting nearly all of it says
+-- nothing the + and - did not already say, at the cost of a lot of noise.
+-- Under WhitespaceIgnored the blanks are dropped before the comparison
+-- rather than merely discounted: having said spacing is not a difference,
+-- pointing at it anyway would be the noise this setting exists to avoid.
+wordSpans ::
+  WhitespaceMode -> Text -> Text -> ([(Int, Int)], [(Int, Int)])
+wordSpans mode oldLine newLine =
+  let
+    tokensOf line = case mode of
+      WhitespaceMatters -> wordTokens line
+      WhitespaceIgnored ->
+        filter (not . T.all isSpace . snd) (wordTokens line)
+    olds = tokensOf oldLine
+    news = tokensOf newLine
+    grouped = getGroupedDiff (map snd olds) (map snd news)
+    -- measured on words, not on the blanks between them: two lines with
+    -- nothing whatever in common still share their spaces, and counting
+    -- those as common was enough to call a rewrite an edit
+    solid = filter (not . T.all isSpace)
+    kept =
+      length
+        (solid (concatMap (\g -> case g of Both bs _ -> bs; _ -> []) grouped))
+    biggest = max (length (solid (map snd olds))) (length (solid (map snd news)))
+    spanOf toks i n =
+      case (drop i toks, drop (i + n - 1) toks) of
+        ((start, _) : _, (end, endText) : _) ->
+          [(start, end + T.length endText - 1)]
+        _ -> []
+    walk _ _ [] = ([], [])
+    walk oi ni (g : gs) =
+      case g of
+        Both bs _ -> walk (oi + length bs) (ni + length bs) gs
+        First os ->
+          let
+            (a, b) = walk (oi + length os) ni gs
+          in
+            (spanOf olds oi (length os) ++ a, b)
+        Second ns ->
+          let
+            (a, b) = walk oi (ni + length ns) gs
+          in
+            (a, spanOf news ni (length ns) ++ b)
+  in
+    if biggest == 0 || kept * 3 < biggest
+      then ([], [])
+      else walk 0 0 grouped
+
+-- Which columns to mark on each row of the window. Rows arrive as a block
+-- of removals followed by a block of additions, and only a block that
+-- replaced its counterpart one for one is read as a set of rewritten
+-- lines: with the counts unequal there is no honest way to say which line
+-- replaced which, and guessing would mark the wrong words.
+intralineSpans :: WhitespaceMode -> [RowR] -> [[(Int, Int)]]
+intralineSpans mode =
+  let
+    go [] = []
+    go rows@(r : _)
+      | rMark r == '-' =
+          let
+            (removed, afterRemoved) = span ((== '-') . rMark) rows
+            (added, rest) = span ((== '+') . rMark) afterRemoved
+            paired =
+              zipWith (\o n -> wordSpans mode (rText o) (rText n)) removed added
+          in
+            if length removed == length added && not (null added)
+              then map fst paired ++ map snd paired ++ go rest
+              else map (const []) (removed ++ added) ++ go rest
+      | otherwise = [] : go (drop 1 rows)
+  in
+    go
+
+-- Ranges moved into the coordinates of a horizontally scrolled line, and
+-- those scrolled off the left dropped.
+shiftSpans :: Int -> [(Int, Int)] -> [(Int, Int)]
+shiftSpans off =
+  mapMaybe
+    ( \(s, e) ->
+        if e < off then Nothing else Just (max 0 (s - off), e - off)
+    )
+
+-- Segments with the given columns wearing the word-change wash. The wash
+-- sets only a background, so a token keeps whatever colour the grammar
+-- gave it and gains the mark on top.
+emphSegsWidget :: [(Int, Int)] -> [Seg] -> Widget Name
+emphSegsWidget spans segs =
+  let
+    lay xs = hBox (map (\(a, t) -> withAttr a (txt t)) (nonEmptySegs xs))
+    washed xs = case nonEmptySegs xs of
+      [] -> txt ""
+      ws -> withDefAttr wordChangeAttr (lay ws)
+    go _ [] rest = [lay rest]
+    go col ((s, e) : more) rest =
+      let
+        (before, fromStart) = splitAtCol (s - col) rest
+        (mid, after) = splitAtCol (e + 1 - s) fromStart
+      in
+        lay before : washed mid : go (e + 1) more after
+  in
+    hBox (go 0 spans segs)
 
 -- Token runs with the char selection's columns highlighted.
 effRuns :: RowR -> [Seg]
@@ -4156,6 +4305,7 @@ settingNames =
   , "note-wrap"
   , "note-on-flag"
   , "ignore-whitespace"
+  , "word-diff"
   , "split-threshold"
   , "piece-min"
   , "piece-max"
@@ -4169,6 +4319,7 @@ settingValue cfg key =
     "note-wrap" -> tshow (cfgNoteWrap cfg)
     "note-on-flag" -> if cfgNoteOnFlag cfg then "1" else "0"
     "ignore-whitespace" -> if cfgIgnoreWs cfg then "1" else "0"
+    "word-diff" -> if cfgWordDiff cfg then "1" else "0"
     "split-threshold" -> tshow (splitThreshold (cfgSplit cfg))
     "piece-min" -> tshow (pieceMin (cfgSplit cfg))
     "piece-max" -> tshow (pieceMax (cfgSplit cfg))
@@ -4219,6 +4370,8 @@ applySet key val = do
     -- both change what the diff says, so every file is decorated again
     "ignore-whitespace" ->
       withInt (\n -> cfg {cfgIgnoreWs = n /= 0}) rebuildAllFiles
+    "word-diff" ->
+      withInt (\n -> cfg {cfgWordDiff = n /= 0}) (pure ())
     "split-threshold" ->
       withInt
         (\n -> cfg {cfgSplit = splitWith (\sc -> sc {splitThreshold = max 1 n})})
@@ -6755,6 +6908,7 @@ headerAttr
   , removedMarkAttr
   , ctxMarkAttr
   , removedTextAttr
+  , wordChangeAttr
   , selAttr
   , dimAttr
   , curRunAttr
@@ -6818,6 +6972,7 @@ addedMarkAttr = attrName "addedMark"
 removedMarkAttr = attrName "removedMark"
 ctxMarkAttr = attrName "ctxMark"
 removedTextAttr = attrName "removedText"
+wordChangeAttr = attrName "wordChange"
 selAttr = attrName "selection"
 dimAttr = attrName "dim"
 curRunAttr = attrName "currentRun"
@@ -6962,6 +7117,8 @@ mkAttrMap mth =
       , (removedMarkAttr, fg inkRose)
       , (ctxMarkAttr, fg inkFaint)
       , (removedTextAttr, fg inkRose)
+      , -- only a background, so the syntax colour underneath survives
+        (wordChangeAttr, V.defAttr `V.withBackColor` wordWash)
       , (selAttr, selection)
       , (dimAttr, fg inkDim)
       , (curRunAttr, fg inkMidBlue)
@@ -7004,7 +7161,7 @@ mkAttrMap mth =
 -- vty approximates on lesser terminals.
 inkRose, inkBlue, inkGold, inkGreen, inkLavender, inkMidBlue :: V.Color
 inkFileGold, inkDim, inkFaint, inkText, inkFlag, trayFileInk :: V.Color
-surfFloat, surfSel, cursorWash, hairInk, meterRail, matchGold :: V.Color
+surfFloat, surfSel, cursorWash, wordWash, hairInk, meterRail, matchGold :: V.Color
 inkRose = V.linearColor (0xa2 :: Int) 0x70 0x7c
 inkBlue = V.linearColor (0x7f :: Int) 0x9e 0xc7
 inkGold = V.linearColor (0xd3 :: Int) 0xb0 0x78
@@ -7023,6 +7180,7 @@ trayFileInk = V.linearColor (0xd8 :: Int) 0xd3 0xc0
 surfFloat = V.linearColor (0x15 :: Int) 0x15 0x15
 surfSel = V.linearColor (0x24 :: Int) 0x24 0x30
 cursorWash = V.linearColor (0x3a :: Int) 0x33 0x25
+wordWash = V.linearColor (0x3d :: Int) 0x35 0x4a
 hairInk = V.linearColor (0x2c :: Int) 0x2c 0x2c
 meterRail = V.linearColor (0x3a :: Int) 0x3f 0x3a
 matchGold = V.linearColor (0xfa :: Int) 0xd0 0x7a
