@@ -315,6 +315,7 @@ data St = St
   , stCmdRefs :: [Text]
   , stPromptCycle :: Maybe (Text, Int) -- Tab cycling: typed base + applied index
   , stEmacsPrefix :: Maybe Char -- a pending C-c / C-x chord (emacs keymap)
+  , stIdleGo :: Bool -- a pending g with no file open to hold it
   , stVi :: ViKeys -- a half-typed vi command: count, operator, what it awaits
   , stSearchDir :: Int -- which way / (or vi's ?) last searched: 1 or -1
   , stDeferAdvance :: Bool -- hold the post-mark jump until the note popup closes
@@ -533,6 +534,7 @@ runReview mode root roots story = do
           , stCmdRefs = []
           , stPromptCycle = Nothing
           , stEmacsPrefix = Nothing
+          , stIdleGo = False
           , stVi = viIdle
           , stSearchDir = 1
           , stDeferAdvance = False
@@ -1039,7 +1041,7 @@ draw st =
           Widget Greedy Fixed $ do
             ctx <- getContext
             render (renderFile (availWidth ctx) st fv)
-      Nothing -> idleBody
+      Nothing -> idleBody st
     panes =
       if stTray st && not (null (stFiles st))
         then [tray st, body]
@@ -1501,17 +1503,25 @@ fileMenuLayer view =
 
 -- The persistent session's resting state: nothing to review, but the
 -- watcher is live and new work will wake the screen on its own.
-idleBody :: Widget Name
-idleBody =
-  padBottom Max . padRight Max $
-    vBox
-      [ txt " "
-      , withAttr doneMarkAttr (txt "  ✓ all clear — nothing to review")
-      , txt " "
-      , withAttr
-          hintAttr
-          (txt "  watching for changes · :base REF or :mode switches the view · :q quits")
-      ]
+-- The resting screen names the way out that fits the session it is in:
+-- with other checkouts in reach, a clean one is most often a cue to go
+-- and look at the next, and gr is hard to guess from an empty pane.
+idleBody :: St -> Widget Name
+idleBody st =
+  let
+    hint =
+      if length (stRoots st) > 1
+        then "  watching for changes · gr switches repository · :base · :q quits"
+        else
+          "  watching for changes · :base REF or :mode switches the view · :q quits"
+  in
+    padBottom Max . padRight Max $
+      vBox
+        [ txt " "
+        , withAttr doneMarkAttr (txt "  ✓ all clear — nothing to review")
+        , txt " "
+        , withAttr hintAttr (txt hint)
+        ]
 
 headerBar :: St -> Widget Name
 headerBar st =
@@ -2277,28 +2287,31 @@ statusBar st =
     modeChip =
       if stSpace st
         then chip modeDotNorAttr "spc\8230"
-        else case stEmacsPrefix st of
-          Just pfx -> chip modeDotNorAttr ("C-" <> T.singleton pfx <> "\8230")
-          Nothing ->
-            case cfgKeys (stConfig st) of
-              KeysEmacs -> chip modeDotNorAttr "emx"
-              KeysVi -> case currentFileMay st of
-                Nothing -> chip modeDotNorAttr "vi"
-                Just fv -> case edMode (fvEd fv) of
-                  Insert -> chip modeDotInsAttr "ins"
-                  Normal -> case viLabel (stVi st) of
-                    Just p -> chip modeDotNorAttr (p <> "\8230")
-                    Nothing ->
-                      if edExtend (fvEd fv)
-                        then chip modeDotNorAttr "vis"
-                        else chip modeDotNorAttr "vi"
-              KeysHelix -> case currentFileMay st of
-                Nothing -> chip modeDotNorAttr "nor"
-                Just fv -> case edMode (fvEd fv) of
-                  Insert -> chip modeDotInsAttr "ins"
-                  Normal -> case pendingLabel (fvEd fv) of
-                    Just p -> chip modeDotNorAttr (p <> "\8230")
+        else
+          if stIdleGo st
+            then chip modeDotNorAttr "g\8230"
+            else case stEmacsPrefix st of
+              Just pfx -> chip modeDotNorAttr ("C-" <> T.singleton pfx <> "\8230")
+              Nothing ->
+                case cfgKeys (stConfig st) of
+                  KeysEmacs -> chip modeDotNorAttr "emx"
+                  KeysVi -> case currentFileMay st of
+                    Nothing -> chip modeDotNorAttr "vi"
+                    Just fv -> case edMode (fvEd fv) of
+                      Insert -> chip modeDotInsAttr "ins"
+                      Normal -> case viLabel (stVi st) of
+                        Just p -> chip modeDotNorAttr (p <> "\8230")
+                        Nothing ->
+                          if edExtend (fvEd fv)
+                            then chip modeDotNorAttr "vis"
+                            else chip modeDotNorAttr "vi"
+                  KeysHelix -> case currentFileMay st of
                     Nothing -> chip modeDotNorAttr "nor"
+                    Just fv -> case edMode (fvEd fv) of
+                      Insert -> chip modeDotInsAttr "ins"
+                      Normal -> case pendingLabel (fvEd fv) of
+                        Just p -> chip modeDotNorAttr (p <> "\8230")
+                        Nothing -> chip modeDotNorAttr "nor"
     -- the startup warning scrolls away with the next message; this keeps
     -- "the watcher is a second behind" on screen for the whole session
     pollChip =
@@ -2410,10 +2423,12 @@ handleEvent brickEvent =
                 if null (stFiles st)
                   then handleIdlePrefixed pfx ev
                   else handleEmacsPrefixed pfx ev
-              Nothing ->
-                if null (stFiles st)
-                  then handleIdleKey ev
-                  else handleModalKey ev
+              Nothing
+                | stIdleGo st -> do
+                    modify (\s -> s {stIdleGo = False})
+                    handleIdleGo ev
+                | null (stFiles st) -> handleIdleKey ev
+                | otherwise -> handleModalKey ev
     _ -> pure ()
 
 -- The helix-style space menu: Space, then one key; anything unlisted
@@ -2480,10 +2495,21 @@ handleIdleKey ev =
   case ev of
     V.EvKey (V.KChar ':') [] -> openCmdPrompt
     V.EvKey (V.KChar 'p') [V.MCtrl] -> openFileFinder
+    V.EvKey (V.KChar 'g') [] -> modify (\s -> s {stIdleGo = True})
     V.EvKey (V.KChar ' ') [] -> modify (\s -> s {stSpace = True})
     V.EvKey (V.KChar 'x') [V.MMeta] -> openCmdPrompt
     V.EvKey (V.KChar 'x') [V.MCtrl] ->
       modify (\s -> s {stEmacsPrefix = Just 'x'})
+    _ -> pure ()
+
+-- The g menu with nothing on screen. Only gr means anything here: there
+-- is no file to move around in, and switching repository is most of what
+-- an empty session is for — a story's first checkout being clean is
+-- exactly when the next one is wanted.
+handleIdleGo :: V.Event -> EventM Name St ()
+handleIdleGo ev =
+  case ev of
+    V.EvKey (V.KChar 'r') [] -> openRepoPicker
     _ -> pure ()
 
 -- With no files on screen, only the session chords mean anything.
