@@ -135,7 +135,10 @@ data RetryDecision
 
 delaysFor :: RetryPolicy -> [Int]
 delaysFor policy =
-  replicate (retryLimit policy) (retryBaseMs policy)
+  let
+    grow attempt = retryBaseMs policy * attempt
+  in
+    map grow [0 .. retryLimit policy - 1]
 
 decide :: RetryPolicy -> Int -> RetryDecision
 decide policy attempt =
