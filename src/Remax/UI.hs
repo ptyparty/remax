@@ -1212,6 +1212,7 @@ aroundGroups mode =
       , ("\8633", "in either: flat \8596 tree, filter kept")
       , ("Ctrl-a", "in either: show the ignored files too")
       , ("Ctrl-x", "in either: new / rename / duplicate / delete")
+      , ("gr", "switch repository, starting on the next")
       , ("\9251 b", "files already open in the session")
       , ("Tab", "collapse / expand the tray")
       , ("{ }", "scroll the tray")
@@ -2667,6 +2668,14 @@ handleHelixKey i fv ed ev = do
       , V.EvKey (V.KChar 'a') [] <- ev -> do
           deferToModal i ed ev
           gotoAltFile
+    -- gr: go to another repository. Free in every keymap remax has, and
+    -- the g menu is where going somewhere already lives. Space R is the
+    -- same door for the keymaps that have no g of their own.
+    Normal
+      | pendingLabel ed == Just "g"
+      , V.EvKey (V.KChar 'r') [] <- ev -> do
+          deferToModal i ed ev
+          openRepoPicker
     Normal | hasPending ed -> deferToModal i ed ev
     Normal ->
       case ev of
@@ -6453,26 +6462,79 @@ openRepoPicker = do
             (columnRow widths cells)
             (T.pack root <> " " <> T.unwords cells)
         rows = map row described
+        -- opening on the next one round makes Enter by itself "move on",
+        -- while the list is still there to choose from deliberately
+        startAt = case findIndex (== stRoot st) roots of
+          Just i -> (i + 1) `mod` length roots
+          Nothing -> 0
+      -- refreshRowPicker ranks the rows and lands on the first, so the
+      -- starting row is chosen after it has done that
       modify $ \s ->
-        s {stPicker = Just (refreshRowPicker (Picker PickRepo "" rows [] [] 0))}
+        s
+          { stPicker =
+              Just
+                ( (refreshRowPicker (Picker PickRepo "" rows [] [] 0))
+                    { pkSel = startAt
+                    }
+                )
+          }
+
+-- How much of a repository is left to read, for the switcher. Knowing a
+-- repository has changes says nothing about whether they have been
+-- looked at, which is the thing worth knowing before switching to one.
+--
+-- Verdicts are keyed by line content, so answering this for a repository
+-- the session is not in means actually diffing it. That is affordable
+-- for the handful of checkouts a story holds and not for something the
+-- size of a vendored tree, so past a point the count is not attempted
+-- and the file count stands in for it.
+repoStatusMaxFiles :: Int
+repoStatusMaxFiles = 40
+
+repoHunkCount :: St -> FilePath -> IO (Int, Int)
+repoHunkCount st root
+  -- the session already has this one loaded, down to its verdicts
+  | root == stRoot st =
+      let
+        runs = concatMap fvRuns (stFiles st)
+      in
+        pure
+          ( length (filter (not . runPending (stVerdicts st)) runs)
+          , length runs
+          )
+  | otherwise = do
+      verdicts <- loadVerdicts (stConn st) (T.pack root)
+      files <- loadAll (stConfig st) (stHls st) (VsRef "HEAD") root
+      let
+        runs = concatMap fvRuns files
+      pure (length (filter (not . runPending verdicts) runs), length runs)
 
 describeRepo :: St -> FilePath -> IO (FilePath, [Text])
 describeRepo st root = do
   branch <- currentBranch root
   rebase <- rebaseStatus root
   changed <- changedFiles (VsRef "HEAD") root
+  counted <-
+    if null changed || length changed > repoStatusMaxFiles
+      then pure Nothing
+      else fmap Just (repoHunkCount st root)
   let
     here = if root == stRoot st then "  \8592 current" else ""
     onBranch = case branch of
       Just b -> b
       Nothing -> "detached"
+    reviewed = case counted of
+      Just (done, total)
+        | total > 0 ->
+            tshow done <> "/" <> tshow total <> " hunks"
+      _ -> tshow (length changed) <> " changed"
     state = case rebase of
       Just rb
         | rebaseConflicted rb -> "CONFLICT"
         | otherwise -> "rebasing " <> tshow (rebaseStep rb) <> "/" <> tshow (rebaseTotal rb)
       Nothing
         | null changed -> "clean"
-        | otherwise -> tshow (length changed) <> " changed"
+        | otherwise -> reviewed
   pure (root, [T.pack (takeFileName root), onBranch, state <> here])
 
 -- Check out a branch from the same overlay. A sixth explicit mutation
