@@ -9,6 +9,7 @@ module Remax.DiffModel
   , RunKind (..)
   , SplitConfig (..)
   , defaultSplitConfig
+  , WhitespaceMode (..)
   , diffRows
   , DiffParts (..)
   , diffParts
@@ -19,6 +20,7 @@ module Remax.DiffModel
 
 import Brick (AttrName)
 import Data.Algorithm.Diff (Diff, PolyDiff (..), getGroupedDiff)
+import Data.Char (isSpace)
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -82,8 +84,8 @@ runKindOf ls =
 
 -- One display row per diff row, with equal prefix/suffix trimmed off
 -- before Myers so ordinary edits diff only the touched region.
-diffRows :: [Text] -> [Text] -> [(Char, Maybe Int, Text)]
-diffRows old new = dpRows (diffParts old new)
+diffRows :: WhitespaceMode -> [Text] -> [Text] -> [(Char, Maybe Int, Text)]
+diffRows mode old new = dpRows (diffParts mode old new)
 
 -- A diff taken apart, so a caller can put a clock on the only part that
 -- warrants one.
@@ -95,14 +97,43 @@ diffRows old new = dpRows (diffParts old new)
 -- reported as wholly rewritten, so giving up stays proportional to what
 -- actually differs.
 data DiffParts = DiffParts
-  { dpGrouped :: [Diff [Text]]
+  { dpGrouped :: [Diff [DiffLine]]
   , dpRows :: [(Char, Maybe Int, Text)]
   , dpCoarse :: [(Char, Maybe Int, Text)]
   }
 
-diffParts :: [Text] -> [Text] -> DiffParts
-diffParts old new =
+-- Whether spacing is part of what makes two lines different. Under
+-- WhitespaceIgnored a reindent, a retab and a rewrap all stop being
+-- changes — which is the point, on a commit that reformatted as it went.
+data WhitespaceMode = WhitespaceMatters | WhitespaceIgnored
+  deriving (Eq, Show)
+
+-- A line as the diff compares it, beside the line as it is shown. The two
+-- part company as soon as whitespace stops counting: equality reads dlKey
+-- while every row that comes out carries dlText, so what is displayed and
+-- what is content-keyed are always the file's own bytes.
+data DiffLine = DiffLine
+  { dlKey :: !Text
+  , dlText :: !Text
+  }
+
+instance Eq DiffLine where
+  a == b = dlKey a == dlKey b
+
+diffLine :: WhitespaceMode -> Text -> DiffLine
+diffLine mode t =
+  DiffLine
+    { dlKey = case mode of
+        WhitespaceMatters -> t
+        WhitespaceIgnored -> T.filter (not . isSpace) t
+    , dlText = t
+    }
+
+diffParts :: WhitespaceMode -> [Text] -> [Text] -> DiffParts
+diffParts mode oldRaw newRaw =
   let
+    old = map (diffLine mode) oldRaw
+    new = map (diffLine mode) newRaw
     pre = length (takeWhile id (zipWith (==) old new))
     oldTail = drop pre old
     newTail = drop pre new
@@ -111,21 +142,24 @@ diffParts old new =
     oldMid = take (length oldTail - suf) oldTail
     newMid = take (length newTail - suf) newTail
     grouped = getGroupedDiff oldMid newMid
-    contextRow n (k, l) = (' ', Just (n + k), l)
+    contextRow n (k, l) = (' ', Just (n + k), dlText l)
     preRows = map (contextRow 0) (zip [0 ..] (take pre new))
     sufStart = pre + length newMid
     sufRows =
       map (contextRow sufStart) (zip [0 ..] (drop (length newTail - suf) newTail))
-    go :: Int -> [Diff [Text]] -> [(Char, Maybe Int, Text)]
+    go :: Int -> [Diff [DiffLine]] -> [(Char, Maybe Int, Text)]
     go _ [] = []
     go n (grp : rest) =
       case grp of
-        Both bs _ ->
-          map (contextRow n) (zip [0 ..] bs) ++ go (n + length bs) rest
+        -- the new side, not the old: with whitespace ignored the two
+        -- spellings of a context line differ, and the buffer's is the
+        -- one on screen
+        Both _ cs ->
+          map (contextRow n) (zip [0 ..] cs) ++ go (n + length cs) rest
         First os ->
-          map (\o -> ('-', Nothing, o)) os ++ go n rest
+          map (\o -> ('-', Nothing, dlText o)) os ++ go n rest
         Second ns ->
-          map (\(k, l) -> ('+', Just (n + k), l)) (zip [0 ..] ns)
+          map (\(k, l) -> ('+', Just (n + k), dlText l)) (zip [0 ..] ns)
             ++ go (n + length ns) rest
   in
     DiffParts
@@ -133,8 +167,8 @@ diffParts old new =
       , dpRows = preRows ++ go pre grouped ++ sufRows
       , dpCoarse =
           preRows
-            ++ map (\o -> ('-', Nothing, o)) oldMid
-            ++ zipWith (\k l -> ('+', Just (pre + k), l)) [0 ..] newMid
+            ++ map (\o -> ('-', Nothing, dlText o)) oldMid
+            ++ zipWith (\k l -> ('+', Just (pre + k), dlText l)) [0 ..] newMid
             ++ sufRows
       }
 
