@@ -34,6 +34,8 @@ remax --unstaged      # working tree vs index
 remax --untracked     # new files, reviewed as pure additions
 remax forget          # forget verdicts under the current directory (asks first)
 remax list [--json]   # flagged/questioned punch list for this repository
+remax list --wait     # ... but block until it changes, so an agent can wait
+                      #   on the reviewer rather than ask again on a timer
 remax reply KEY TEXT  # agent posts in a note's conversation; shows live in the session
 remax -C DIR ...      # any of the above, as if started in DIR
 ```
@@ -497,12 +499,19 @@ frames are drawn cell by cell with Pillow rather than screenshotted, so
 it needs `python3` and a monospace TTF and no browser; pyte and pillow
 install into a scratch venv on first run.
 
-Two things the tour depends on, if you rewrite it. The agent's edit
-lands on the line *below* the flagged one on purpose — a verdict is
-keyed by the content of its own line, so an agent that rewrites the line
-it was asked about takes the note off it. And it ends resting on the
-answer rather than accepting, because accepting advances to the next
-hunk and scrolls the answer off the screen.
+The agent in it is not mimed. `scripts/lib/hero_agent.py` runs in its own
+process and is blocked on `remax list --wait` before the flag is typed —
+flagging the line is what wakes it, and nothing in the tour tells it
+anything.
+
+Three things the tour depends on, if you rewrite it. The agent fixes a
+*different* line from the flagged one on purpose — a verdict is keyed by
+the content of its own line, so an agent that rewrites the line it was
+asked about takes the note off it. The flagged line is one that was
+purely added, since flagging a *changed* line covers both its removal and
+its addition and renders the note under each. And it ends resting on the
+answer rather than accepting, because accepting advances to the next hunk
+and scrolls the answer off the screen.
 
 To eyeball or restage the state by hand, `scripts/hero` builds the same
 state and launches remax in it.

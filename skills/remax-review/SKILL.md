@@ -78,6 +78,40 @@ which one it landed in.
   commit yourself from the line text when it matters
   (`git log -S"<line text>"` or `git blame`).
 
+## Waiting for feedback instead of asking for it
+
+`list` answers with whatever is recorded right now. `--wait` prints
+nothing until the punch list *changes* and then prints it and exits, so a
+long-running agent can sit on the reviewer rather than poll them:
+
+```sh
+while remax -C "$REPO" list --wait --json > /tmp/feedback; do
+  # ... read /tmp/feedback and act ...
+done
+```
+
+It blocks from the moment it starts, so it reports changes *after* that
+point — take an ordinary `list` first if you also want what is already
+there.
+
+**Wait for the note, not just the flag.** Flagging a line and writing its
+note are two separate events: remax records the verdict the instant the
+key is pressed, and the reviewer is still typing. Waking on the first
+change gets you a flagged line with `"note": null` — you would be
+answering before being told what is wrong, and your reply lands *ahead*
+of their note in the thread. Keep waiting until the item you care about
+has a note:
+
+```sh
+while :; do
+  remax -C "$REPO" list --wait --json > /tmp/feedback
+  # ... stop when the item you are waiting on has a non-null note ...
+done
+```
+
+`scripts/lib/hero_agent.py` in the remax repository is this loop written
+out, and is what records the project's own demonstration.
+
 ## Replying to notes
 
 ```sh

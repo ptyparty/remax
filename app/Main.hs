@@ -2,6 +2,7 @@
 
 module Main (main) where
 
+import Control.Concurrent (threadDelay)
 import Control.Monad (forM_, unless, when)
 import Data.Char (isControl, ord)
 import Data.List (nub)
@@ -40,9 +41,20 @@ data Cmd
     -- exist, which is the point — you forget a directory *because* it
     -- is gone.
     Forget (Maybe FilePath)
-  | List Bool
+  | List ListFormat ListWhen
   | Reply Text Text
   | ShowVersion
+
+-- How a listing is printed, and when.
+data ListFormat = ListText | ListJson
+  deriving (Eq)
+
+-- ListNow prints what is recorded and exits. ListOnChange prints nothing
+-- until the punch list differs from what it was when the command
+-- started, which is what lets an agent wait on a reviewer rather than
+-- ask again on a timer.
+data ListWhen = ListNow | ListOnChange
+  deriving (Eq)
 
 main :: IO ()
 main = do
@@ -65,16 +77,33 @@ main = do
       case cmd of
         Review marg -> review marg
         Forget mPath -> forget mPath
-        List asJson -> list asJson
+        List fmt while -> list fmt while
         Reply key text -> reply key text
         ShowVersion -> putStrLn ("remax " ++ showVersion version)
+
+-- list's flags, in either order and each at most once.
+listArgs :: [String] -> Maybe Cmd
+listArgs =
+  let
+    go fmt while args =
+      case args of
+        [] -> Just (List fmt while)
+        ("--json" : rest) | fmt == ListText -> go ListJson while rest
+        ("--wait" : rest) | while == ListNow -> go fmt ListOnChange rest
+        _ -> Nothing
+  in
+    go ListText ListNow
 
 usage :: String
 usage =
   "usage: remax [-C DIR] [--base REF | --branch | --unstaged | --untracked]\n\
   \       remax [-C DIR] forget [PATH]  forget verdicts under PATH (default: the\n\
   \                                     current directory); PATH need not still exist\n\
-  \       remax [-C DIR] list [--json]  show flagged and questioned lines\n\
+  \       remax [-C DIR] list [--json] [--wait]\n\
+  \                                     show flagged and questioned lines;\n\
+  \                                     --wait prints nothing until the list\n\
+  \                                     changes, so an agent can wait on a\n\
+  \                                     reviewer instead of asking on a timer\n\
   \       remax [-C DIR] reply KEY TEXT  answer a note; shows in the review session\n\
   \\n\
   \  -C DIR       run as if started in DIR\n\
@@ -97,8 +126,8 @@ parseArgs args0 =
         ["--base", ref] -> Right (mDir, Review (ArgBase (T.pack ref)))
         ["forget"] -> Right (mDir, Forget Nothing)
         ["forget", path] -> Right (mDir, Forget (Just path))
-        ["list"] -> Right (mDir, List False)
-        ["list", "--json"] -> Right (mDir, List True)
+        ("list" : rest)
+          | Just cmd <- listArgs rest -> Right (mDir, cmd)
         ["--version"] -> Right (mDir, ShowVersion)
         ("reply" : key : rest)
           | not (null rest) ->
@@ -223,13 +252,35 @@ forget mPath = do
           putStrLn ("  \10003 forgot " ++ show (length doomed) ++ " line verdict(s)")
         else putStrLn "  left alone"
 
-list :: Bool -> IO ()
-list asJson = do
+-- How often the punch list is re-read while waiting. A listing is two
+-- small queries against a local database, so the cost of asking is far
+-- below the cost of a watcher — and a watcher would spend an inotify
+-- instance per waiting agent, on a resource a desktop runs out of.
+waitPollUs :: Int
+waitPollUs = 400000
+
+list :: ListFormat -> ListWhen -> IO ()
+list fmt while = do
   roots <- targetRepos
   conn <- openStore
+  case while of
+    ListNow -> pure ()
+    ListOnChange -> do
+      let
+        -- what the caller would be shown, as one comparable value: the
+        -- listing has changed exactly when what they would read has
+        digest = do
+          rows <- mapM (\r -> fmap ((,) r) (punchRows conn (T.pack r))) roots
+          pure (punchJson "" rows)
+        settle before = do
+          threadDelay waitPollUs
+          now <- digest
+          unless (now /= before) (settle before)
+      digest >>= settle
   here <- getCurrentDirectory
   found <- mapM (\r -> fmap ((,) r) (punchRows conn (T.pack r))) roots
   let
+    asJson = fmt == ListJson
     nonEmpty = filter (not . null . snd) found
     scope = case roots of
       [only] -> only
