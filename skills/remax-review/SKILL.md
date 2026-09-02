@@ -1,6 +1,6 @@
 ---
 name: remax-review
-description: Act on code-review feedback recorded by remax — read the reviewer's flagged/questioned lines and notes for a repository, fix them, and understand how the review session sees your edits. Use when asked to address review feedback, check for remax flags, or work alongside a human reviewing in remax.
+description: Act on code-review feedback recorded by remax — read the reviewer's flagged/questioned lines and notes for a repository, fix them, and understand how the review session sees your edits. Use when asked to address review feedback, check for remax flags, or work alongside a human reviewing in remax. Takes an argument: no argument answers what is outstanding once and stops; `watch` keeps waiting on the reviewer and reacting until told to stop; `stop` ends a watch.
 ---
 
 # Working with a remax reviewer
@@ -15,8 +15,26 @@ something.
 The other direction is not automatic unless you make it so. Nothing tells
 you a line was flagged; either the human asks you to look, or you keep a
 `list --wait` running in the background and are woken when they act. See
-*Reacting to the reviewer without being asked* below — with one in flight
-the two of you work at the same time rather than in turns.
+*Staying and reacting* below — with one in flight the two of you work at
+the same time rather than in turns.
+
+## What you were asked for
+
+The argument you were invoked with decides how long you stay:
+
+**No argument — answer once.** Read what is outstanding, fix it, reply,
+report what you did, and stop. Right when the human has finished a pass
+and wants it dealt with. Do not start a background wait.
+
+**`watch` — stay and react.** Do the one-off pass first, so nothing
+already recorded is left sitting, then keep a `list --wait` in flight and
+answer each thing as they flag it, until they stop you. Right when they
+are reviewing *now* and you are working alongside them. Say that you are
+watching, and which repository, so they know it is running.
+
+**`stop` — end the watch.** Kill the outstanding wait and say so. Also do
+this without being asked if the human says they are done reviewing, or
+closes the session.
 
 ## Reading the feedback
 
@@ -84,7 +102,7 @@ which one it landed in.
   commit yourself from the line text when it matters
   (`git log -S"<line text>"` or `git blame`).
 
-## Reacting to the reviewer without being asked
+## Staying and reacting (`watch`)
 
 `list` answers with whatever is recorded right now. `--wait` prints
 nothing until the punch list *changes*, then prints it and exits. Run it
@@ -92,7 +110,7 @@ as a **background task** and your harness wakes you when the reviewer
 does something — you react to a flag the way they react to your edits,
 and neither of you has to prompt the other.
 
-Start one as soon as you are working alongside an open session:
+Start one as soon as the one-off pass is done:
 
 ```sh
 remax -C "$REPO" list --wait --json > /tmp/remax-feedback.json
@@ -192,6 +210,7 @@ tip is the safe fallback.
 - Never write to `~/.local/state/remax/review.db` directly, and never
   run `remax forget` unless the human explicitly asks.
 - An empty `items` list means no outstanding feedback.
-- While you are working alongside an open session, keep one
-  `list --wait` in flight and start a fresh one each time it wakes you.
-  With none running you are only as current as the last time you asked.
+- Under `watch`, keep one `list --wait` in flight and start a fresh one
+  each time it wakes you. With none running you are only as current as
+  the last time you asked. Without `watch`, do not start one at all —
+  a background task the human did not ask for outlives their attention.
