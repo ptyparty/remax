@@ -3,7 +3,8 @@
 module Main (main) where
 
 import Control.Concurrent (threadDelay)
-import Control.Monad (forM_, unless, when)
+import Control.Exception (IOException, try)
+import Control.Monad (forM_, unless, void, when)
 import Data.Char (isControl, ord)
 import Data.List (nub)
 import Data.Maybe (fromMaybe)
@@ -41,7 +42,7 @@ data Cmd
     -- exist, which is the point — you forget a directory *because* it
     -- is gone.
     Forget (Maybe FilePath)
-  | List ListFormat ListWhen
+  | List ListFormat ListWhen (Maybe FilePath)
   | Reply Text Text
   | ShowVersion
 
@@ -55,6 +56,12 @@ data ListFormat = ListText | ListJson
 -- ask again on a timer.
 data ListWhen = ListNow | ListOnChange
   deriving (Eq)
+
+-- A file remax keeps the last listing's fingerprint in. With one, a wait
+-- is measured from what the caller last saw rather than from the moment
+-- it started — so a change that lands while the caller is busy is still
+-- waiting for it when it gets back, instead of having been absorbed into
+-- the new baseline and lost.
 
 main :: IO ()
 main = do
@@ -77,7 +84,7 @@ main = do
       case cmd of
         Review marg -> review marg
         Forget mPath -> forget mPath
-        List fmt while -> list fmt while
+        List fmt while stateFile -> list fmt while stateFile
         Reply key text -> reply key text
         ShowVersion -> putStrLn ("remax " ++ showVersion version)
 
@@ -85,25 +92,31 @@ main = do
 listArgs :: [String] -> Maybe Cmd
 listArgs =
   let
-    go fmt while args =
+    go fmt while stateFile args =
       case args of
-        [] -> Just (List fmt while)
-        ("--json" : rest) | fmt == ListText -> go ListJson while rest
-        ("--wait" : rest) | while == ListNow -> go fmt ListOnChange rest
+        [] -> Just (List fmt while stateFile)
+        ("--json" : rest) | fmt == ListText -> go ListJson while stateFile rest
+        ("--wait" : rest) | while == ListNow -> go fmt ListOnChange stateFile rest
+        ("--state" : path : rest)
+          | stateFile == Nothing -> go fmt while (Just path) rest
         _ -> Nothing
   in
-    go ListText ListNow
+    go ListText ListNow Nothing
 
 usage :: String
 usage =
   "usage: remax [-C DIR] [--base REF | --branch | --unstaged | --untracked]\n\
   \       remax [-C DIR] forget [PATH]  forget verdicts under PATH (default: the\n\
   \                                     current directory); PATH need not still exist\n\
-  \       remax [-C DIR] list [--json] [--wait]\n\
+  \       remax [-C DIR] list [--json] [--wait] [--state FILE]\n\
   \                                     show flagged and questioned lines;\n\
   \                                     --wait prints nothing until the list\n\
   \                                     changes, so an agent can wait on a\n\
-  \                                     reviewer instead of asking on a timer\n\
+  \                                     reviewer instead of asking on a timer;\n\
+  \                                     --state FILE measures that from what\n\
+  \                                     you last saw rather than from now, so\n\
+  \                                     a change while you were busy is not\n\
+  \                                     missed\n\
   \       remax [-C DIR] reply KEY TEXT  answer a note; shows in the review session\n\
   \\n\
   \  -C DIR       run as if started in DIR\n\
@@ -259,24 +272,36 @@ forget mPath = do
 waitPollUs :: Int
 waitPollUs = 400000
 
-list :: ListFormat -> ListWhen -> IO ()
-list fmt while = do
+list :: ListFormat -> ListWhen -> Maybe FilePath -> IO ()
+list fmt while stateFile = do
   roots <- targetRepos
   conn <- openStore
+  let
+    -- what the caller would be shown, as one comparable value: the
+    -- listing has changed exactly when what they would read has
+    digest = do
+      rows <- mapM (\r -> fmap ((,) r) (punchRows conn (T.pack r))) roots
+      pure (punchJson "" rows)
+    remembered = case stateFile of
+      Nothing -> pure Nothing
+      Just path -> do
+        got <- try (TIO.readFile path) :: IO (Either IOException Text)
+        pure (either (const Nothing) Just got)
   case while of
     ListNow -> pure ()
     ListOnChange -> do
+      -- the baseline is what the caller last saw when it has told us,
+      -- and only otherwise the moment we started
+      seen <- remembered
+      before <- maybe digest pure seen
       let
-        -- what the caller would be shown, as one comparable value: the
-        -- listing has changed exactly when what they would read has
-        digest = do
-          rows <- mapM (\r -> fmap ((,) r) (punchRows conn (T.pack r))) roots
-          pure (punchJson "" rows)
-        settle before = do
-          threadDelay waitPollUs
+        settle = do
           now <- digest
-          unless (now /= before) (settle before)
-      digest >>= settle
+          unless (now /= before) (threadDelay waitPollUs >> settle)
+      settle
+  forM_ stateFile $ \path -> do
+    now <- digest
+    void (try (TIO.writeFile path now) :: IO (Either IOException ()))
   here <- getCurrentDirectory
   found <- mapM (\r -> fmap ((,) r) (punchRows conn (T.pack r))) roots
   let

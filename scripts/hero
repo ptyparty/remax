@@ -284,7 +284,8 @@ delaysFor :: RetryPolicy -> [Int]
 delaysFor policy =
   let
     grow attempt = retryBaseMs policy * (2 ^ attempt)
-    capped ms = min (retryCapMs policy) ms
+    capMs = retryCapMs policy
+    capped ms = min capMs ms
   in
     map (capped . grow) [0 .. retryLimit policy - 1]
 
@@ -308,7 +309,7 @@ EOF
 git -C "$REPO" commit -qam "Add exponential backoff to retry delays"
 
 sed -i 's/map (capped . grow)/map (jitter . capped . grow)/' "$REPO/src/Retry.hs"
-sed -i 's/    capped ms = min (retryCapMs policy) ms/    capped ms = min (retryCapMs policy) ms\n    jitter ms = ms + mod (ms * 7) 43/' \
+sed -i 's/    capped ms = min capMs ms/    capped ms = min capMs ms\n    jitter ms = ms + mod (ms * 7) 43/' \
   "$REPO/src/Retry.hs"
 git -C "$REPO" commit -qam "Add deterministic jitter to backoff delays"
 
@@ -322,7 +323,13 @@ git -C "$REPO" rebase -q --force-rebase --exec false main > /dev/null 2>&1 || tr
 # Seed the verdict mix by driving remax through a pty. Hunks arrive
 # file by file (Config, Log, Queue, Retry); accepts auto-advance, and
 # note saves advance too, so this walks the whole set and leaves the
-# Retry hunks pending — remax then opens on them for the screenshot.
+# Retry hunks pending — remax then opens on them.
+#
+# Exactly one question is left outstanding. The recording starts an agent
+# with `watch`, which answers the punch list before it settles down to
+# wait, so anything seeded here is work it must get through before it can
+# react to what the reviewer does on camera — and a flagged line asking
+# for a code change costs minutes of that.
 seed_keys() {
   sleep 3.0
   printf 'X\r'
@@ -331,14 +338,8 @@ seed_keys() {
   sleep 0.6 # accept Config: parse entries
   printf 'X\r'
   sleep 0.6 # accept Log: export list
-  printf '!'
-  sleep 1.0 # flag Log: retryLine; the note popup opens
-  printf 'todo: thread the attempt count from the caller'
-  sleep 0.4
-  printf '\033'
-  sleep 0.4
-  printf '\r'
-  sleep 1.0 # save, advance
+  printf 'X\r'
+  sleep 0.6 # accept Log: retryLine
   printf 'X\r'
   sleep 0.6 # accept Queue: export list
   printf '?'

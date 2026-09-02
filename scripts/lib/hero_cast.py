@@ -122,6 +122,8 @@ class Cast:
             '-x', str(COLS), '-y', str(ROWS), '-c', self.repo, 'claude',
         )
         self.tmux('set-option', '-g', 'status', 'off')
+        # otherwise Claude Code notices they are off and says so, on camera
+        self.tmux('set-option', '-g', 'focus-events', 'on')
         self.tmux(
             'split-window', '-v', '-l', str(REMAX_ROWS),
             '-t', 'hero:0.0', '-c', self.repo, remax_bin,
@@ -301,6 +303,10 @@ def tour(cast):
     reviewer reads a change and asks for something, and Claude Code —
     started here, watching from the pane above — answers in the file
     while the session is still open."""
+    # clear the startup banner out of the Claude pane: it carries a
+    # version, a plan name and whatever notice that account happens to be
+    # showing, none of which is what this is about
+    cast.tmux('send-keys', '-t', cast.CLAUDE, 'C-l')
     cast.hold(3.0)
 
     # the reviewer accepts a hunk: the meter fills and the review moves
@@ -322,17 +328,25 @@ def tour(cast):
         cast.press(cast.CLAUDE, 'Enter')
     cast.hold(float(os.environ.get('HERO_SETTLE', '55')), lapse=True)
 
-    # flag the capped line and say what is missing. A line that is purely
-    # added carries one verdict key; flagging one that was changed
-    # carries two — the removal and the addition — and the note then
-    # renders under both of them.
-    cast.keys(cast.REMAX, 'j')
+    # Flag the capped line and ask for the fix on the line above it.
+    #
+    # Two things about which line. It is purely added, so it carries one
+    # verdict key — flagging a *changed* line covers both its removal and
+    # its addition and renders the note under each. And the fix belongs
+    # somewhere else, because a verdict is keyed by the content of its own
+    # line: an agent that rewrites the line it was asked about re-keys it,
+    # and the conversation comes off the line with the answer still in it.
+    cast.keys(cast.REMAX, 'jj')
     cast.hold(0.7)
     cast.keys(cast.REMAX, 'x')
     cast.hold(0.8)
     cast.keys(cast.REMAX, '!')
     cast.hold(1.2)
-    cast.keys(cast.REMAX, 'a zero retryCapMs would disable retries — floor it', per_key=0.045)
+    cast.keys(
+        cast.REMAX,
+        'a zero retryCapMs zeroes every delay — floor capMs where it is bound',
+        per_key=0.04,
+    )
     cast.hold(0.9)
     cast.press(cast.REMAX, 'Escape')
     cast.hold(0.5)
