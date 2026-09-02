@@ -10,7 +10,6 @@
 # the cells directly is both faster and exact about the grid.
 
 import fcntl
-import json
 import os
 import pty
 import signal
@@ -244,7 +243,29 @@ def tour(cast):
     cast.keys('\r')
     cast.hold(2.2)
 
-    # flag the line the calculation starts on, and say what is missing
+    # an agent is already waiting on the reviewer at this point, in
+    # another process, blocked on `remax list --wait`. Nothing below
+    # tells it anything: flagging the line is what wakes it.
+    agent = subprocess.Popen(
+        [
+            sys.executable,
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hero_agent.py'),
+            cast.remax_bin,
+            cast.repo,
+        ],
+        cwd=cast.repo,
+        env=cast.env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    cast.hold(1.0)
+
+    # flag the capped line and say what is missing. A line that is purely
+    # added carries one verdict key; flagging one that was changed
+    # carries two — the removal and the addition — and the note then
+    # renders under both of them.
+    cast.keys('j')
+    cast.hold(0.7)
     cast.keys('x')
     cast.hold(0.8)
     cast.keys('!')
@@ -254,42 +275,14 @@ def tour(cast):
     cast.keys('\033')
     cast.hold(0.5)
     cast.keys('\r')
-    cast.hold(2.0)
 
-    # what the agent does, from outside the session, while it watches
-    listing = cast.shell([cast.remax_bin, 'list', '--json'])
-    items = json.loads(listing.stdout)['items']
-    flagged = next(
-        (i for i in items if i['file'] == 'src/Retry.hs' and 'grow' in i['line']),
-        None,
-    )
-    if flagged is None:
-        sys.exit('the flag did not land — remax list saw no grow line')
+    # from here nothing is typed: the agent wakes on its own, and the
+    # rewritten line and the answer arrive because the session watches
+    # the file and the store
+    cast.hold(7.0)
+    if agent.wait(timeout=20) != 0:
+        sys.exit('the waiting agent failed: ' + agent.stderr.read().decode())
 
-    path = os.path.join(cast.repo, 'src/Retry.hs')
-    with open(path, encoding='utf-8') as handle:
-        source = handle.read()
-    source = source.replace(
-        '    capped ms = min (retryCapMs policy) ms',
-        '    capped ms = max 1 (min (retryCapMs policy) ms)',
-    )
-    with open(path, 'w', encoding='utf-8') as handle:
-        handle.write(source)
-    # the edit lands on the line below the flagged one deliberately: a
-    # verdict is keyed by the content of its own line, so an agent that
-    # rewrites the line it was asked about takes the conversation off it
-    #
-    # the watcher notices the file and the store, so both the rewritten
-    # line and the answer arrive without a keystroke
-    cast.hold(1.8)
-    cast.shell(
-        [
-            cast.remax_bin,
-            'reply',
-            flagged['key'],
-            'floored at 1ms, so a zero cap still retries',
-        ]
-    )
     # rest on the answer: it is the whole point of the loop, and
     # accepting from here would scroll it off the screen
     cast.hold(4.5)
