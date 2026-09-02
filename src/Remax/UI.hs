@@ -400,6 +400,26 @@ withWatcher use = do
         Right mgr -> run mgr True
         Left polledErr -> die (watcherFailure nativeErr polledErr)
 
+-- Watch every directory the repository keeps a file in, not only the
+-- ones a file is changed in today.
+--
+-- Watching where the changes are cannot notice the first change anywhere
+-- else: an edit in a directory nothing had changed in reached nobody, so
+-- no refresh ran, so the directory never got watched, so the next edit
+-- there reached nobody either. The file simply sat there until something
+-- else made the session look.
+--
+-- Taken from git rather than by walking the tree, so build directories
+-- and everything else ignored stay out of it — that walk is what makes a
+-- recursive watch cost more than it is worth. In the background, because
+-- a large repository is thousands of directories and none of them is
+-- worth making somebody wait for.
+watchTracked :: (FilePath -> IO ()) -> FilePath -> IO ()
+watchTracked watch root =
+  void . forkIO $ do
+    tracked <- listFiles VisibleFiles root
+    mapM_ (watch . fileDir root) tracked
+
 -- Shown once, in the status line, when the native watcher was refused.
 -- Polling still notices everything; it just notices it a beat late, so
 -- the message leads with the fix rather than the consequence.
@@ -457,11 +477,16 @@ runReview mode root roots story = do
       watchDirOnce dir = do
         seen <- readIORef watchedRef
         unless (Set.member dir seen) $ do
-          modifyIORef' watchedRef (Set.insert dir)
-          void
-            ( try (FS.watchDir mgr dir (const True) (dispatchFsEvent chan root)) ::
-                IO (Either IOException FS.StopListening)
-            )
+          got <-
+            try (FS.watchDir mgr dir (const True) (dispatchFsEvent chan root)) ::
+              IO (Either IOException FS.StopListening)
+          -- remembered only when it took: a directory whose watch was
+          -- refused (inotify full, or gone between listing and watching)
+          -- is worth trying again the next time it comes up, and marking
+          -- it seen regardless meant it never was
+          case got of
+            Right _ -> modifyIORef' watchedRef (Set.insert dir)
+            Left _ -> pure ()
     gitDirs <- gitStateWatchDirs root
     forM_ gitDirs watchDirOnce
     -- the verdict store lives outside the repository; watching it makes
@@ -478,6 +503,7 @@ runReview mode root roots story = do
           IO (Either IOException FS.StopListening)
       )
     forM_ files (watchDirOnce . fileDir root . fvPath)
+    watchTracked watchDirOnce root
     -- probed once: doing it per yank would be a process spawn a keystroke
     clip <- discoverClipboard
     -- and read once on the way in, so whatever was already on the
@@ -5419,6 +5445,9 @@ switchRepo target = do
         gitDirs <- gitStateWatchDirs target
         mapM_ (stWatch st) gitDirs
         mapM_ (stWatch st . fileDir target . fvPath) files
+        -- and the rest of it in the background, so the first change in a
+        -- directory nothing is changed in yet is noticed here too
+        watchTracked (stWatch st) target
         pure (verdicts, threads, rebase, branch, headAt, files, passId)
       let
         (verdicts, threads, rebase, branch, headAt, files, passId) = loaded
