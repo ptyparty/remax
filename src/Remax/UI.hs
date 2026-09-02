@@ -69,7 +69,7 @@ import Control.Concurrent
   , waitQSem
   )
 import Control.Exception (IOException, evaluate, finally, try)
-import Control.Monad (forM, forM_, guard, unless, void, when)
+import Control.Monad (forM, forM_, forever, guard, unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State (get, modify, put)
 import Data.Algorithm.Diff (PolyDiff (..), getGroupedDiff)
@@ -178,7 +178,13 @@ data Name = BodyVP | TrayVP | TheCursor
 -- created once and outlives any number of :repo switches, so it cannot
 -- know which root to make a path relative to. The handler, which does
 -- know, relativizes on arrival.
-data REvent = FileChangedOnDisk FilePath | GitStateChanged | StoreChanged | Tick
+data REvent
+  = FileChangedOnDisk FilePath
+  | GitStateChanged
+  | StoreChanged
+  | -- repositories an agent is waiting on, and a beat to animate by
+    Waiting [Text]
+  | Tick
 
 -- The one-line prompt at the bottom of the screen: / search or : command.
 data Prompt = SearchPrompt Text | CmdPrompt Text
@@ -317,6 +323,8 @@ data St = St
   , stEmacsPrefix :: Maybe Char -- a pending C-c / C-x chord (emacs keymap)
   , stIdleGo :: Bool -- a pending g with no file open to hold it
   , stComposing :: Maybe Text -- repository we told the store is mid-note
+  , stWaiting :: [Text] -- repositories an agent is waiting on
+  , stThrob :: !Int -- which frame the watching indicator is on
   , stVi :: ViKeys -- a half-typed vi command: count, operator, what it awaits
   , stSearchDir :: Int -- which way / (or vi's ?) last searched: 1 or -1
   , stDeferAdvance :: Bool -- hold the post-mark jump until the note popup closes
@@ -567,6 +575,8 @@ runReview mode root roots story = do
           , stEmacsPrefix = Nothing
           , stIdleGo = False
           , stComposing = Nothing
+          , stWaiting = []
+          , stThrob = 0
           , stVi = viIdle
           , stSearchDir = 1
           , stDeferAdvance = False
@@ -599,6 +609,17 @@ runReview mode root roots story = do
     -- the first frame paints with plain tokens; this tick colorizes
     -- the file on screen immediately after, off the startup path
     void (writeBChanNonBlocking chan Tick)
+    -- Who is waiting on this review, asked for on a beat.
+    --
+    -- The beat is the animation's as well as the question's, so it runs
+    -- quickly while somebody is there and slowly while nobody is: an
+    -- empty directory read every second and a half is not worth a
+    -- watcher, and a session with no agent on it should not be waking up
+    -- to redraw something that is not on screen.
+    void . forkIO . forever $ do
+      waiters <- waitersNow
+      void (writeBChanNonBlocking chan (Waiting waiters))
+      threadDelay (if null waiters then 1500000 else 420000)
     -- terminfo often claims only 256 colors even when the terminal
     -- speaks 24-bit; trust COLORTERM the way helix does, or theme
     -- colors get rounded to the nearest palette entry
@@ -1566,10 +1587,25 @@ headerBar st =
     rebaseSeg = case stRebase st of
       Nothing -> txt ""
       Just _ -> withAttr headerRebaseAttr (txt "  ·  rebasing")
+    -- Somebody is waiting on this review. Worth saying, because the
+    -- alternative is flagging a line and wondering whether anyone is
+    -- listening — and because when it stops, nothing else would say so.
+    --
+    -- It breathes rather than sits still: a mark that never moves is one
+    -- you stop believing, and this one is a claim about right now.
+    watchSeg =
+      if repoText st `elem` stWaiting st
+        then
+          hBox
+            [ withAttr headerAttr (txt "  ·  ")
+            , withAttr watchingAttr (txt (throbGlyph (stThrob st)))
+            , withAttr headerAttr (txt " watching")
+            ]
+        else txt ""
   in
     withDefAttr headerAttr . padRight Max $
       case currentFileMay st of
-        Nothing -> hBox [txt (lead <> "all clear"), rebaseSeg]
+        Nothing -> hBox [txt (lead <> "all clear"), rebaseSeg, watchSeg]
         Just fv ->
           let
             rs = fvRuns fv
@@ -1630,6 +1666,7 @@ headerBar st =
                   )
               , doneBadge
               , rebaseSeg
+              , watchSeg
               ]
 
 -- What the tray shows: one line per file (with a count of its hidden
@@ -2582,6 +2619,15 @@ statusBar st =
         <+> middle
         <+> padLeft Max (withAttr hintAttr (txt hint))
 
+-- The watching mark, breathing on the beat it is redrawn by.
+throbGlyph :: Int -> Text
+throbGlyph n =
+  case n `mod` 4 of
+    0 -> "\183" -- ·
+    1 -> "\8226" -- •
+    2 -> "\9679" -- ●
+    _ -> "\8226"
+
 padT :: Text -> Text
 padT t = if T.null t then " " else t
 
@@ -2625,6 +2671,8 @@ handleEvent brickEvent =
       st <- get
       threads <- liftIO (loadThreads (stConn st) (repoText st))
       modify (\s -> s {stThreads = threads})
+    AppEvent (Waiting repos) ->
+      modify (\s -> s {stWaiting = repos, stThrob = stThrob s + 1})
     AppEvent Tick -> scrollHunkIntoView
     VtyEvent ev -> do
       st <- get
@@ -7250,6 +7298,7 @@ headerAttr
   , removedMarkAttr
   , ctxMarkAttr
   , removedTextAttr
+  , watchingAttr
   , wordChangeAttr
   , selAttr
   , dimAttr
@@ -7314,6 +7363,7 @@ addedMarkAttr = attrName "addedMark"
 removedMarkAttr = attrName "removedMark"
 ctxMarkAttr = attrName "ctxMark"
 removedTextAttr = attrName "removedText"
+watchingAttr = attrName "watching"
 wordChangeAttr = attrName "wordChange"
 selAttr = attrName "selection"
 dimAttr = attrName "dim"
@@ -7459,6 +7509,7 @@ mkAttrMap mth =
       , (removedMarkAttr, fg inkRose)
       , (ctxMarkAttr, fg inkFaint)
       , (removedTextAttr, fg inkRose)
+      , (watchingAttr, fg inkGreen)
       , -- only a background, so the syntax colour underneath survives
         (wordChangeAttr, V.defAttr `V.withBackColor` wordWash)
       , (selAttr, selection)

@@ -45,6 +45,7 @@ remax list --wait     # ... but block until it changes, so an agent can wait
                       #   on the reviewer rather than ask again on a timer
        --state FILE   #   measured from what you last saw, not from now, so a
                       #   change while you were busy is not missed
+                      #   while one is waiting, the session says so in its header
 remax reply KEY TEXT  # agent posts in a note's conversation; shows live in the session
 remax -C DIR ...      # any of the above, as if started in DIR
 ```
