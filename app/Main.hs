@@ -297,7 +297,12 @@ list fmt while stateFile = do
       let
         settle = do
           now <- digest
-          unless (now /= before) (threadDelay waitPollUs >> settle)
+          -- a flag whose note is still being typed is not news yet: the
+          -- verdict is in the store seconds before the sentence saying
+          -- what is wrong with it, and returning on it means answering
+          -- before being told
+          busy <- composingNow conn (map T.pack roots)
+          unless (now /= before && not busy) (threadDelay waitPollUs >> settle)
       settle
   forM_ stateFile $ \path -> do
     now <- digest
