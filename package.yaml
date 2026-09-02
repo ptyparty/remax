@@ -53,6 +53,8 @@ executables:
       - vendor/grammars/haskell/src/scanner.c
       - vendor/grammars/purescript/src/parser.c
       - vendor/grammars/purescript/src/scanner.c
+      - vendor/grammars/python/src/parser.c
+      - vendor/grammars/python/src/scanner.c
       - vendor/grammars/yaml/src/parser.c
       - vendor/grammars/json/src/parser.c
       - vendor/grammars/toml/src/parser.c

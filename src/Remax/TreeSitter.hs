@@ -121,6 +121,9 @@ foreign import ccall unsafe "tree_sitter_haskell"
 foreign import ccall unsafe "tree_sitter_purescript"
   c_lang_purescript :: IO (Ptr CLanguage)
 
+foreign import ccall unsafe "tree_sitter_python"
+  c_lang_python :: IO (Ptr CLanguage)
+
 foreign import ccall unsafe "tree_sitter_yaml"
   c_lang_yaml :: IO (Ptr CLanguage)
 
@@ -171,6 +174,13 @@ vendored =
     ( GrammarKeys [".purs"] []
     , c_lang_purescript
     , $(embedFile "vendor/grammars/purescript/highlights.scm")
+    )
+  ,
+    ( GrammarKeys
+        [".py", ".pyi", ".pyw"]
+        ["python", "python3", "python2"]
+    , c_lang_python
+    , $(embedFile "vendor/grammars/python/highlights.scm")
     )
   ,
     ( GrammarKeys [".yaml", ".yml"] []
