@@ -12,6 +12,12 @@ verdicts are keyed by line content, so changing a line resets it. You
 never need to notify the reviewer or run any command after fixing
 something.
 
+The other direction is not automatic unless you make it so. Nothing tells
+you a line was flagged; either the human asks you to look, or you keep a
+`list --wait` running in the background and are woken when they act. See
+*Reacting to the reviewer without being asked* below — with one in flight
+the two of you work at the same time rather than in turns.
+
 ## Reading the feedback
 
 ```sh
@@ -78,39 +84,69 @@ which one it landed in.
   commit yourself from the line text when it matters
   (`git log -S"<line text>"` or `git blame`).
 
-## Waiting for feedback instead of asking for it
+## Reacting to the reviewer without being asked
 
 `list` answers with whatever is recorded right now. `--wait` prints
-nothing until the punch list *changes* and then prints it and exits, so a
-long-running agent can sit on the reviewer rather than poll them:
+nothing until the punch list *changes*, then prints it and exits. Run it
+as a **background task** and your harness wakes you when the reviewer
+does something — you react to a flag the way they react to your edits,
+and neither of you has to prompt the other.
+
+Start one as soon as you are working alongside an open session:
 
 ```sh
-while remax -C "$REPO" list --wait --json > /tmp/feedback; do
-  # ... read /tmp/feedback and act ...
-done
+remax -C "$REPO" list --wait --json > /tmp/remax-feedback.json
 ```
+
+When it completes you are woken with it. Read the file, act on it, and
+**start another one** — a wait is a single shot, and while none is
+running you are back to being prompted. Keep exactly one in flight;
+several waiting on the same repository all wake at once and you answer
+the same feedback that many times.
 
 It blocks from the moment it starts, so it reports changes *after* that
-point — take an ordinary `list` first if you also want what is already
-there.
+point. Run a plain `list` first if you also want whatever was already
+recorded.
 
-**Wait for the note, not just the flag.** Flagging a line and writing its
-note are two separate events: remax records the verdict the instant the
-key is pressed, and the reviewer is still typing. Waking on the first
-change gets you a flagged line with `"note": null` — you would be
-answering before being told what is wrong, and your reply lands *ahead*
-of their note in the thread. Keep waiting until the item you care about
-has a note:
+### Waking is not the same as being told something
 
-```sh
-while :; do
-  remax -C "$REPO" list --wait --json > /tmp/feedback
-  # ... stop when the item you are waiting on has a non-null note ...
-done
+Recording a verdict and writing its note are two separate events. remax
+records the verdict the instant the key is pressed, while the reviewer is
+still typing the note — so your first wake usually looks like this:
+
+```json
+{"line": "+TWO CHANGED", "verdict": "flagged", "note": null}
 ```
 
-`scripts/lib/hero_agent.py` in the remax repository is this loop written
+There is nothing to act on yet. Acting anyway means answering before you
+have been told what is wrong, and your reply lands *ahead* of their note
+in the thread, which reads as a non-sequitur to them. When the item you
+care about has `"note": null`, start another wait and let them finish.
+
+`scripts/lib/hero_agent.py` in the remax repository is that loop written
 out, and is what records the project's own demonstration.
+
+### One flagged line, two items
+
+Flagging a line that was *changed* covers both sides of the change, so it
+comes back as two items — one for the removal, one for the addition —
+carrying the same note:
+
+```json
+{"line": "-two",        "verdict": "flagged", "note": "use a named constant"}
+{"line": "+TWO CHANGED", "verdict": "flagged", "note": "use a named constant"}
+```
+
+That is one piece of feedback. Fix it once, and `reply` to one of the
+keys rather than both, or the reviewer reads your answer twice.
+
+### Both sides need the same store
+
+The wait watches the verdict store, not the repository, and the store
+lives under `XDG_STATE_HOME`. Ordinarily you and the reviewer both take
+the default and it simply works; if you are sandboxing either side, they
+have to point at the same one or you will wait forever on a store nobody
+is writing to.
 
 ## Replying to notes
 
@@ -156,3 +192,6 @@ tip is the safe fallback.
 - Never write to `~/.local/state/remax/review.db` directly, and never
   run `remax forget` unless the human explicitly asks.
 - An empty `items` list means no outstanding feedback.
+- While you are working alongside an open session, keep one
+  `list --wait` in flight and start a fresh one each time it wakes you.
+  With none running you are only as current as the last time you asked.
