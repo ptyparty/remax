@@ -50,6 +50,7 @@ extra-source-files:
     vendor/grammars/markdown/highlights.scm
     vendor/grammars/nu/highlights.scm
     vendor/grammars/purescript/highlights.scm
+    vendor/grammars/python/highlights.scm
     vendor/grammars/sql/highlights.scm
     vendor/grammars/toml/highlights.scm
     vendor/grammars/yaml/highlights.scm
@@ -76,6 +77,9 @@ extra-source-files:
     vendor/grammars/purescript/src/tree_sitter/alloc.h
     vendor/grammars/purescript/src/tree_sitter/array.h
     vendor/grammars/purescript/src/tree_sitter/parser.h
+    vendor/grammars/python/src/tree_sitter/alloc.h
+    vendor/grammars/python/src/tree_sitter/array.h
+    vendor/grammars/python/src/tree_sitter/parser.h
     vendor/grammars/sql/src/tree_sitter/alloc.h
     vendor/grammars/sql/src/tree_sitter/array.h
     vendor/grammars/sql/src/tree_sitter/parser.h
@@ -132,6 +136,8 @@ executable remax
       vendor/grammars/haskell/src/scanner.c
       vendor/grammars/purescript/src/parser.c
       vendor/grammars/purescript/src/scanner.c
+      vendor/grammars/python/src/parser.c
+      vendor/grammars/python/src/scanner.c
       vendor/grammars/yaml/src/parser.c
       vendor/grammars/json/src/parser.c
       vendor/grammars/toml/src/parser.c
