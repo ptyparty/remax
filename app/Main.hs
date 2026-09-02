@@ -3,7 +3,7 @@
 module Main (main) where
 
 import Control.Concurrent (threadDelay)
-import Control.Exception (IOException, try)
+import Control.Exception (IOException, finally, try)
 import Control.Monad (forM_, unless, void, when)
 import Data.Char (isControl, ord)
 import Data.List (nub)
@@ -302,8 +302,14 @@ list fmt while stateFile = do
           -- what is wrong with it, and returning on it means answering
           -- before being told
           busy <- composingNow conn (map T.pack roots)
-          unless (now /= before && not busy) (threadDelay waitPollUs >> settle)
-      settle
+          unless (now /= before && not busy) $ do
+            -- re-announced rather than announced: the timestamp is what
+            -- tells a session somebody is still here, so an agent that
+            -- dies stops saying so without having to say anything
+            markWaiting (map T.pack roots)
+            threadDelay waitPollUs
+            settle
+      settle `finally` clearWaiting
   forM_ stateFile $ \path -> do
     now <- digest
     void (try (TIO.writeFile path now) :: IO (Either IOException ()))

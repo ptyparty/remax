@@ -28,6 +28,9 @@ module Remax.Store
   , setComposing
   , composingNow
   , storeDirectory
+  , markWaiting
+  , clearWaiting
+  , waitersNow
   , deleteKeys
   , PunchRow (..)
   , punchRows
@@ -41,9 +44,21 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
+import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 import Database.SQLite.Simple
-import System.Directory (XdgDirectory (XdgState), createDirectoryIfMissing, getXdgDirectory)
+import System.Directory
+  ( XdgDirectory (XdgState)
+  , createDirectoryIfMissing
+  , getModificationTime
+  , getXdgDirectory
+  , listDirectory
+  , removeFile
+  )
 import System.FilePath ((</>))
+import System.IO.Error (catchIOError)
+import System.Posix.Process (getProcessID)
 
 data Verdict = Reviewed | Flagged | Questioned
   deriving (Eq, Ord, Show)
@@ -247,6 +262,64 @@ recordVerdicts conn repo passId v mCommit rows =
 -- Every conversation in the repo, by line key, posts in order. Keys of
 -- a noted group carry identical threads, so display code can collapse
 -- them by equality — the same trick the single note column used.
+-- Where an agent waiting on the reviewer says so, and keeps saying so.
+--
+-- A directory of files rather than a table, and a directory nothing
+-- watches: the store's own is watched so that a reply lands in the
+-- session as it is written, and a heartbeat kept there would wake every
+-- open session twice a second for news it already has.
+waitingDirectory :: IO FilePath
+waitingDirectory = do
+  dir <- fmap (</> "waiting") storeDirectory
+  createDirectoryIfMissing True dir
+  pure dir
+
+-- Announce that this process is waiting on these repositories. Called
+-- again on every poll: the file's timestamp is the heartbeat, so a
+-- listener can tell waiting from having gone away without being told.
+markWaiting :: [Text] -> IO ()
+markWaiting repos = do
+  dir <- waitingDirectory
+  pid <- getProcessID
+  ignoringIOErrors
+    (TIO.writeFile (dir </> show pid) (T.unlines repos))
+
+clearWaiting :: IO ()
+clearWaiting = do
+  dir <- waitingDirectory
+  pid <- getProcessID
+  ignoringIOErrors (removeFile (dir </> show pid))
+
+-- Which repositories somebody is waiting on right now.
+--
+-- A heartbeat older than a few seconds is somebody who has gone away —
+-- killed, disconnected, or a session that ended — which is why this is
+-- read from timestamps rather than from whoever remembered to tidy up.
+waitersNow :: IO [Text]
+waitersNow = do
+  dir <- waitingDirectory
+  names <- catchIOError (listDirectory dir) (const (pure []))
+  now <- getCurrentTime
+  found <- mapM (freshRepos dir now) names
+  pure (concat found)
+
+waitingStaleAfter :: NominalDiffTime
+waitingStaleAfter = 4
+
+freshRepos :: FilePath -> UTCTime -> FilePath -> IO [Text]
+freshRepos dir now name =
+  let
+    path = dir </> name
+  in
+    flip catchIOError (const (pure [])) $ do
+      touched <- getModificationTime path
+      if diffUTCTime now touched > waitingStaleAfter
+        then pure []
+        else fmap (filter (not . T.null) . T.lines) (TIO.readFile path)
+
+ignoringIOErrors :: IO () -> IO ()
+ignoringIOErrors act = catchIOError act (const (pure ()))
+
 -- Say whether this repository has a note being written into it.
 setComposing :: Connection -> Text -> Bool -> IO ()
 setComposing conn repo composing =

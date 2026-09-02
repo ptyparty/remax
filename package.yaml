@@ -99,5 +99,7 @@ executables:
       - SHA
       - sqlite-simple
       - text
+      - time
+      - unix
       - vty >= 6.0
       - vty-crossplatform

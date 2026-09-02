@@ -152,6 +152,14 @@ It blocks from the moment it starts, so it reports changes *after* that
 point. Run a plain `list` first if you also want whatever was already
 recorded.
 
+**The reviewer can see that you are waiting.** A session shows a
+`watching` mark in its header while an agent is blocked on it, and the
+mark goes out on its own within a few seconds of the last wait ending —
+whether you stopped on purpose, were killed, or simply never started
+another one. So a gap between one wait returning and the next beginning
+is a gap they can see, and a `watch` you have quietly dropped is not a
+secret. Start the next wait promptly, and when you do stop, say so.
+
 ### An item with no note yet
 
 Recording a verdict and writing its note are two separate events: remax
