@@ -44,6 +44,7 @@ data Cmd
     Forget (Maybe FilePath)
   | List ListFormat ListWhen (Maybe FilePath)
   | Reply Text Text
+  | Attend
   | ShowVersion
 
 -- How a listing is printed, and when.
@@ -86,6 +87,7 @@ main = do
         Forget mPath -> forget mPath
         List fmt while stateFile -> list fmt while stateFile
         Reply key text -> reply key text
+        Attend -> attend
         ShowVersion -> putStrLn ("remax " ++ showVersion version)
 
 -- list's flags, in either order and each at most once.
@@ -118,6 +120,9 @@ usage =
   \                                     a change while you were busy is not\n\
   \                                     missed\n\
   \       remax [-C DIR] reply KEY TEXT  answer a note; shows in the review session\n\
+  \       remax [-C DIR] watching       say an agent is on this review, until\n\
+  \                                     stopped; the session shows it in its\n\
+  \                                     header, working or waiting\n\
   \\n\
   \  -C DIR       run as if started in DIR\n\
   \  --base REF   review the working tree against REF (default: HEAD)\n\
@@ -141,6 +146,7 @@ parseArgs args0 =
         ["forget", path] -> Right (mDir, Forget (Just path))
         ("list" : rest)
           | Just cmd <- listArgs rest -> Right (mDir, cmd)
+        ["watching"] -> Right (mDir, Attend)
         ["--version"] -> Right (mDir, ShowVersion)
         ("reply" : key : rest)
           | not (null rest) ->
@@ -265,6 +271,26 @@ forget mPath = do
           putStrLn ("  \10003 forgot " ++ show (length doomed) ++ " line verdict(s)")
         else putStrLn "  left alone"
 
+-- Hold a review open in the reviewer's header for as long as this runs.
+--
+-- `list --wait` says somebody is here only while it is blocked, which
+-- goes quiet for the whole of the agent's turn — the mark went out
+-- exactly when there was most going on. This is the other half: it says
+-- somebody is attending, through the reading and the changing and the
+-- replying, and stops saying it the moment it is stopped or killed.
+attend :: IO ()
+attend = do
+  roots <- targetRepos
+  let
+    beat = do
+      markPresence Working (map T.pack roots)
+      threadDelay attendBeatUs
+      beat
+  beat `finally` clearWaiting
+
+attendBeatUs :: Int
+attendBeatUs = 1000000
+
 -- How often the punch list is re-read while waiting. A listing is two
 -- small queries against a local database, so the cost of asking is far
 -- below the cost of a watcher — and a watcher would spend an inotify
@@ -306,7 +332,7 @@ list fmt while stateFile = do
             -- re-announced rather than announced: the timestamp is what
             -- tells a session somebody is still here, so an agent that
             -- dies stops saying so without having to say anything
-            markWaiting (map T.pack roots)
+            markPresence Waiting (map T.pack roots)
             threadDelay waitPollUs
             settle
       settle `finally` clearWaiting

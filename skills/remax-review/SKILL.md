@@ -26,15 +26,28 @@ The argument you were invoked with decides how long you stay:
 report what you did, and stop. Right when the human has finished a pass
 and wants it dealt with. Do not start a background wait.
 
-**`watch` — stay and react.** Do the one-off pass first, so nothing
-already recorded is left sitting, then keep a `list --wait` in flight and
-answer each thing as they flag it, until they stop you. Right when they
-are reviewing *now* and you are working alongside them. Say that you are
-watching, and which repository, so they know it is running.
+**`watch` — stay and react.** Start by saying you are here:
 
-**`stop` — end the watch.** Kill the outstanding wait and say so. Also do
-this without being asked if the human says they are done reviewing, or
-closes the session.
+```sh
+remax -C "$REPO" watching     # background task; runs until stopped
+```
+
+That holds a mark in the reviewer's header for as long as it runs, so
+they can see there is somebody on the other end. Then do the one-off pass
+— nothing already recorded should be left sitting — and from there keep a
+`list --wait` in flight, answering each thing as they flag it, until they
+stop you. Right when they are reviewing *now* and you are working
+alongside them.
+
+The two are separate on purpose. `watching` says an agent is attending;
+the wait says what it is doing. With both running the reviewer sees
+*working* while you read and edit and reply, and *watching* while you are
+blocked on them — and nothing at all a few seconds after you die.
+
+**`stop` — end the watch.** Kill the outstanding wait *and* the
+`watching` task, and say so. Leaving the latter running tells them
+somebody is on this when nobody is. Also do this without being asked if
+the human says they are done reviewing, or closes the session.
 
 ## Reading the feedback
 
@@ -152,13 +165,12 @@ It blocks from the moment it starts, so it reports changes *after* that
 point. Run a plain `list` first if you also want whatever was already
 recorded.
 
-**The reviewer can see that you are waiting.** A session shows a
-`watching` mark in its header while an agent is blocked on it, and the
-mark goes out on its own within a few seconds of the last wait ending —
-whether you stopped on purpose, were killed, or simply never started
-another one. So a gap between one wait returning and the next beginning
-is a gap they can see, and a `watch` you have quietly dropped is not a
-secret. Start the next wait promptly, and when you do stop, say so.
+**The reviewer can see this.** While `remax watching` runs they see a
+mark in their header, and it changes to say whether you are blocked on
+them or busy on their behalf. It goes out on its own within a few seconds
+of that task ending, however it ended — so a watch you have quietly
+dropped is not a secret, and one you forgot to stop is a lie you are
+still telling.
 
 ### An item with no note yet
 
