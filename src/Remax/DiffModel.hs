@@ -34,6 +34,9 @@ data RowR = RowR
   , rToks :: [(AttrName, Text)] -- [] for old-side rows
   , rRunIx :: !(Maybe Int)
   , rKey :: !(Maybe Text) -- content key for changed rows
+  , -- content key for rows that exist on the base side (context and
+    -- removed), which is what a remark on unchanged code is keyed by
+    rRemarkKey :: !(Maybe Text)
   }
 
 -- One group of consecutive +/- display rows. A maximal group bigger than
@@ -188,8 +191,21 @@ assemble sc repo file rows toks =
     markedLine (m, _, t) =
       if m == ' ' then Nothing else Just (T.cons m t)
     keys = lineKeys repo file (mapMaybe markedLine rows)
+    -- The base side — context rows and removed rows — is the committed
+    -- file, in order, whatever the working tree has been edited into. A
+    -- remark on a line nobody has changed is keyed against that, so when
+    -- somebody does change it the removed row it becomes carries the
+    -- same key, and the remark follows the line into the hunk instead of
+    -- vanishing the moment it is acted on.
+    --
+    -- A separate stream from the marked keys, and marked with a space
+    -- where those carry + or -, so the two can neither collide nor
+    -- disturb each other's ordinals.
+    baseLine (m, _, t) =
+      if m == '+' then Nothing else Just (T.cons ' ' t)
+    remarkKeys = lineKeys repo file (mapMaybe baseLine rows)
   in
-    (buildRows rows toks ixs keys, buildRuns rows ixs keys)
+    (buildRows rows toks ixs keys remarkKeys, buildRuns rows ixs keys)
 
 -- How aggressively oversized hunks split — user-tunable via the config
 -- file: chunks at or under splitThreshold stay one hunk; inside one
@@ -406,11 +422,12 @@ buildRows ::
   [[(AttrName, Text)]] ->
   [Maybe Int] ->
   [Text] ->
+  [Text] ->
   [RowR]
 buildRows =
   let
-    go [] _ _ _ = []
-    go ((m, mr, t) : rs) ts (ix : ixs) ks =
+    go [] _ _ _ _ = []
+    go ((m, mr, t) : rs) ts (ix : ixs) ks bks =
       let
         (tok, remainingToks) = case mr of
           Just _ -> case ts of
@@ -423,9 +440,16 @@ buildRows =
             else case ks of
               (k : rest) -> (Just k, rest)
               [] -> (Nothing, [])
+        (remarkKey, remainingBase) =
+          if m == '+'
+            then (Nothing, bks)
+            else case bks of
+              (k : rest) -> (Just k, rest)
+              [] -> (Nothing, [])
       in
-        RowR m mr t tok ix key : go rs remainingToks ixs remainingKeys
-    go _ _ [] _ = []
+        RowR m mr t tok ix key remarkKey
+          : go rs remainingToks ixs remainingKeys remainingBase
+    go _ _ [] _ _ = []
   in
     go
 

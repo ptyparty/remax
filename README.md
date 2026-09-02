@@ -39,6 +39,8 @@ remax --unstaged      # working tree vs index
 remax --untracked     # new files, reviewed as pure additions
 remax forget          # forget verdicts under the current directory (asks first)
 remax list [--json]   # flagged/questioned punch list for this repository
+                      #   a leading space on a line means a remark on code the
+                      #   change never touched, not feedback on the change
 remax list --wait     # ... but block until it changes, so an agent can wait
                       #   on the reviewer rather than ask again on a timer
        --state FILE   #   measured from what you last saw, not from now, so a

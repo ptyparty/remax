@@ -59,6 +59,24 @@ target). Shape:
     "updated_at": "2026-08-23 19:23:51"}]}
 ```
 
+### The `line` field says which side it is
+
+`line` carries the line with a diff marker on the front, and the marker
+tells you what kind of feedback this is:
+
+- `+` — a line your change added. Ordinary feedback on your work.
+- `-` — a line your change removed.
+- **a space** — a line nobody has changed. This is a *remark on existing
+  code*: the reviewer read past your diff, noticed something in the
+  surrounding file, and asked about it there.
+
+A remark is not about your change, so do not assume the fix belongs in
+it. It may be a question about why something is the way it is, worth
+answering rather than editing. If you do change the line, it becomes part
+of your diff and comes back to them as a hunk to review — the remark and
+its conversation follow it there, because a remark is keyed against the
+committed file rather than the working one.
+
 ### When `-C` points at a folder of checkouts
 
 A reviewer may run one remax over a directory that *holds* repositories
