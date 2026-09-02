@@ -110,11 +110,19 @@ as a **background task** and your harness wakes you when the reviewer
 does something — you react to a flag the way they react to your edits,
 and neither of you has to prompt the other.
 
-Start one as soon as the one-off pass is done:
+Start one as soon as the one-off pass is done, and **always pass
+`--state`**:
 
 ```sh
-remax -C "$REPO" list --wait --json > /tmp/remax-feedback.json
+remax -C "$REPO" list --wait --state /tmp/remax-seen --json > /tmp/feedback.json
 ```
+
+The state file is where remax keeps a fingerprint of the listing you were
+last shown. Without it a wait measures change from the moment it starts,
+which is not the moment you last looked — everything that happened while
+you were reading, thinking and writing has been absorbed into the new
+baseline, and the wait sits through it. With it, a change that landed
+while you were busy is still there waiting for you.
 
 When it completes you are woken with it. Read the file, act on it, and
 **start another one** — a wait is a single shot, and while none is
@@ -138,26 +146,13 @@ still typing the note — so your first wake usually looks like this:
 
 There is nothing to act on yet. Acting anyway means answering before you
 have been told what is wrong, and your reply lands *ahead* of their note
-in the thread, which reads as a non-sequitur to them. So let them finish
-— but **look before you wait again**:
+in the thread, which reads as a non-sequitur to them. Say you are holding
+off, and wait again with the same `--state` file.
 
-```sh
-remax -C "$REPO" list --json            # what is true right now
-# nothing to act on? only then:
-remax -C "$REPO" list --wait --json     # blocks until the next change
-```
-
-A wait measures change from the moment it starts, so anything that
-happens between one waking you and the next one starting is already part
-of what the new wait considers normal — it will sit through it and block
-for the change *after*. The note you are waiting for is written in
-exactly that gap: it lands while you are reading the wake that told you
-about the flag. Wait blindly and you wait forever, with the answer
-already on screen in front of the reviewer.
-
-Reading the plain list first costs one query and closes the gap. Treat
-the payload a wait hands you as the news that *something* changed, and
-the plain `list` as what is actually true.
+This is the case `--state` exists for, and it is not hypothetical: the
+note is written in the seconds you spend reading the wake that told you
+about the flag. Wait without it and you wait forever, with the answer
+sitting finished on the reviewer's screen in front of you.
 
 ### One flagged line, two items
 

@@ -11,14 +11,19 @@ that survive rebases.
 
 ![remax reviewing a commit mid-rebase while an agent answers](hero.gif)
 
-*A commit-by-commit `:rebase` review in progress. The bar under the
-header tracks the rebase and the commit under review, the tray lists
-hunks by file with their verdicts, notes, and progress meters, and
-removed lines float inline beside what replaced them — with the words
-that differ inside a changed line marked in place. A hunk is accepted,
-a line is flagged with a note, and then an agent working from outside
-the session edits the file and answers: the rewritten line and the reply
-both arrive without a keystroke, because the session is watching.*
+*A commit-by-commit `:rebase` review, with the agent working the other
+half of it. Below: the bar under the header tracks the rebase and the
+commit under review, the tray lists hunks by file with their verdicts,
+notes and progress meters, removed lines float inline beside what
+replaced them, and the words that differ inside a changed line are marked
+in place. Above: Claude Code, started with `/remax-review watch`, blocked
+on `remax list --wait` until the reviewer flags a line — then it reads the
+note, fixes the file and answers in the thread. Nothing is typed at remax
+after the flag; the rewritten line arrives because the session is
+watching the file. Neither of them prompts the other.*
+
+*Recorded by `scripts/hero-cast`, which drives both panes for real —
+that is a live Claude Code session, not a reconstruction.*
 
 Prebuilt Linux binaries: every push to main updates the rolling
 [`latest` release](../../releases/tag/latest) — download
@@ -36,6 +41,8 @@ remax forget          # forget verdicts under the current directory (asks first)
 remax list [--json]   # flagged/questioned punch list for this repository
 remax list --wait     # ... but block until it changes, so an agent can wait
                       #   on the reviewer rather than ask again on a timer
+       --state FILE   #   measured from what you last saw, not from now, so a
+                      #   change while you were busy is not missed
 remax reply KEY TEXT  # agent posts in a note's conversation; shows live in the session
 remax -C DIR ...      # any of the above, as if started in DIR
 ```
@@ -492,26 +499,39 @@ notes, and the current file's hunks left pending — store and config
 sandboxed under the scratch directory), then drives a short review
 through a pty and records the emulated screen.
 
-The recording is scripted in `tour` in `scripts/lib/hero_cast.py`: a
-hunk accepted, a line flagged with a note, and then an agent editing the
-file and posting a reply from outside the session while it watches. The
-frames are drawn cell by cell with Pillow rather than screenshotted, so
+The recording is scripted in `tour` in `scripts/lib/hero_cast.py`, which
+drives two tmux panes: remax below, and a real Claude Code session above,
+started with `/remax-review watch` and reacting on its own from there.
+Frames are drawn cell by cell with Pillow rather than screenshotted, so
 it needs `python3` and a monospace TTF and no browser; pyte and pillow
 install into a scratch venv on first run.
 
-The agent in it is not mimed. `scripts/lib/hero_agent.py` runs in its own
-process and is blocked on `remax list --wait` before the flag is typed —
-flagging the line is what wakes it, and nothing in the tour tells it
-anything.
+That Claude session gets a throwaway `CLAUDE_CONFIG_DIR`
+(`scripts/lib/hero_claude.py`) with the first-run wizard, the trust
+prompt and the permissions already settled, and the skill installed where
+it will look for it — an allowlist rather than
+`--dangerously-skip-permissions`, whose warning screen would otherwise be
+the first thing on camera. Credentials are symlinked, never copied into a
+scratch directory. It costs real model calls, so regenerating is not
+free, and no two takes are alike.
 
-Three things the tour depends on, if you rewrite it. The agent fixes a
-*different* line from the flagged one on purpose — a verdict is keyed by
-the content of its own line, so an agent that rewrites the line it was
-asked about takes the note off it. The flagged line is one that was
-purely added, since flagging a *changed* line covers both its removal and
-its addition and renders the note under each. And it ends resting on the
-answer rather than accepting, because accepting advances to the next hunk
-and scrolls the answer off the screen.
+Waiting on a model is most of the elapsed time and none of the interest,
+so those stretches are recorded as a time-lapse: sampled rarely and
+played back fast. Without it a spinner defeats the frame collapsing
+entirely and six minutes of wall time becomes six minutes of GIF.
+
+Two things the tour depends on, if you rewrite it. The flagged line is
+one that was purely added, since flagging a *changed* line covers both
+its removal and its addition and renders the note under each. And the
+seeded state leaves exactly one question outstanding: `watch` answers the
+punch list before it settles down to wait, so anything seeded is work the
+agent must finish before it can react to what happens on camera — and a
+flagged line asking for a code change costs minutes of that.
+
+Expect the note to come off its line once the agent fixes it. Verdicts
+are keyed by line content, so a rewritten line is a new line and goes
+back to pending for the reviewer — which is the design working, and worth
+knowing before you wonder where the conversation went.
 
 To eyeball or restage the state by hand, `scripts/hero` builds the same
 state and launches remax in it.
