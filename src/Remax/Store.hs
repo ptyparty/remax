@@ -25,6 +25,8 @@ module Remax.Store
   , appendAgentPost
   , clearThread
   , resolveAnswered
+  , setComposing
+  , composingNow
   , storeDirectory
   , deleteKeys
   , PunchRow (..)
@@ -114,6 +116,17 @@ openStore = do
     \  body TEXT NOT NULL,\
     \  created_at TEXT NOT NULL DEFAULT (datetime('now')),\
     \  PRIMARY KEY (repo, key, seq))"
+  -- A flag whose note is still being typed is not news yet: remax marks
+  -- the repository while a note popup is open, and an agent waiting on
+  -- the reviewer holds off until it clears. Otherwise the verdict — which
+  -- is written the instant the key is pressed, so the tray and the meters
+  -- answer at once — reaches the agent seconds before the sentence saying
+  -- what is wrong with it.
+  execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS note_composing (\
+    \  repo TEXT PRIMARY KEY,\
+    \  since TEXT NOT NULL DEFAULT (datetime('now')))"
   -- several instances (sessions, agent CLI calls) share this file; WAL
   -- lets readers proceed under a writer instead of stacking on the lock
   void (query_ conn "PRAGMA journal_mode = WAL" :: IO [Only Text])
@@ -234,6 +247,39 @@ recordVerdicts conn repo passId v mCommit rows =
 -- Every conversation in the repo, by line key, posts in order. Keys of
 -- a noted group carry identical threads, so display code can collapse
 -- them by equality — the same trick the single note column used.
+-- Say whether this repository has a note being written into it.
+setComposing :: Connection -> Text -> Bool -> IO ()
+setComposing conn repo composing =
+  if composing
+    then
+      execute
+        conn
+        "INSERT INTO note_composing (repo) VALUES (?)\
+        \ ON CONFLICT(repo) DO UPDATE SET since = datetime('now')"
+        (Only repo)
+    else execute conn "DELETE FROM note_composing WHERE repo = ?" (Only repo)
+
+-- Whether any of these repositories is mid-note.
+--
+-- Bounded by age as well as by the marker: a session killed with its
+-- popup open leaves the row behind, and an agent that waited on it would
+-- wait for as long as nobody noticed. Ten minutes is far longer than
+-- writing a note and far shorter than caring.
+composingNow :: Connection -> [Text] -> IO Bool
+composingNow conn repos = do
+  rows <-
+    mapM
+      ( \repo ->
+          query
+            conn
+            "SELECT 1 FROM note_composing\
+            \ WHERE repo = ? AND since > datetime('now', '-10 minutes')"
+            (Only repo) ::
+            IO [Only Int]
+      )
+      repos
+  pure (any (not . null) rows)
+
 loadThreads :: Connection -> Text -> IO (Map Text [Post])
 loadThreads conn repo = do
   rows <-

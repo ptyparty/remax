@@ -134,25 +134,25 @@ It blocks from the moment it starts, so it reports changes *after* that
 point. Run a plain `list` first if you also want whatever was already
 recorded.
 
-### Waking is not the same as being told something
+### An item with no note yet
 
-Recording a verdict and writing its note are two separate events. remax
-records the verdict the instant the key is pressed, while the reviewer is
-still typing the note — so your first wake usually looks like this:
+Recording a verdict and writing its note are two separate events: remax
+records the verdict the instant the key is pressed, so the reviewer's
+tray and meters answer at once, while they are still typing the sentence
+saying what is wrong. A wait holds while a note is being written, so
+ordinarily you are woken once, with it:
 
 ```json
-{"line": "+TWO CHANGED", "verdict": "flagged", "note": null}
+{"line": "+TWO CHANGED", "verdict": "flagged", "note": "use a constant"}
 ```
 
-There is nothing to act on yet. Acting anyway means answering before you
-have been told what is wrong, and your reply lands *ahead* of their note
-in the thread, which reads as a non-sequitur to them. Say you are holding
-off, and wait again with the same `--state` file.
+You can still meet an item with `"note": null` — a bare `!` with the note
+popup turned off, or one they opened and abandoned. There is nothing to
+act on. Do not guess at what they meant: say you are holding off, and
+wait again with the same `--state` file.
 
-This is the case `--state` exists for, and it is not hypothetical: the
-note is written in the seconds you spend reading the wake that told you
-about the flag. Wait without it and you wait forever, with the answer
-sitting finished on the reviewer's screen in front of you.
+Never answer a flag whose note you have not read. Your reply would land
+*ahead* of theirs in the thread, which reads as a non-sequitur to them.
 
 ### One flagged line, two items
 

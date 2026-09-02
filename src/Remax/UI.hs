@@ -316,6 +316,7 @@ data St = St
   , stPromptCycle :: Maybe (Text, Int) -- Tab cycling: typed base + applied index
   , stEmacsPrefix :: Maybe Char -- a pending C-c / C-x chord (emacs keymap)
   , stIdleGo :: Bool -- a pending g with no file open to hold it
+  , stComposing :: Maybe Text -- repository we told the store is mid-note
   , stVi :: ViKeys -- a half-typed vi command: count, operator, what it awaits
   , stSearchDir :: Int -- which way / (or vi's ?) last searched: 1 or -1
   , stDeferAdvance :: Bool -- hold the post-mark jump until the note popup closes
@@ -431,6 +432,10 @@ watcherFailure nativeErr polledErr =
 runReview :: ReviewMode -> FilePath -> [FilePath] -> Maybe FilePath -> IO ()
 runReview mode root roots story = do
   conn <- openStore
+  -- a session killed with a note popup open leaves the marker behind;
+  -- starting one is as good a moment as any to say it is not being
+  -- written any more
+  setComposing conn (T.pack root) False
   verdicts <- loadVerdicts conn (T.pack root)
   hls <- TS.initHighlighters
   threads0 <- loadThreads conn (T.pack root)
@@ -535,6 +540,7 @@ runReview mode root roots story = do
           , stPromptCycle = Nothing
           , stEmacsPrefix = Nothing
           , stIdleGo = False
+          , stComposing = Nothing
           , stVi = viIdle
           , stSearchDir = 1
           , stDeferAdvance = False
@@ -1020,7 +1026,11 @@ app theme =
     { appDraw = draw
     , appChooseCursor = showFirstCursor
     , appHandleEvent =
-        \ev -> handleEvent ev >> ensureCurrentHighlighted >> reanchorBody
+        \ev ->
+          handleEvent ev
+            >> ensureCurrentHighlighted
+            >> reanchorBody
+            >> syncComposing
     , appStartEvent = do
         vty <- getVtyHandle
         let
@@ -1723,6 +1733,33 @@ shortPath w path =
 
 windowRows :: Int
 windowRows = 300
+
+-- Tell the store whether a note is being written into this repository.
+--
+-- A flag reaches the store the instant the key is pressed, which is what
+-- makes the tray and the meters answer at once — and means an agent
+-- waiting on the reviewer hears about it seconds before the sentence
+-- saying what is wrong with it. It cannot act on that, and waiting again
+-- for the note is how it misses the note. So the store carries the fact
+-- that one is being written, and the wait holds until it is.
+--
+-- Driven off the state after every event rather than from the places a
+-- popup opens and closes, so a path that dismisses one some other way
+-- cannot leave the marker standing. Only transitions are written.
+syncComposing :: EventM Name St ()
+syncComposing = do
+  st <- get
+  let
+    writing = case stNotePopup st of
+      Just np
+        | NoteFor _ <- npPurpose np -> Just (repoText st)
+      _ -> Nothing
+  unless (writing == stComposing st) $ do
+    -- cleared where it was set before being set anywhere else, so
+    -- switching repositories cannot strand it on the old one
+    forM_ (stComposing st) (\was -> liftIO (setComposing (stConn st) was False))
+    forM_ writing (\now -> liftIO (setComposing (stConn st) now True))
+    modify (\s -> s {stComposing = writing})
 
 -- Write the window's origin back after an event, and move the viewport
 -- by the same amount so nothing jumps.
