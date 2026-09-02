@@ -28,9 +28,10 @@ module Remax.Store
   , setComposing
   , composingNow
   , storeDirectory
-  , markWaiting
+  , Presence (..)
+  , markPresence
   , clearWaiting
-  , waitersNow
+  , presenceNow
   , deleteKeys
   , PunchRow (..)
   , punchRows
@@ -274,15 +275,30 @@ waitingDirectory = do
   createDirectoryIfMissing True dir
   pure dir
 
--- Announce that this process is waiting on these repositories. Called
--- again on every poll: the file's timestamp is the heartbeat, so a
--- listener can tell waiting from having gone away without being told.
-markWaiting :: [Text] -> IO ()
-markWaiting repos = do
+-- What an agent is doing about a review.
+--
+-- Waiting is blocked on the reviewer with nothing to do. Working is
+-- attending the review but busy — reading the feedback, changing the
+-- file, writing a reply. They are told apart because they read entirely
+-- differently from the other chair: one says your turn, the other says
+-- something is happening.
+data Presence = Waiting | Working
+  deriving (Eq, Show)
+
+presenceWord :: Presence -> Text
+presenceWord p = case p of
+  Waiting -> "waiting"
+  Working -> "working"
+
+-- Announce what this process is doing about these repositories. Called
+-- again on a beat: the file's timestamp is the heartbeat, so a listener
+-- can tell somebody still here from somebody gone without being told.
+markPresence :: Presence -> [Text] -> IO ()
+markPresence what repos = do
   dir <- waitingDirectory
   pid <- getProcessID
   ignoringIOErrors
-    (TIO.writeFile (dir </> show pid) (T.unlines repos))
+    (TIO.writeFile (dir </> show pid) (T.unlines (presenceWord what : repos)))
 
 clearWaiting :: IO ()
 clearWaiting = do
@@ -290,32 +306,41 @@ clearWaiting = do
   pid <- getProcessID
   ignoringIOErrors (removeFile (dir </> show pid))
 
--- Which repositories somebody is waiting on right now.
+-- Which repositories somebody is waiting on, and which somebody is
+-- working on, right now.
 --
 -- A heartbeat older than a few seconds is somebody who has gone away —
 -- killed, disconnected, or a session that ended — which is why this is
 -- read from timestamps rather than from whoever remembered to tidy up.
-waitersNow :: IO [Text]
-waitersNow = do
+presenceNow :: IO ([Text], [Text])
+presenceNow = do
   dir <- waitingDirectory
   names <- catchIOError (listDirectory dir) (const (pure []))
   now <- getCurrentTime
   found <- mapM (freshRepos dir now) names
-  pure (concat found)
+  let
+    ofKind k = concatMap snd (filter ((== k) . fst) found)
+  pure (ofKind Waiting, ofKind Working)
 
 waitingStaleAfter :: NominalDiffTime
 waitingStaleAfter = 4
 
-freshRepos :: FilePath -> UTCTime -> FilePath -> IO [Text]
+freshRepos :: FilePath -> UTCTime -> FilePath -> IO (Presence, [Text])
 freshRepos dir now name =
   let
     path = dir </> name
+    nothing = (Working, [])
   in
-    flip catchIOError (const (pure [])) $ do
+    flip catchIOError (const (pure nothing)) $ do
       touched <- getModificationTime path
       if diffUTCTime now touched > waitingStaleAfter
-        then pure []
-        else fmap (filter (not . T.null) . T.lines) (TIO.readFile path)
+        then pure nothing
+        else do
+          body <- TIO.readFile path
+          pure $ case filter (not . T.null) (T.lines body) of
+            (w : repos) ->
+              (if w == presenceWord Waiting then Waiting else Working, repos)
+            [] -> nothing
 
 ignoringIOErrors :: IO () -> IO ()
 ignoringIOErrors act = catchIOError act (const (pure ()))

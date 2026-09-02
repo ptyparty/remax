@@ -182,8 +182,9 @@ data REvent
   = FileChangedOnDisk FilePath
   | GitStateChanged
   | StoreChanged
-  | -- repositories an agent is waiting on, and a beat to animate by
-    Waiting [Text]
+  | -- repositories an agent is waiting on and working on, and a beat
+    -- to animate by
+    Attending ([Text], [Text])
   | Tick
 
 -- The one-line prompt at the bottom of the screen: / search or : command.
@@ -323,7 +324,7 @@ data St = St
   , stEmacsPrefix :: Maybe Char -- a pending C-c / C-x chord (emacs keymap)
   , stIdleGo :: Bool -- a pending g with no file open to hold it
   , stComposing :: Maybe Text -- repository we told the store is mid-note
-  , stWaiting :: [Text] -- repositories an agent is waiting on
+  , stAttending :: ([Text], [Text]) -- repositories agents wait on / work on
   , stThrob :: !Int -- which frame the watching indicator is on
   , stVi :: ViKeys -- a half-typed vi command: count, operator, what it awaits
   , stSearchDir :: Int -- which way / (or vi's ?) last searched: 1 or -1
@@ -575,7 +576,7 @@ runReview mode root roots story = do
           , stEmacsPrefix = Nothing
           , stIdleGo = False
           , stComposing = Nothing
-          , stWaiting = []
+          , stAttending = ([], [])
           , stThrob = 0
           , stVi = viIdle
           , stSearchDir = 1
@@ -617,9 +618,10 @@ runReview mode root roots story = do
     -- watcher, and a session with no agent on it should not be waking up
     -- to redraw something that is not on screen.
     void . forkIO . forever $ do
-      waiters <- waitersNow
-      void (writeBChanNonBlocking chan (Waiting waiters))
-      threadDelay (if null waiters then 1500000 else 420000)
+      seen@(waiting, working) <- presenceNow
+      void (writeBChanNonBlocking chan (Attending seen))
+      threadDelay
+        (if null waiting && null working then 1500000 else 420000)
     -- terminfo often claims only 256 colors even when the terminal
     -- speaks 24-bit; trust COLORTERM the way helix does, or theme
     -- colors get rounded to the nearest palette entry
@@ -1594,14 +1596,22 @@ headerBar st =
     -- It breathes rather than sits still: a mark that never moves is one
     -- you stop believing, and this one is a claim about right now.
     watchSeg =
-      if repoText st `elem` stWaiting st
-        then
-          hBox
-            [ withAttr headerAttr (txt "  ·  ")
-            , withAttr watchingAttr (txt (throbGlyph (stThrob st)))
-            , withAttr headerAttr (txt " watching")
-            ]
-        else txt ""
+      let
+        (waiting, working) = stAttending st
+        here = repoText st
+        mine
+          | here `elem` waiting = Just (throbGlyph (stThrob st), "watching")
+          | here `elem` working = Just (busyGlyph (stThrob st), "working")
+          | otherwise = Nothing
+      in
+        case mine of
+          Nothing -> txt ""
+          Just (glyph, label) ->
+            hBox
+              [ withAttr headerAttr (txt "  ·  ")
+              , withAttr watchingAttr (txt glyph)
+              , withAttr headerAttr (txt (" " <> label))
+              ]
   in
     withDefAttr headerAttr . padRight Max $
       case currentFileMay st of
@@ -2619,7 +2629,7 @@ statusBar st =
         <+> middle
         <+> padLeft Max (withAttr hintAttr (txt hint))
 
--- The watching mark, breathing on the beat it is redrawn by.
+-- Waiting on you: a slow breath, four frames to a cycle.
 throbGlyph :: Int -> Text
 throbGlyph n =
   case n `mod` 4 of
@@ -2627,6 +2637,14 @@ throbGlyph n =
     1 -> "\8226" -- •
     2 -> "\9679" -- ●
     _ -> "\8226"
+
+-- Busy on your behalf: two frames, so it reads as quicker than the
+-- breath even though both are redrawn on the same beat.
+busyGlyph :: Int -> Text
+busyGlyph n =
+  if even n
+    then "\10022" -- ✦
+    else "\10023" -- ✧
 
 padT :: Text -> Text
 padT t = if T.null t then " " else t
@@ -2671,8 +2689,8 @@ handleEvent brickEvent =
       st <- get
       threads <- liftIO (loadThreads (stConn st) (repoText st))
       modify (\s -> s {stThreads = threads})
-    AppEvent (Waiting repos) ->
-      modify (\s -> s {stWaiting = repos, stThrob = stThrob s + 1})
+    AppEvent (Attending seen) ->
+      modify (\s -> s {stAttending = seen, stThrob = stThrob s + 1})
     AppEvent Tick -> scrollHunkIntoView
     VtyEvent ev -> do
       st <- get
