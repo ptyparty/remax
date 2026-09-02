@@ -138,11 +138,26 @@ still typing the note — so your first wake usually looks like this:
 
 There is nothing to act on yet. Acting anyway means answering before you
 have been told what is wrong, and your reply lands *ahead* of their note
-in the thread, which reads as a non-sequitur to them. When the item you
-care about has `"note": null`, start another wait and let them finish.
+in the thread, which reads as a non-sequitur to them. So let them finish
+— but **look before you wait again**:
 
-`scripts/lib/hero_agent.py` in the remax repository is that loop written
-out, and is what records the project's own demonstration.
+```sh
+remax -C "$REPO" list --json            # what is true right now
+# nothing to act on? only then:
+remax -C "$REPO" list --wait --json     # blocks until the next change
+```
+
+A wait measures change from the moment it starts, so anything that
+happens between one waking you and the next one starting is already part
+of what the new wait considers normal — it will sit through it and block
+for the change *after*. The note you are waiting for is written in
+exactly that gap: it lands while you are reading the wake that told you
+about the flag. Wait blindly and you wait forever, with the answer
+already on screen in front of the reviewer.
+
+Reading the plain list first costs one query and closes the gap. Treat
+the payload a wait hands you as the news that *something* changed, and
+the plain `list` as what is actually true.
 
 ### One flagged line, two items
 
