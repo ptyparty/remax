@@ -22,7 +22,8 @@ import time
 import pyte
 from PIL import Image, ImageDraw, ImageFont
 
-COLS, ROWS = 132, 34
+COLS, ROWS = 132, 44
+REMAX_ROWS = 27  # the bottom pane; Claude gets what is left
 FONT_PX, PAD_PX = 15, 12
 LINE_PX = 19
 
@@ -49,7 +50,12 @@ FONTS = (
 # How often the screen is sampled. Identical consecutive samples are
 # collapsed into one frame that simply lasts longer, so a still stretch
 # costs one frame rather than a dozen.
-SAMPLE_S = 0.09
+SAMPLE_S = 0.12
+
+# and while waiting on a model: sampled this often, played back this
+# fast, so the waiting reads as time passing rather than being sat through
+LAPSE_S = 1.3
+LAPSE_PLAY_S = 0.11
 
 
 def load_fonts():
@@ -76,26 +82,57 @@ def rgb(color, default):
     return hex_rgb('#' + color)
 
 
-class Cast:
-    """A live remax under a pty, sampled as it is driven."""
+SOCKET = 'remax-hero'
 
-    def __init__(self, hero_dir, remax_bin):
+
+class Cast:
+    """Two panes under one pty — Claude Code above, remax below — sampled
+    as they are driven.
+
+    tmux does the splitting so both are one terminal to record, on its own
+    socket and with no configuration file, so it cannot disturb or be
+    disturbed by whatever tmux the reader happens to be running. Panes are
+    driven by name rather than by whatever has focus."""
+
+    def __init__(self, hero_dir, remax_bin, claude_cfg):
         self.hero_dir = hero_dir
         self.repo = os.path.join(hero_dir, 'repo')
+        # the parent session's own variables would be inherited by the
+        # Claude Code the recording starts, which then thinks it is a
+        # child of it
+        parent = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith('CLAUDE') and k != 'CLAUDECODE'
+        }
         self.env = dict(
-            os.environ,
+            parent,
             TERM='xterm-256color',
             COLORTERM='truecolor',
             XDG_STATE_HOME=os.path.join(hero_dir, 'state'),
             XDG_CONFIG_HOME=os.path.join(hero_dir, 'config'),
+            CLAUDE_CONFIG_DIR=claude_cfg,
         )
         self.remax_bin = remax_bin
         self.frames = []
+
+        self.tmux('kill-server', check=False)
+        self.tmux(
+            'new-session', '-d', '-s', 'hero',
+            '-x', str(COLS), '-y', str(ROWS), '-c', self.repo, 'claude',
+        )
+        self.tmux('set-option', '-g', 'status', 'off')
+        self.tmux(
+            'split-window', '-v', '-l', str(REMAX_ROWS),
+            '-t', 'hero:0.0', '-c', self.repo, remax_bin,
+        )
+
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(self.repo)
+            os.environ.clear()
             os.environ.update(self.env)
-            os.execvp(remax_bin, [remax_bin])
+            os.execvp('tmux', ['tmux', '-L', SOCKET, '-f', '/dev/null', 'attach', '-t', 'hero'])
         os.set_blocking(self.fd, False)
         fcntl.ioctl(
             self.fd, termios.TIOCSWINSZ, struct.pack('HHHH', ROWS, COLS, 0, 0)
@@ -116,8 +153,15 @@ class Cast:
             rows.append(tuple(row))
         return tuple(rows)
 
-    def hold(self, seconds):
-        """Read the pty for a while, sampling the screen as it changes."""
+    def hold(self, seconds, lapse=False):
+        """Read the pty for a while, sampling the screen as it changes.
+
+        `lapse` is for waiting on something slow — a model thinking. It
+        samples rarely and plays those samples back quickly, so a minute
+        of spinner becomes a few seconds of one. Without it a spinner
+        defeats the frame collapsing entirely: every sample differs, so
+        nothing merges, and the recording is as long as the wait."""
+        rate, play = (LAPSE_S, LAPSE_PLAY_S) if lapse else (SAMPLE_S, SAMPLE_S)
         end = time.time() + seconds
         nxt = time.time()
         while time.time() < end:
@@ -128,13 +172,30 @@ class Cast:
             except (BlockingIOError, OSError):
                 time.sleep(0.004)
             if time.time() >= nxt:
-                self.frames.append(self.snapshot())
-                nxt += SAMPLE_S
+                self.frames.append((self.snapshot(), play))
+                nxt += rate
 
-    def keys(self, text, per_key=0.07):
+    def tmux(self, *args, check=True):
+        return subprocess.run(
+            ['tmux', '-L', SOCKET, '-f', '/dev/null'] + list(args),
+            env=self.env,
+            capture_output=True,
+            check=check,
+        )
+
+    CLAUDE, REMAX = 'hero:0.0', 'hero:0.1'
+
+    def keys(self, pane, text, per_key=0.07):
+        """Literal characters, one at a time so it reads as typing."""
         for ch in text:
-            os.write(self.fd, ch.encode())
+            self.tmux('send-keys', '-t', pane, '-l', ch)
             self.hold(per_key)
+
+    def press(self, pane, *names):
+        """Named keys — Enter, Escape — which send-keys spells out."""
+        for name in names:
+            self.tmux('send-keys', '-t', pane, name)
+            self.hold(0.25)
 
     def shell(self, args):
         """What an agent does from outside the session, while it watches."""
@@ -143,6 +204,7 @@ class Cast:
         )
 
     def close(self):
+        self.tmux('kill-server', check=False)
         os.kill(self.pid, signal.SIGKILL)
         try:
             os.waitpid(self.pid, 0)
@@ -192,10 +254,14 @@ def write_gif(frames, out_path):
     """One shared palette for the whole animation, so colours do not
     shimmer from frame to frame the way per-frame quantisation makes
     them."""
+    # A still stretch is capped rather than played out: waiting for a
+    # model to answer is most of the elapsed time and none of the
+    # interest. Nothing is reordered or dropped — a pause just stops
+    # being real-time.
     images, durations = [], []
     for snapshot, seconds in frames:
         images.append(snapshot)
-        durations.append(max(40, int(seconds * 1000)))
+        durations.append(max(40, min(1600, int(seconds * 1000))))
 
     # The palette is taken from a spread of frames rather than the first
     # one. The first frame is the terminal before remax has drawn a
@@ -219,73 +285,63 @@ def write_gif(frames, out_path):
     )
 
 
-def collapse(snapshots):
+def collapse(samples):
     """Identical consecutive samples become one frame that lasts longer."""
     runs = []
-    for snapshot in snapshots:
+    for snapshot, play in samples:
         if runs and runs[-1][0] == snapshot:
-            runs[-1][1] += SAMPLE_S
+            runs[-1][1] += play
         else:
-            runs.append([snapshot, SAMPLE_S])
+            runs.append([snapshot, play])
     return runs
 
 
 def tour(cast):
-    """The loop remax exists for: read a change, ask for something, and
-    watch an agent answer in the file while the session is still open."""
-    cast.hold(2.2)
+    """The loop remax exists for, with both halves of it on screen: a
+    reviewer reads a change and asks for something, and Claude Code —
+    started here, watching from the pane above — answers in the file
+    while the session is still open."""
+    cast.hold(3.0)
 
-    # accept the first hunk: the meter fills and the review moves itself
-    # on to the next one, which is where the delay calculation changed
-    # and where the words that differ inside a line carry their own mark
-    cast.keys('x')
+    # the reviewer accepts a hunk: the meter fills and the review moves
+    # on to where the delay calculation changed, and where the words that
+    # differ inside a line carry their own mark
+    cast.keys(cast.REMAX, 'x')
     cast.hold(0.8)
-    cast.keys('\r')
+    cast.press(cast.REMAX, 'Enter')
     cast.hold(2.2)
 
-    # an agent is already waiting on the reviewer at this point, in
-    # another process, blocked on `remax list --wait`. Nothing below
-    # tells it anything: flagging the line is what wakes it.
-    agent = subprocess.Popen(
-        [
-            sys.executable,
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hero_agent.py'),
-            cast.remax_bin,
-            cast.repo,
-        ],
-        cwd=cast.repo,
-        env=cast.env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    cast.hold(1.0)
+    # and starts an agent watching. `watch` is what tells it to stay:
+    # without it the skill answers what is outstanding and stops.
+    #
+    # HERO_SKIP_AGENT leaves the prompt untyped, for checking the layout
+    # and the remax half without spending a model call on it.
+    if not os.environ.get('HERO_SKIP_AGENT'):
+        cast.keys(cast.CLAUDE, '/remax-review watch', per_key=0.05)
+        cast.hold(1.2)
+        cast.press(cast.CLAUDE, 'Enter')
+    cast.hold(float(os.environ.get('HERO_SETTLE', '55')), lapse=True)
 
     # flag the capped line and say what is missing. A line that is purely
     # added carries one verdict key; flagging one that was changed
     # carries two — the removal and the addition — and the note then
     # renders under both of them.
-    cast.keys('j')
+    cast.keys(cast.REMAX, 'j')
     cast.hold(0.7)
-    cast.keys('x')
+    cast.keys(cast.REMAX, 'x')
     cast.hold(0.8)
-    cast.keys('!')
+    cast.keys(cast.REMAX, '!')
     cast.hold(1.2)
-    cast.keys('a zero retryCapMs would disable retries — floor it', per_key=0.045)
+    cast.keys(cast.REMAX, 'a zero retryCapMs would disable retries — floor it', per_key=0.045)
     cast.hold(0.9)
-    cast.keys('\033')
+    cast.press(cast.REMAX, 'Escape')
     cast.hold(0.5)
-    cast.keys('\r')
+    cast.press(cast.REMAX, 'Enter')
 
-    # from here nothing is typed: the agent wakes on its own, and the
-    # rewritten line and the answer arrive because the session watches
-    # the file and the store
-    cast.hold(7.0)
-    if agent.wait(timeout=20) != 0:
-        sys.exit('the waiting agent failed: ' + agent.stderr.read().decode())
-
-    # rest on the answer: it is the whole point of the loop, and
-    # accepting from here would scroll it off the screen
-    cast.hold(4.5)
+    # from here nothing is typed at remax. The wait above returns, and
+    # the rewritten line and the answer arrive because the session
+    # watches the file and the store.
+    cast.hold(float(os.environ.get('HERO_REACT', '75')), lapse=True)
 
 
 def main():
@@ -293,7 +349,16 @@ def main():
     fonts = load_fonts()
     cell_w = round(fonts[0].getlength('M'))
 
-    cast = Cast(hero_dir, remax_bin)
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, here)
+    import hero_claude
+
+    cfg = hero_claude.prepare(
+        hero_dir,
+        os.path.join(hero_dir, 'repo'),
+        os.path.join(os.path.dirname(here), '..', 'skills', 'remax-review'),
+    )
+    cast = Cast(hero_dir, remax_bin, cfg)
     try:
         tour(cast)
     finally:

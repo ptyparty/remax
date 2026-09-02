@@ -9,3 +9,7 @@ cabal.project.local*
 test-all-logs/
 *~
 out/
+
+# python bytecode from the hero scripts
+__pycache__/
+*.pyc
