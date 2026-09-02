@@ -69,7 +69,7 @@ import Control.Concurrent
   , waitQSem
   )
 import Control.Exception (IOException, evaluate, finally, try)
-import Control.Monad (forM, forM_, unless, void, when)
+import Control.Monad (forM, forM_, guard, unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State (get, modify, put)
 import Data.Algorithm.Diff (PolyDiff (..), getGroupedDiff)
@@ -1613,6 +1613,33 @@ headerBar st =
 data TrayEntry
   = TrayFile Int Int -- file index, hidden hunk count
   | TrayHunk Int Int -- file index, hunk index
+  | TrayRemark Int Int -- file index, index into that file's remarks
+
+-- Remarks on lines nobody has changed: the buffer row to sit on, the key
+-- they are recorded under, and the line itself.
+--
+-- Derived rather than carried on the FileView, because whether a line
+-- bears one depends on the verdicts, which the rebuild that builds the
+-- rows knows nothing about.
+data Remark = Remark
+  { rmRow :: !Int
+  , rmKey :: !Text
+  , rmText :: !Text
+  }
+
+fileRemarks :: St -> FileView -> [Remark]
+fileRemarks st fv =
+  let
+    pick row = do
+      k <- rRemarkKey row
+      -- a removed row keeps its remark too, but by then the hunk it
+      -- belongs to is what carries it through the tray
+      guard (rMark row == ' ')
+      guard (Map.member k (stVerdicts st) || Map.member k (stThreads st))
+      n <- rNewRow row
+      pure (Remark n k (rText row))
+  in
+    mapMaybe pick (fvRows fv)
 
 trayEntries :: St -> [TrayEntry]
 trayEntries st =
@@ -1634,6 +1661,7 @@ trayEntries st =
       in
         TrayFile fi (length hiddenOnes)
           : map (\(hi, _) -> TrayHunk fi hi) shown
+          ++ zipWith (\ri _ -> TrayRemark fi ri) [0 ..] (fileRemarks st fv)
     splitHiddenShown fi numbered =
       ( filter (hiddenHunk fi) numbered
       , filter (not . hiddenHunk fi) numbered
@@ -1705,6 +1733,36 @@ tray st =
           w = padRight Max line
         in
           if current then withDefAttr floatSelAttr w else w
+      -- A remark sits between the hunks rather than among them: it is
+      -- about a line the change never touched, so it carries the line
+      -- itself where a hunk carries its declaration.
+      TrayRemark fi ri ->
+        let
+          fv = stFiles st !! fi
+          rm = fileRemarks st fv !! ri
+          mark = case Map.lookup (rmKey rm) (stVerdicts st) of
+            Just Flagged -> '!'
+            Just Questioned -> '?'
+            Just Reviewed -> '\10003'
+            Nothing -> '\183'
+          markAttr = case mark of
+            '!' -> flagMarkAttr
+            '?' -> questionMarkAttr
+            '\10003' -> doneMarkAttr
+            _ -> pendingMarkAttr
+          noteMark =
+            if Map.member (rmKey rm) (stThreads st)
+              then withAttr noteInlineAttr (txt " \8801")
+              else txt ""
+        in
+          padRight Max $
+            hBox
+              [ txt "  "
+              , withAttr markAttr (str [mark])
+              , txt (" :" <> tshow (rmRow rm + 1))
+              , withAttr trayDeclAttr (txt (" " <> T.take 12 (T.strip (rmText rm))))
+              , noteMark
+              ]
     rows = map entryWidget (trayEntries st)
   in
     hLimit trayWidth $
@@ -1858,12 +1916,19 @@ gutterWidth fv = length (show (max 1 (bufferLineCount (fvEd fv))))
 noteTextWidth :: Int -> FileView -> Int
 noteTextWidth paneWidth fv = max 12 (paneWidth - (gutterWidth fv + 4))
 
+-- Where a row's feedback lives. A changed row carries what was said
+-- about the change; a line nobody has changed carries a remark, keyed
+-- against the base; and a removed row can answer to either, because a
+-- remark made while it was unchanged follows it here when somebody
+-- changes it.
+rowFeedbackKeys :: RowR -> [Text]
+rowFeedbackKeys r = catMaybes [rKey r, rRemarkKey r]
+
 shownNoteLines :: Int -> St -> [RowR] -> [[NoteLine]]
 shownNoteLines width st rows =
   let
-    annOf r = do
-      k <- rKey r
-      Map.lookup k (stThreads st)
+    annOf r =
+      listToMaybe (mapMaybe (`Map.lookup` stThreads st) (rowFeedbackKeys r))
     anns = map annOf rows
     nexts = drop 1 anns ++ [Nothing]
     -- A note is prose and the pane is narrow, so it is folded to fit
@@ -1973,7 +2038,8 @@ renderFile paneWidth st fv =
         isCurRun = case rRunIx r of
           Just runIx -> runIx == curH
           Nothing -> False
-        verdict = rKey r >>= (`Map.lookup` stVerdicts st)
+        verdict =
+          listToMaybe (mapMaybe (`Map.lookup` stVerdicts st) (rowFeedbackKeys r))
         isCursor = rNewRow r == Just curRow
         inSel = case lineSel of
           Nothing -> False
@@ -3418,8 +3484,8 @@ activeSelectionRows ed =
 -- position) triples. A removed line has no buffer row of its own; it
 -- counts when the row it now sits before falls inside the span, and
 -- borrows that row's position.
-selectedChanges :: FileView -> Int -> Int -> [(Text, Text, Int)]
-selectedChanges fv lo hi =
+selectedChanges :: Bool -> FileView -> Int -> Int -> [(Text, Text, Int)]
+selectedChanges withRemarks fv lo hi =
   let
     rows = fvRows fv
     bufferLen = newSideLineCount fv
@@ -3429,7 +3495,10 @@ selectedChanges fv lo hi =
       Just nr -> nr >= lo && nr <= hi
       Nothing -> point >= lo && point <= hi
     pick (row, point) = do
-      k <- rKey row
+      k <-
+        if rMark row == ' '
+          then if withRemarks then rRemarkKey row else Nothing
+          else rKey row
       if inSpan row point
         then Just (k, T.cons (rMark row) (rText row), fromMaybe point (rNewRow row) + 1)
         else Nothing
@@ -3846,7 +3915,9 @@ applyVerdictLines v = do
     fv = currentFile st
     path = T.pack (fvPath fv)
     (lo, hi) = verdictLineSpan (fvEd fv)
-    picks = selectedChanges fv lo hi
+    -- accepting says a change has been read, and a line nobody changed
+    -- has none; ! and ? are remarks and reach any line
+    picks = selectedChanges (v /= Reviewed) fv lo hi
     storeRow (k, l, n) = (k, path, l, n)
   if null picks
     then do
@@ -3945,7 +4016,9 @@ clearVerdict scope = do
         let
           (lo, hi) = verdictLineSpan (fvEd fv)
         in
-          map (\(k, _, _) -> k) (selectedChanges fv lo hi)
+          -- clearing reaches remarks too: a remark you have thought
+          -- better of should come off the same way a verdict does
+          map (\(k, _, _) -> k) (selectedChanges True fv lo hi)
       VerdictHunk ->
         case safeIdx rs (clampH rs (stCurH st)) of
           Just r -> runKeys r
@@ -4846,22 +4919,23 @@ noteTargetKeys st =
     selectionKeys = do
       fv <- currentFileMay st
       (lo, hi) <- activeSelectionRows (fvEd fv)
-      pure (map (\(k, _, _) -> k) (selectedChanges fv lo hi))
+      pure (map (\(k, _, _) -> k) (selectedChanges True fv lo hi))
     cursorKeys = do
       fv <- currentFileMay st
       let
         row = fst (cursorRC (fvEd fv))
-        ks = map (\(k, _, _) -> k) (selectedChanges fv row row)
+        ks = map (\(k, _, _) -> k) (selectedChanges True fv row row)
         relevant k =
           Map.member k (stVerdicts st) || Map.member k (stThreads st)
       let
         groupOf thread =
           let
-            inGroup r = do
-              k <- rKey r
-              if Map.lookup k (stThreads st) == Just thread
-                then Just k
-                else Nothing
+            inGroup r =
+              listToMaybe
+                ( filter
+                    (\k -> Map.lookup k (stThreads st) == Just thread)
+                    (rowFeedbackKeys r)
+                )
           in
             mapMaybe inGroup (fvRows fv)
         -- a conversation anywhere in the hunk under the cursor: from any
