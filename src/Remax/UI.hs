@@ -80,7 +80,6 @@ import Data.Int (Int64)
 import Data.List
   ( find
   , findIndex
-  , foldl'
   , groupBy
   , isPrefixOf
   , isSuffixOf
@@ -5791,10 +5790,17 @@ flatRows st view =
                 Just worst
                   | rankedScore worst <= sc -> acc
                 _ -> Set.deleteMax (Set.insert (Ranked sc p ms) acc)
+    -- folded here rather than with Data.List.foldl': it is in the
+    -- Prelude from GHC 9.10 and not before, so importing it fails one of
+    -- the two compilers this builds under and omitting it fails the other
+    bestOf !acc rest =
+      case rest of
+        [] -> acc
+        (x : xs) -> bestOf (step acc x) xs
     scored =
       map
         (\(Ranked sc p ms) -> (sc, (p, ms)))
-        (Set.toAscList (foldl' step Set.empty (tvAll view)))
+        (Set.toAscList (bestOf Set.empty (tvAll view)))
     emit (path, mStat) =
       let
         hunks = treeHunkCount st path
@@ -7131,37 +7137,45 @@ fuzzyScoreOn nd path
   | ndBlank nd = Just (0, 0, length path)
   | otherwise =
       let
-        walk needle hay !i !firstPos !lastPos =
-          case (needle, hay) of
-            ([], _) -> Just (firstPos, lastPos)
-            (_, []) -> Nothing
-            (c : cs, h : hs) ->
-              if c == lowerFast h
-                then
-                  walk cs hs (i + 1) (if firstPos < 0 then i else firstPos) i
-                else walk needle hs (i + 1) firstPos lastPos
+        -- One walk of the path, which yields everything the score wants:
+        -- whether the query is a subsequence of it and where, how long
+        -- it is, and where its file name begins.
+        --
+        -- Separately these are three more walks of the same string —
+        -- matching, then finding the last separator, then counting — and
+        -- against a few hundred thousand candidates a walk is not
+        -- something to spend four times. The file name comes back as the
+        -- tail of the path itself rather than a copy of it, which a list
+        -- gives away for nothing.
+        go needle hay !i !firstAt !lastAt tailAfterSep =
+          case hay of
+            [] -> (needle, i, firstAt, lastAt, tailAfterSep)
+            (h : hs) ->
+              let
+                nextTail = if isPathSeparator h then hs else tailAfterSep
+              in
+                case needle of
+                  (c : cs)
+                    | c == lowerFast h ->
+                        go
+                          cs
+                          hs
+                          (i + 1)
+                          (if firstAt < 0 then i else firstAt)
+                          i
+                          nextTail
+                  _ -> go needle hs (i + 1) firstAt lastAt nextTail
+        (leftover, len, firstPos, lastPos, base) =
+          go (ndChars nd) path 0 (-1) (-1) path
       in
-        case walk (ndChars nd) path 0 (-1) (-1) of
-          Nothing -> Nothing
-          Just (firstPos, lastPos) ->
+        if not (null leftover)
+          then Nothing
+          else
             Just
-              ( -- drop, not takeFileName: a suffix of a String is the
-                -- same String, where taking one is a fresh copy
-                if subsequenceLower (ndChars nd) (drop (baseStart path) path)
-                  then 0
-                  else 1
+              ( if subsequenceLower (ndChars nd) base then 0 else 1
               , (lastPos - firstPos) - (ndLen nd - 1)
-              , length path
+              , len
               )
-
--- Where the file name starts, without cutting one out.
-baseStart :: FilePath -> Int
-baseStart =
-  let
-    go [] _ best = best
-    go (c : cs) !i !best = go cs (i + 1) (if isPathSeparator c then i + 1 else best)
-  in
-    \path -> go path 0 0
 
 subsequenceLower :: String -> String -> Bool
 subsequenceLower needle hay =
