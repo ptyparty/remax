@@ -494,6 +494,14 @@ builds in the `haskell-tools` dev container (`compose.yaml`), and
 source of truth — `remax.cabal` is hpack-generated. Plain `cabal build`
 also works outside the container.
 
+### Documents
+
+`docs/watching-mechanism.html` draws how the watching/working mark in the
+header is arrived at: what the agent's two processes write, what the
+session polls, why the heartbeat is a directory of files rather than a
+row in the store, and what each way of losing an agent looks like from
+the reviewer's side. Open it in a browser; it is self-contained.
+
 ### The hero recording
 
 `scripts/hero-cast` regenerates `hero.gif` with no human at a terminal:
