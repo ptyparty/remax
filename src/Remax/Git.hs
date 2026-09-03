@@ -13,6 +13,7 @@ module Remax.Git
   , trackedChanges
   , hasStagedChanges
   , FileScope (..)
+  , buildOutputDirs
   , listFiles
   , isTracked
   , listRefs
@@ -136,12 +137,35 @@ data FileScope = VisibleFiles | AllFiles
 -- Everything the repository considers a file worth seeing: tracked plus
 -- untracked-unignored — the fuzzy finder's haystack. Under AllFiles the
 -- exclusions come off and the ignored files come with it.
+-- Directories that hold build output rather than anything anybody wrote.
+--
+-- Only ever applied to untracked files, where gitignore rules apply, so
+-- a project that genuinely keeps source in one of these still has it
+-- listed — git reports tracked files whatever the exclusions say.
+buildOutputDirs :: [String]
+buildOutputDirs =
+  [ ".git/"
+  , ".stack-work/"
+  , "dist-newstyle/"
+  , "node_modules/"
+  , ".spago/"
+  , "target/"
+  , ".venv/"
+  , "__pycache__/"
+  ]
+
 listFiles :: FileScope -> FilePath -> IO [FilePath]
 listFiles scope root = do
   let
     excluding = case scope of
       VisibleFiles -> ["--exclude-standard"]
-      AllFiles -> []
+      -- Showing the ignored files is for finding the ones somebody might
+      -- open — a .env, a local config, something generated worth a look —
+      -- and not for enumerating a build directory. In a real checkout
+      -- that is the difference between twenty-six thousand paths and
+      -- three hundred and forty thousand, and git never descends into
+      -- them rather than listing them for us to throw away.
+      AllFiles -> concatMap (\d -> ["-x", d]) buildOutputDirs
   (code, out, _) <-
     readProcessWithExitCode
       "git"

@@ -143,6 +143,7 @@ import Remax.Git
   , ReviewMode (..)
   , baseLines
   , branchRoot
+  , buildOutputDirs
   , changedFiles
   , childRepos
   , commitBody
@@ -753,7 +754,9 @@ dispatchFsEvent chan root ev = do
     absolute = FS.eventPath ev
     rel = makeRelative root absolute
     parts = splitDirectories rel
-    noisy = any (`elem` ["dist-newstyle", ".stack-work", "node_modules"]) parts
+    -- the same directories the file listing declines to enumerate: a
+    -- build writing thousands of files is not news about the review
+    noisy = any (`elem` map dropTrailingPathSeparator buildOutputDirs) parts
   unless noisy $
     if ".git" `elem` parts
       then
