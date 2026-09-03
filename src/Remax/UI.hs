@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- The review screen: the whole working file on screen, hunks decorated in
@@ -73,12 +74,13 @@ import Control.Monad (forM, forM_, forever, guard, unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State (get, modify, put)
 import Data.Algorithm.Diff (PolyDiff (..), getGroupedDiff)
-import Data.Char (isAlphaNum, isSpace, toLower)
+import Data.Char (chr, isAlphaNum, isSpace, ord, toLower)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
 import Data.List
   ( find
   , findIndex
+  , foldl'
   , groupBy
   , isPrefixOf
   , isSuffixOf
@@ -113,6 +115,7 @@ import qualified System.FSNotify as FS
 import System.FilePath
   ( dropTrailingPathSeparator
   , isAbsolute
+  , isPathSeparator
   , makeRelative
   , normalise
   , splitDirectories
@@ -5739,14 +5742,59 @@ treeVisible st view =
 -- finder quick, and it is the one real difference between the two views.
 -- Files keep their hunks: expanding one here works as it does in the
 -- tree, since the rows are the same rows.
+-- How many matches the flat finder ranks and shows. Well past a
+-- paneful, and far short of what a large repository would otherwise make
+-- it sort.
+flatRowsKept :: Int
+flatRowsKept = 500
+
+-- A candidate and its score, ordered by the score and then the path.
+-- The stat rides along without taking part in the comparison, which is
+-- what keeps PathStat out of the Ord it would otherwise need.
+data Ranked = Ranked (Int, Int, Int) FilePath (Maybe PathStat)
+
+rankedKey :: Ranked -> ((Int, Int, Int), FilePath)
+rankedKey (Ranked sc p _) = (sc, p)
+
+rankedScore :: Ranked -> (Int, Int, Int)
+rankedScore (Ranked sc _ _) = sc
+
+instance Eq Ranked where
+  a == b = rankedKey a == rankedKey b
+
+instance Ord Ranked where
+  compare = comparing rankedKey
+
 flatRows :: St -> TreeView -> [TreeRow]
 flatRows st view =
   let
     query = tvInput view
+    nd = needleFor query
+    -- Only the best few hundred are ever looked at, so only the best few
+    -- hundred are kept. Ranking by sorting every candidate means the
+    -- whole list is decorated, merged and rebuilt for a pane that shows
+    -- thirty rows — on a repository with a third of a million paths in
+    -- it, that is hundreds of megabytes of garbage for each character
+    -- typed, several times over, and the session stops answering.
+    -- Rejected on the score alone once the set is full. Inserting first
+    -- and dropping the worst afterwards costs a handful of comparisons
+    -- per candidate, and comparing two candidates means comparing their
+    -- paths character by character — which is most of the work, for a
+    -- candidate that was never going to be shown.
+    step acc (p, ms) =
+      case fuzzyScoreOn nd p of
+        Nothing -> acc
+        Just sc
+          | Set.size acc < flatRowsKept -> Set.insert (Ranked sc p ms) acc
+          | otherwise ->
+              case Set.lookupMax acc of
+                Just worst
+                  | rankedScore worst <= sc -> acc
+                _ -> Set.deleteMax (Set.insert (Ranked sc p ms) acc)
     scored =
-      mapMaybe
-        (\(p, ms) -> fmap (\sc -> (sc, (p, ms))) (fuzzyScore query p))
-        (tvAll view)
+      map
+        (\(Ranked sc p ms) -> (sc, (p, ms)))
+        (Set.toAscList (foldl' step Set.empty (tvAll view)))
     emit (path, mStat) =
       let
         hunks = treeHunkCount st path
@@ -5869,7 +5917,13 @@ browseTreeKey ev view = do
     retype q =
       let
         next = view {tvInput = q, tvSel = 0}
-        firstFile = findIndex rowIsFile (treeVisible st next)
+        -- flat rows lead with their file, so the answer is nought and
+        -- asking costs a whole pass over the candidates — which the
+        -- render is about to make anyway, and which on a large
+        -- repository is seconds rather than milliseconds
+        firstFile = case tvMode view of
+          TreeFlat -> Just 0
+          TreeHierarchy -> findIndex rowIsFile (treeVisible st next)
       in
         setTree next {tvSel = fromMaybe 0 firstFile}
     close = modify (\s -> s {stTree = Nothing})
@@ -7032,40 +7086,92 @@ refreshPicker pk =
 
 -- Case-insensitive subsequence match; lower scores first. Prefers
 -- matches inside the file name, then tight spans, then short paths.
+-- A query, lowercased and measured once, so that scoring a candidate
+-- against it costs nothing but the walk.
+data Needle = Needle
+  { ndChars :: String
+  , ndLen :: !Int
+  , ndBlank :: !Bool
+  }
+
+needleFor :: Text -> Needle
+needleFor q =
+  let
+    cs = map lowerFast (T.unpack q)
+  in
+    Needle cs (length cs) (T.null q)
+
+-- Case folding for matching paths, which are very nearly always ASCII.
+--
+-- Data.Char.toLower is a Unicode table lookup, and the scorer calls it
+-- once per character of every candidate — at a third of a million paths
+-- that is tens of millions of table lookups for each character typed,
+-- and it is most of what the finder spends its time on. Anything outside
+-- ASCII still goes the long way round.
+lowerFast :: Char -> Char
+lowerFast c
+  | c >= 'A' && c <= 'Z' = chr (ord c + 32)
+  | c < '\128' = c
+  | otherwise = toLower c
+
 fuzzyScore :: Text -> FilePath -> Maybe (Int, Int, Int)
-fuzzyScore q path
-  | T.null q = Just (0, 0, length path)
+fuzzyScore q = fuzzyScoreOn (needleFor q)
+
+-- How well a path matches, or Nothing if it does not.
+--
+-- Walks the path where it lies, lowercasing each character as it is
+-- compared. The obvious version builds a lowercased copy of the
+-- candidate and pairs every character of it with an index — two lists
+-- per candidate, per keystroke. Against a few thousand paths that is
+-- invisible; against the three hundred thousand a large repository has
+-- once ignored files are shown, it is well over a gigabyte of garbage
+-- for every character typed, and the session goes to its knees.
+fuzzyScoreOn :: Needle -> FilePath -> Maybe (Int, Int, Int)
+fuzzyScoreOn nd path
+  | ndBlank nd = Just (0, 0, length path)
   | otherwise =
       let
-        ql = map toLower (T.unpack q)
-        pl = map toLower path
-        base = map toLower (takeFileName path)
-        walk needle hay firstPos lastPos =
+        walk needle hay !i !firstPos !lastPos =
           case (needle, hay) of
             ([], _) -> Just (firstPos, lastPos)
             (_, []) -> Nothing
-            (c : cs, (i, h) : hs) ->
-              if c == h
-                then walk cs hs (if firstPos < 0 then i else firstPos) i
-                else walk needle hs firstPos lastPos
+            (c : cs, h : hs) ->
+              if c == lowerFast h
+                then
+                  walk cs hs (i + 1) (if firstPos < 0 then i else firstPos) i
+                else walk needle hs (i + 1) firstPos lastPos
       in
-        case walk ql (zip [0 ..] pl) (-1) (-1) of
+        case walk (ndChars nd) path 0 (-1) (-1) of
           Nothing -> Nothing
           Just (firstPos, lastPos) ->
             Just
-              ( if ql `isSubsequenceOfStr` base then 0 else 1
-              , (lastPos - firstPos) - (length ql - 1)
+              ( -- drop, not takeFileName: a suffix of a String is the
+                -- same String, where taking one is a fresh copy
+                if subsequenceLower (ndChars nd) (drop (baseStart path) path)
+                  then 0
+                  else 1
+              , (lastPos - firstPos) - (ndLen nd - 1)
               , length path
               )
 
-isSubsequenceOfStr :: String -> String -> Bool
-isSubsequenceOfStr needle hay =
-  case needle of
-    [] -> True
-    (c : cs) ->
-      case dropWhile (/= c) hay of
-        [] -> False
-        (_ : rest) -> isSubsequenceOfStr cs rest
+-- Where the file name starts, without cutting one out.
+baseStart :: FilePath -> Int
+baseStart =
+  let
+    go [] _ best = best
+    go (c : cs) !i !best = go cs (i + 1) (if isPathSeparator c then i + 1 else best)
+  in
+    \path -> go path 0 0
+
+subsequenceLower :: String -> String -> Bool
+subsequenceLower needle hay =
+  case (needle, hay) of
+    ([], _) -> True
+    (_, []) -> False
+    (c : cs, h : hs) ->
+      if c == lowerFast h
+        then subsequenceLower cs hs
+        else subsequenceLower needle hs
 
 handlePickerKey :: V.Event -> Picker -> EventM Name St ()
 handlePickerKey ev pk =
