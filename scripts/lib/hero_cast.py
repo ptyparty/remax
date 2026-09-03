@@ -53,8 +53,11 @@ FONTS = (
 SAMPLE_S = 0.12
 
 # and while waiting on a model: sampled this often, played back this
-# fast, so the waiting reads as time passing rather than being sat through
-LAPSE_S = 1.3
+# fast, so the waiting reads as time passing rather than being sat
+# through. Sampled coarsely on purpose — the presence mark animates, so
+# no two samples are ever identical and none of them collapse, and a
+# finer grain buys nothing but half a minute of watching a spinner
+LAPSE_S = 3.0
 LAPSE_PLAY_S = 0.11
 
 
@@ -199,6 +202,41 @@ class Cast:
             self.tmux('send-keys', '-t', pane, name)
             self.hold(0.25)
 
+    def text(self):
+        return '\n'.join(
+            ''.join(cell[0] for cell in row) for row in self.snapshot()
+        )
+
+    def upper_text(self):
+        """Just the pane above remax — the one Claude Code is in."""
+        rows = self.snapshot()[: ROWS - REMAX_ROWS]
+        return '\n'.join(''.join(cell[0] for cell in row) for row in rows)
+
+    def wait_ready(self, budget=150):
+        """Hold until the agent pane will actually take a command.
+
+        Typing at a pane that is still starting throws the keystrokes
+        away, and what is lost is the command this whole recording is
+        about — which is how it broke: a new version put a prompt in the
+        way, the pane sat on it, and the tour typed into a dialog.
+
+        Waiting for a settled screen is not enough either, since a pane
+        that has not drawn anything yet is perfectly settled."""
+        end = time.time() + budget
+        answered = False
+        seen = ''
+        while time.time() < end:
+            self.hold(0.4)
+            seen = self.upper_text()
+            if 'accept edits on' in seen:
+                return
+            # a version of Claude Code that asks about the settings it
+            # was handed; the answer is yes, and it is already selected
+            if not answered and 'trust these settings' in seen:
+                self.press(self.CLAUDE, 'Enter')
+                answered = True
+        sys.exit('the agent pane never became usable; last saw:\n' + seen)
+
     def shell(self, args):
         """What an agent does from outside the session, while it watches."""
         return subprocess.run(
@@ -323,6 +361,7 @@ def tour(cast):
     # HERO_SKIP_AGENT leaves the prompt untyped, for checking the layout
     # and the remax half without spending a model call on it.
     if not os.environ.get('HERO_SKIP_AGENT'):
+        cast.wait_ready()
         cast.keys(cast.CLAUDE, '/remax-review watch', per_key=0.05)
         cast.hold(1.2)
         cast.press(cast.CLAUDE, 'Enter')
