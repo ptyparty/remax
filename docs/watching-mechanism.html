@@ -1,0 +1,352 @@
+<title>remax · how the watching mark works</title>
+<style>
+  :root {
+    --bg: #151515; --panel: #1b1b1b; --edge: #2c2c2c;
+    --ink: #e8e8d3; --dim: #9a9a90; --faint: #6e6e68;
+    --green: #99ad6a; --gold: #fad07a; --blue: #8197bf;
+    --cyan: #8fbfdc; --rose: #cf6a4c; --lav: #a390f0;
+  }
+  body {
+    background: var(--bg); color: var(--ink); margin: 0;
+    font: 15px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 44px 28px 90px; }
+  h1 { font-size: 26px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 13px; font-weight: 600; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--faint);
+    margin: 52px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--edge);
+  }
+  p { color: var(--dim); max-width: 74ch; }
+  .lede { font-size: 17px; color: var(--ink); max-width: 74ch; margin-bottom: 4px; }
+  code, kbd {
+    font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+    font-size: 0.92em; color: var(--cyan);
+  }
+  .fig { overflow-x: auto; margin: 8px 0 0; }
+  svg { display: block; min-width: 940px; }
+  table { border-collapse: collapse; width: 100%; margin-top: 6px; }
+  th, td {
+    text-align: left; padding: 9px 14px 9px 0;
+    border-bottom: 1px solid var(--edge); vertical-align: top;
+  }
+  th { color: var(--faint); font-weight: 600; font-size: 12.5px;
+       letter-spacing: 0.05em; text-transform: uppercase; }
+  td { color: var(--dim); font-size: 14px; }
+  td:first-child { color: var(--ink); white-space: nowrap; }
+  pre {
+    background: var(--panel); border: 1px solid var(--edge); border-radius: 7px;
+    padding: 14px 16px; overflow-x: auto; color: var(--ink);
+    font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+    font-size: 13px; line-height: 1.55;
+  }
+  pre .c { color: var(--faint); }
+  .note {
+    border-left: 2px solid var(--gold); background: #1c1a15;
+    padding: 12px 18px; border-radius: 0 6px 6px 0; margin: 20px 0;
+  }
+  .note p { color: var(--ink); margin: 0; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; }
+  @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
+  .glyph { color: var(--green); font-family: ui-monospace, monospace; }
+</style>
+
+<main>
+  <h1>How remax knows an agent is there</h1>
+  <p class="lede">
+    The header shows <span class="glyph">●</span> watching or
+    <span class="glyph">✦</span> working when an agent is attending the
+    review. Nothing tells remax directly — there is no connection between
+    the two. It is a heartbeat written to the filesystem and read on a
+    beat, so that no cleanup is needed when either side dies.
+  </p>
+
+  <h2>The whole mechanism</h2>
+  <div class="fig">
+  <svg viewBox="0 0 1040 672" width="1040" height="672" role="img"
+       aria-label="Agent processes write pid-named heartbeat files; the remax session polls them and posts to its event channel.">
+    <defs>
+      <marker id="a" viewBox="0 0 10 10" refX="9" refY="5"
+              markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#8fbfdc"/>
+      </marker>
+      <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5"
+              markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6e6e68"/>
+      </marker>
+    </defs>
+
+    <!-- column headings -->
+    <text x="24" y="26" fill="#6e6e68" font-size="12" letter-spacing="1.4"
+          font-family="ui-sans-serif, system-ui">AGENT SIDE · writers</text>
+    <text x="380" y="26" fill="#6e6e68" font-size="12" letter-spacing="1.4"
+          font-family="ui-sans-serif, system-ui">FILESYSTEM · the only channel</text>
+    <text x="754" y="26" fill="#6e6e68" font-size="12" letter-spacing="1.4"
+          font-family="ui-sans-serif, system-ui">REMAX SESSION · reader</text>
+
+    <!-- ── agent: remax watching ── -->
+    <rect x="24" y="44" width="286" height="150" rx="8"
+          fill="#1b1b1b" stroke="#99ad6a" stroke-width="1.5"/>
+    <text x="42" y="70" fill="#99ad6a" font-size="14.5" font-weight="600"
+          font-family="ui-monospace, monospace">remax watching</text>
+    <text x="42" y="92" fill="#9a9a90" font-size="12.5"
+          font-family="ui-sans-serif, system-ui">started once, for the whole watch</text>
+    <text x="42" y="116" fill="#e8e8d3" font-size="12.5"
+          font-family="ui-monospace, monospace">every 1 s → markPresence Working</text>
+    <text x="42" y="138" fill="#e8e8d3" font-size="12.5"
+          font-family="ui-monospace, monospace">every 1 s → getParentProcessID()</text>
+    <text x="42" y="158" fill="#cf6a4c" font-size="12"
+          font-family="ui-sans-serif, system-ui">parent changed ⇒ orphaned ⇒ exit</text>
+    <text x="42" y="178" fill="#6e6e68" font-size="12"
+          font-family="ui-sans-serif, system-ui">on exit: unlink its own file</text>
+
+    <!-- ── agent: list --wait ── -->
+    <rect x="24" y="222" width="286" height="150" rx="8"
+          fill="#1b1b1b" stroke="#8197bf" stroke-width="1.5"/>
+    <text x="42" y="248" fill="#8197bf" font-size="14.5" font-weight="600"
+          font-family="ui-monospace, monospace">remax list --wait</text>
+    <text x="42" y="270" fill="#9a9a90" font-size="12.5"
+          font-family="ui-sans-serif, system-ui">restarted after every wake</text>
+    <text x="42" y="294" fill="#e8e8d3" font-size="12.5"
+          font-family="ui-monospace, monospace">every 400 ms → markPresence Waiting</text>
+    <text x="42" y="316" fill="#e8e8d3" font-size="12.5"
+          font-family="ui-monospace, monospace">…and re-reads the punch list</text>
+    <text x="42" y="336" fill="#9a9a90" font-size="12"
+          font-family="ui-sans-serif, system-ui">returns when it differs and no note</text>
+    <text x="42" y="354" fill="#9a9a90" font-size="12"
+          font-family="ui-sans-serif, system-ui">is mid-typing · then unlinks its file</text>
+
+    <!-- ── filesystem ── -->
+    <rect x="366" y="44" width="322" height="328" rx="8"
+          fill="#181818" stroke="#2c2c2c" stroke-width="1.5"/>
+    <text x="384" y="68" fill="#fad07a" font-size="13"
+          font-family="ui-monospace, monospace">$XDG_STATE_HOME/remax/</text>
+
+    <rect x="384" y="84" width="286" height="72" rx="6"
+          fill="#1b1b1b" stroke="#3a3a3a"/>
+    <text x="400" y="106" fill="#e8e8d3" font-size="13"
+          font-family="ui-monospace, monospace">review.db · -wal · -shm</text>
+    <text x="400" y="126" fill="#9a9a90" font-size="11.5"
+          font-family="ui-sans-serif, system-ui">verdicts, notes, note_composing</text>
+    <text x="400" y="145" fill="#cf6a4c" font-size="11.5"
+          font-family="ui-sans-serif, system-ui">watched by fsnotify → StoreChanged</text>
+
+    <rect x="384" y="172" width="286" height="184" rx="6"
+          fill="#1b1b1b" stroke="#99ad6a" stroke-dasharray="4 3"/>
+    <text x="400" y="194" fill="#99ad6a" font-size="13"
+          font-family="ui-monospace, monospace">waiting/</text>
+    <text x="400" y="213" fill="#cf6a4c" font-size="11.5"
+          font-family="ui-sans-serif, system-ui">NOT watched — watchDir is not recursive</text>
+
+    <rect x="400" y="228" width="254" height="52" rx="5" fill="#20241c" stroke="#3a4030"/>
+    <text x="414" y="248" fill="#99ad6a" font-size="12.5"
+          font-family="ui-monospace, monospace">3452411</text>
+    <text x="414" y="268" fill="#e8e8d3" font-size="12"
+          font-family="ui-monospace, monospace">working ⏎ /path/to/repo</text>
+
+    <rect x="400" y="290" width="254" height="52" rx="5" fill="#1d2028" stroke="#333a48"/>
+    <text x="414" y="310" fill="#8197bf" font-size="12.5"
+          font-family="ui-monospace, monospace">3452480</text>
+    <text x="414" y="330" fill="#e8e8d3" font-size="12"
+          font-family="ui-monospace, monospace">waiting ⏎ /path/to/repo</text>
+
+    <!-- ── remax session ── -->
+    <rect x="744" y="44" width="272" height="118" rx="8"
+          fill="#1b1b1b" stroke="#a390f0" stroke-width="1.5"/>
+    <text x="762" y="70" fill="#a390f0" font-size="14" font-weight="600"
+          font-family="ui-monospace, monospace">poll thread (forkIO)</text>
+    <text x="762" y="92" fill="#e8e8d3" font-size="12.5"
+          font-family="ui-monospace, monospace">presenceNow</text>
+    <text x="762" y="112" fill="#9a9a90" font-size="12"
+          font-family="ui-sans-serif, system-ui">listDirectory + stat each file</text>
+    <text x="762" y="131" fill="#9a9a90" font-size="12"
+          font-family="ui-sans-serif, system-ui">mtime older than 4 s ⇒ ignored</text>
+    <text x="762" y="151" fill="#fad07a" font-size="12"
+          font-family="ui-sans-serif, system-ui">sleeps 420 ms busy · 1.5 s idle</text>
+
+    <rect x="744" y="196" width="272" height="74" rx="8"
+          fill="#1b1b1b" stroke="#8fbfdc" stroke-width="1.5"/>
+    <text x="762" y="220" fill="#8fbfdc" font-size="14" font-weight="600"
+          font-family="ui-monospace, monospace">BChan REvent</text>
+    <text x="762" y="240" fill="#9a9a90" font-size="12"
+          font-family="ui-sans-serif, system-ui">in-process queue — brick's event loop</text>
+    <text x="762" y="259" fill="#e8e8d3" font-size="12"
+          font-family="ui-monospace, monospace">Attending ([waiting],[working])</text>
+
+    <rect x="744" y="304" width="272" height="126" rx="8"
+          fill="#1b1b1b" stroke="#99ad6a" stroke-width="1.5"/>
+    <text x="762" y="328" fill="#99ad6a" font-size="14" font-weight="600"
+          font-family="ui-sans-serif, system-ui">handleEvent → header</text>
+    <text x="762" y="349" fill="#e8e8d3" font-size="12"
+          font-family="ui-monospace, monospace">stAttending := seen</text>
+    <text x="762" y="368" fill="#e8e8d3" font-size="12"
+          font-family="ui-monospace, monospace">stThrob := stThrob + 1</text>
+    <text x="762" y="391" fill="#9a9a90" font-size="12"
+          font-family="ui-sans-serif, system-ui">this repo in waiting ⇒ watching</text>
+    <text x="762" y="410" fill="#9a9a90" font-size="12"
+          font-family="ui-sans-serif, system-ui">else in working ⇒ working</text>
+
+    <!-- arrows: agents write -->
+    <path d="M310,119 C338,119 348,240 396,250" fill="none"
+          stroke="#8fbfdc" stroke-width="1.6" marker-end="url(#a)"/>
+    <text x="316" y="188" fill="#8fbfdc" font-size="11.5"
+          font-family="ui-sans-serif, system-ui">write(pid)</text>
+
+    <path d="M310,297 C340,297 350,304 396,308" fill="none"
+          stroke="#8fbfdc" stroke-width="1.6" marker-end="url(#a)"/>
+    <text x="316" y="330" fill="#8fbfdc" font-size="11.5"
+          font-family="ui-sans-serif, system-ui">write(pid)</text>
+
+    <!-- arrow: poll reads -->
+    <path d="M672,240 C712,240 716,120 740,104" fill="none"
+          stroke="#8fbfdc" stroke-width="1.6" marker-end="url(#a)"/>
+    <text x="676" y="176" fill="#8fbfdc" font-size="11.5"
+          font-family="ui-sans-serif, system-ui">poll</text>
+
+    <!-- arrow: store watch (contrast) -->
+    <path d="M672,120 C704,120 712,66 740,60" fill="none"
+          stroke="#6e6e68" stroke-width="1.3" stroke-dasharray="5 4"
+          marker-end="url(#ag)"/>
+
+    <!-- vertical chain in the session -->
+    <path d="M880,162 L880,192" fill="none" stroke="#8fbfdc"
+          stroke-width="1.6" marker-end="url(#a)"/>
+    <path d="M880,270 L880,300" fill="none" stroke="#8fbfdc"
+          stroke-width="1.6" marker-end="url(#a)"/>
+
+    <!-- what all of it comes to -->
+    <rect x="24" y="442" width="992" height="60" rx="8"
+          fill="#101010" stroke="#2c2c2c"/>
+    <text x="44" y="466" fill="#6e6e68" font-size="11.5" letter-spacing="1.2"
+          font-family="ui-sans-serif, system-ui">HEADER</text>
+    <text x="44" y="489" fill="#9a9a90" font-size="13.5"
+          font-family="ui-monospace, monospace">remax · uncommitted · Retry.hs · hunk 2/4 ·</text>
+    <text x="420" y="489" fill="#99ad6a" font-size="13.5"
+          font-family="ui-monospace, monospace">● watching</text>
+    <text x="536" y="489" fill="#6e6e68" font-size="13.5"
+          font-family="ui-monospace, monospace">or  ✦ working</text>
+    <path d="M880,430 L880,438" fill="none" stroke="#8fbfdc" stroke-width="1.6"
+          marker-end="url(#a)"/>
+
+    <!-- the animation -->
+    <rect x="24" y="524" width="470" height="128" rx="8"
+          fill="#1b1b1b" stroke="#2c2c2c"/>
+    <text x="44" y="548" fill="#6e6e68" font-size="11.5" letter-spacing="1.2"
+          font-family="ui-sans-serif, system-ui">THE THROB</text>
+    <text x="44" y="574" fill="#9a9a90" font-size="13"
+          font-family="ui-monospace, monospace">waiting   · • ● •</text>
+    <text x="212" y="574" fill="#6e6e68" font-size="12"
+          font-family="ui-sans-serif, system-ui">four frames, a slow breath</text>
+    <text x="44" y="596" fill="#9a9a90" font-size="13"
+          font-family="ui-monospace, monospace">working   ✦ ✧</text>
+    <text x="212" y="596" fill="#6e6e68" font-size="12"
+          font-family="ui-sans-serif, system-ui">two frames, quicker</text>
+    <text x="44" y="624" fill="#9a9a90" font-size="12"
+          font-family="ui-sans-serif, system-ui">One frame per poll — the beat that asks whether</text>
+    <text x="44" y="642" fill="#9a9a90" font-size="12"
+          font-family="ui-sans-serif, system-ui">anybody is there is the beat that animates.</text>
+
+    <!-- why not the database -->
+    <rect x="546" y="524" width="470" height="128" rx="8"
+          fill="#1c1a15" stroke="#463f28"/>
+    <text x="566" y="548" fill="#fad07a" font-size="12.5" font-weight="600"
+          font-family="ui-sans-serif, system-ui">Why files, and not a table in review.db</text>
+    <text x="566" y="572" fill="#e8e8d3" font-size="12.5"
+          font-family="ui-sans-serif, system-ui">fsnotify watches the store's directory, so an</text>
+    <text x="566" y="590" fill="#e8e8d3" font-size="12.5"
+          font-family="ui-sans-serif, system-ui">agent's reply shows up live. A heartbeat kept in</text>
+    <text x="566" y="608" fill="#e8e8d3" font-size="12.5"
+          font-family="ui-sans-serif, system-ui">review.db would touch -wal there and wake every</text>
+    <text x="566" y="626" fill="#e8e8d3" font-size="12.5"
+          font-family="ui-sans-serif, system-ui">open session twice a second. waiting/ is a sub-</text>
+    <text x="566" y="644" fill="#e8e8d3" font-size="12.5"
+          font-family="ui-sans-serif, system-ui">directory, and watchDir is not recursive.</text>
+
+  </svg>
+  </div>
+
+  <h2>The heartbeat file</h2>
+  <p>
+    One file per writing process, named for its pid. Rewritten whole on
+    every beat — the point of the write is the timestamp it leaves behind,
+    not the bytes, which barely change.
+  </p>
+<pre>$XDG_STATE_HOME/remax/waiting/3452411
+<span class="c">├─ name .... the writer's pid, so two processes never collide</span>
+<span class="c">├─ line 1 .. "working" | "waiting"</span>
+<span class="c">└─ rest .... one repository path per line (a story watches several)</span>
+
+working
+/home/you/work/flipstone/remax</pre>
+  <p>
+    Both writers can be live at once, and usually are: the long-lived
+    <code>remax watching</code> says <em>working</em> while a
+    <code>list --wait</code> says <em>waiting</em>. Waiting wins when both
+    are present, because being blocked on the reviewer is the more
+    specific fact.
+  </p>
+
+  <h2>Timings</h2>
+  <table>
+    <tr><th>What</th><th>Interval</th><th>Why that number</th></tr>
+    <tr><td><code>remax watching</code> beat</td><td>1 s</td>
+        <td>Comfortably inside the 4 s staleness window, so a slow moment never blinks.</td></tr>
+    <tr><td><code>list --wait</code> beat</td><td>400 ms</td>
+        <td>It is already polling the punch list at that rate; the heartbeat rides along.</td></tr>
+    <tr><td>Considered stale after</td><td>4 s</td>
+        <td>Long enough to tolerate a missed beat, short enough that a dead agent goes dark while you are still looking at the header.</td></tr>
+    <tr><td>Session poll</td><td>420 ms / 1.5 s</td>
+        <td>Quick while somebody is attending — it doubles as the animation frame rate — and slow when nobody is, so an unattended session is not waking up to redraw something that is not on screen.</td></tr>
+  </table>
+
+  <h2>What each kind of death looks like</h2>
+  <table>
+    <tr><th>How it ends</th><th>Mechanism</th><th>Mark clears after</th></tr>
+    <tr><td>Wait returns normally</td><td><code>finally clearWaiting</code> unlinks the file</td><td>immediately</td></tr>
+    <tr><td>Watch stopped on purpose</td><td>same, on <code>SIGTERM</code> or exit</td><td>immediately</td></tr>
+    <tr><td>Agent killed hard</td><td>nothing runs — the timestamp simply stops advancing</td><td>≤ 4 s</td></tr>
+    <tr><td>Machine loses power</td><td>same; nothing is expected to clean up</td><td>≤ 4 s, on next read</td></tr>
+    <tr><td>Parent dies, process leaks</td><td><code>getParentProcessID</code> changes ⇒ the beat exits itself</td><td>≤ 2 s</td></tr>
+  </table>
+
+  <div class="note">
+    <p>
+      Nothing on either side has to be told anything. remax never learns
+      that an agent exists; it reads a directory and believes recent
+      timestamps. That is the whole design: the failure mode of every
+      component is silence, and silence reads correctly as “nobody is
+      there”.
+    </p>
+  </div>
+
+  <h2>What it still cannot see</h2>
+  <div class="cols">
+    <div>
+      <p>
+        <strong>An agent that is alive but not paying attention.</strong>
+        The process is running and beating, so the mark stays lit. Context
+        exhausted, stuck on another task, waiting on a human elsewhere —
+        all of it looks like <em>working</em>.
+      </p>
+    </div>
+    <div>
+      <p>
+        <strong>A watch whose parent outlives the agent session.</strong>
+        The orphan check catches a dead parent, not an idle one. If the
+        shell that started it survives the agent, so does the mark — which
+        is why the skill kills it wherever it kills the wait.
+      </p>
+    </div>
+  </div>
+
+  <h2>Where it lives in the code</h2>
+  <table>
+    <tr><th>Piece</th><th>Where</th></tr>
+    <tr><td>File format, write, read, staleness</td>
+        <td><code>src/Remax/Store.hs</code> — <code>markPresence</code>, <code>presenceNow</code>, <code>freshRepos</code></td></tr>
+    <tr><td>The two writers</td>
+        <td><code>app/Main.hs</code> — <code>attend</code>, and the <code>settle</code> loop in <code>list</code></td></tr>
+    <tr><td>Poll thread, event, render</td>
+        <td><code>src/Remax/UI.hs</code> — the <code>forkIO</code> beat, <code>Attending</code>, <code>watchSeg</code>, <code>throbGlyph</code> / <code>busyGlyph</code></td></tr>
+  </table>
+</main>
