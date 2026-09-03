@@ -33,6 +33,7 @@ import Paths_remax (version)
 import Remax.Git (ReviewMode (..), branchRoot, childRepos, refExists, repoRoot)
 import Remax.Store
 import Remax.UI (runReview)
+import System.Posix.Process (getParentProcessID)
 
 data ModeArg = ArgHead | ArgBase Text | ArgBranch | ArgUnstaged | ArgUntracked
 
@@ -281,11 +282,22 @@ forget mPath = do
 attend :: IO ()
 attend = do
   roots <- targetRepos
+  -- Whoever started this is the agent, near enough. When they go, this
+  -- goes: a heartbeat that outlives the agent it speaks for is worse
+  -- than none, because it says somebody is attending a review that
+  -- nobody is, and nothing else will ever contradict it.
+  --
+  -- Orphaned rather than merely detached: a process started with no
+  -- parent to lose has one already, and refusing to run for it would
+  -- take a legitimate way of starting this away.
+  started <- getParentProcessID
   let
     beat = do
-      markPresence Working (map T.pack roots)
-      threadDelay attendBeatUs
-      beat
+      parent <- getParentProcessID
+      when (parent == started) $ do
+        markPresence Working (map T.pack roots)
+        threadDelay attendBeatUs
+        beat
   beat `finally` clearWaiting
 
 attendBeatUs :: Int
