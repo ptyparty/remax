@@ -4024,7 +4024,7 @@ applyVerdictHunk v = do
         rows = map storeRow (runChanges fv (clampH rs (stCurH st)))
       mCommit <- verdictCommitContext
       liftIO (recordVerdicts (stConn st) (repoText st) (stPassId st) v mCommit rows)
-      when (v == Reviewed) (resolveNotesInMemory (runKeys r))
+      when (v == Reviewed) (closeConversation (runKeys r))
       modify $ \s ->
         s
           { stVerdicts =
@@ -4071,7 +4071,7 @@ applyVerdictLines v = do
             mCommit
             (map storeRow picks)
         )
-      when (v == Reviewed) (resolveNotesInMemory (map (\(k, _, _) -> k) picks))
+      when (v == Reviewed) (closeConversation (map (\(k, _, _) -> k) picks))
       modify $ \s ->
         s
           { stVerdicts =
@@ -5091,6 +5091,72 @@ resolveNotesInMemory keys =
   modify $ \s ->
     s {stThreads = foldr Map.delete (stThreads s) keys}
 
+-- Every key carrying the same conversation as one of these.
+--
+-- A note is one conversation however many lines it was written across,
+-- and those lines need not all be part of the change: a note made over a
+-- selection that reaches past it is recorded against the unchanged lines
+-- too, under the key a remark uses. Closing it from the hunk's own keys
+-- leaves that half alive, keyed to a line no hunk owns, where nothing
+-- will ever resolve it — and it reappears beside whichever hunk that
+-- line happens to sit next to.
+-- Deliberately the rows beside the accepted ones, not every key whose
+-- posts happen to match. Two hunks flagged with the same sentence carry
+-- equal conversations while being nothing to do with each other, and
+-- retiring one would take the other with it — which is a worse bug than
+-- the one this is here to fix.
+conversationKeys :: St -> FileView -> [Text] -> [Text]
+conversationKeys st fv keys =
+  let
+    rows = fvRows fv
+    threadAt i = do
+      r <- safeIdx rows i
+      listToMaybe (mapMaybe (`Map.lookup` stThreads st) (rowFeedbackKeys r))
+    keysAt i = maybe [] rowFeedbackKeys (safeIdx rows i)
+    seeds =
+      [ i
+      | (i, r) <- zip [0 ..] rows
+      , any (`elem` keys) (rowFeedbackKeys r)
+      ]
+    -- the run of neighbours carrying the same conversation, which is the
+    -- block the note is drawn under
+    grow step i posts =
+      let
+        j = i + step
+      in
+        if threadAt j == Just posts then j : grow step j posts else []
+    block i = case threadAt i of
+      Nothing -> []
+      Just posts -> (i : grow (-1) i posts) ++ grow 1 i posts
+  in
+    Set.toList (Set.fromList (concatMap keysAt (concatMap block seeds)))
+
+-- Retire the conversation the accepted lines belonged to, wherever the
+-- rest of it lives.
+--
+-- One keystroke made the mark and one retires it: the lines outside the
+-- hunk lose their verdict as well as their share of the conversation.
+-- Closing the note but leaving them flagged would leave a mark standing
+-- with nothing left to say why, and a punch list asking for work that
+-- has just been done.
+--
+-- Cleared rather than marked reviewed, because reviewed says a change
+-- has been read and a line nobody changed has none.
+closeConversation :: [Text] -> EventM Name St ()
+closeConversation keys = do
+  st <- get
+  let
+    wider = case currentFileMay st of
+      Nothing -> keys
+      Just fv -> conversationKeys st fv keys
+    beyond = filter (`notElem` keys) wider
+  unless (null beyond) $ do
+    void (liftIO (clearThread (stConn st) (repoText st) beyond))
+    liftIO (deleteKeys (stConn st) (repoText st) beyond)
+    modify $ \s ->
+      s {stVerdicts = foldr Map.delete (stVerdicts s) beyond}
+  resolveNotesInMemory wider
+
 -- What a note applies to: an active selection wins; then the line under
 -- the cursor, when it already carries a verdict or a note (sitting on a
 -- noted line and typing :note must open THAT note — a noted line's
@@ -5211,7 +5277,16 @@ openNotePopup :: NoteOrigin -> EventM Name St ()
 openNotePopup origin = do
   st <- get
   let
-    keys = noteTargetKeys st
+    -- A note that ! or ? opened is about what that keystroke just
+    -- marked, all of it. Asking noteTargetKeys instead lands it on the
+    -- line under the cursor alone, because marking collapses the
+    -- selection on its way out and the cursor is left on whichever line
+    -- the selection happened to end at — so a note written across four
+    -- lines was recorded against one of them, and if that one was
+    -- unchanged it belonged to no hunk and nothing could ever resolve it.
+    keys = case origin of
+      NoteFromMark _ | not (null (stLastMarked st)) -> stLastMarked st
+      _ -> noteTargetKeys st
   if null keys
     then setMsg "nothing to note — mark lines with ! or ? first"
     else do
