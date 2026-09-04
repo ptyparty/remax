@@ -267,11 +267,30 @@ runFilterAllows f r =
     FilterComments -> runKind r == RunComment
 
 data PopupPurpose
-  = NoteFor [Text]
+  = NoteFor [Text] NoteOrigin
   | -- the paths that will be staged along with the message, so the popup
     -- can show them before you commit to them (empty at a rebase stop,
     -- where :continue owns the folding)
     AmendMessage [FilePath]
+
+-- Why a note popup is open, which decides what escaping out of it means.
+--
+-- Asked for by :note, the mark was already there and stays. Opened by !
+-- or ?, the mark was made a moment ago by the same keystroke and has not
+-- been thought about yet — backing out of the sentence backs out of the
+-- verdict it was going to explain.
+data NoteOrigin
+  = NoteAsked
+  | NoteFromMark MarkUndo
+
+-- What a mark changed, kept so that escaping out of the note it opened
+-- can put it back exactly.
+data MarkUndo = MarkUndo
+  { muRows :: [(Text, Text, Text, Int)] -- the rows it wrote
+  , muBefore :: Map.Map Text (Maybe Verdict) -- what those keys were
+  , muCounts :: Map.Map Verdict Int -- the session tallies before it
+  , muPunch :: [(FilePath, Int, Verdict)]
+  }
 
 data FileView = FileView
   { fvPath :: FilePath
@@ -316,6 +335,7 @@ data St = St
   , stRebase :: Maybe RebaseStatus -- a paused rebase the session is following
   , stWritten :: Set.Set FilePath -- files written since the last commit-shaped action
   , stLastMarked :: [Text] -- keys of the most recent verdict, for :note
+  , stLastRows :: [(Text, Text, Text, Int)] -- and the rows it wrote, to undo it
   , stOpened :: Set.Set FilePath -- files opened by hand, pinned across refreshes
   , stPicker :: Maybe Picker
   , stNotePopup :: Maybe NotePopup
@@ -568,6 +588,7 @@ runReview mode root roots story = do
           , stRebase = rebase0
           , stWritten = Set.empty
           , stLastMarked = []
+          , stLastRows = []
           , stOpened = Set.empty
           , stPicker = Nothing
           , stNotePopup = Nothing
@@ -1524,7 +1545,7 @@ spaceMenuEntries =
   , ("b", "open files", openBufferPicker)
   , ("t", "project tree", openTree)
   , ("R", "switch repository", openRepoPicker)
-  , ("n", "note popup", openNotePopup)
+  , ("n", "note popup", openNotePopup NoteAsked)
   , ("e", "$EDITOR here", editCurrent)
   , ("p", "pending filter", togglePendingOnly)
   , ("k", "code / comment filter", cycleRunFilter)
@@ -1893,7 +1914,7 @@ syncComposing = do
   let
     writing = case stNotePopup st of
       Just np
-        | NoteFor _ <- npPurpose np -> Just (repoText st)
+        | NoteFor _ _ <- npPurpose np -> Just (repoText st)
       _ -> Nothing
   unless (writing == stComposing st) $ do
     -- cleared where it was set before being set anywhere else, so
@@ -3929,7 +3950,20 @@ markThenNote v = do
   marked <- applyVerdict v
   if marked && noting
     then do
-      openNotePopup
+      after <- get
+      let
+        undoing =
+          MarkUndo
+            { muRows = stLastRows after
+            , muBefore =
+                Map.fromList
+                  [ (k, Map.lookup k (stVerdicts preSt))
+                  | k <- stLastMarked after
+                  ]
+            , muCounts = stCounts preSt
+            , muPunch = stPunch preSt
+            }
+      openNotePopup (NoteFromMark undoing)
       opened <- get
       case stNotePopup opened of
         Nothing -> runDeferredAdvance
@@ -3996,6 +4030,7 @@ applyVerdictHunk v = do
           { stVerdicts =
               foldr (\k m -> Map.insert k v m) (stVerdicts s) (runKeys r)
           , stLastMarked = runKeys r
+          , stLastRows = rows
           , stCounts = Map.insertWith (+) v 1 (stCounts s)
           , stPunch =
               if v == Reviewed
@@ -4042,6 +4077,7 @@ applyVerdictLines v = do
           { stVerdicts =
               foldr (\(k, _, _) m -> Map.insert k v m) (stVerdicts s) picks
           , stLastMarked = map (\(k, _, _) -> k) picks
+          , stLastRows = map storeRow picks
           , stPunch =
               if v == Reviewed
                 then stPunch s
@@ -4136,6 +4172,46 @@ clearVerdict scope = do
           , stMsg = "unmarked " <> tshow (length marked) <> " line(s)"
           }
       setEd (stCurF st) (collapseSelection (fvEd fv))
+
+-- Put back what a mark changed, in the store and on screen.
+--
+-- Not simply an unmark: a line that already carried a verdict had it
+-- overwritten the instant the key was pressed, so cancelling has to
+-- restore that rather than leave the line bare.
+cancelMark :: MarkUndo -> EventM Name St ()
+cancelMark undoing = do
+  st <- get
+  let
+    before = muBefore undoing
+    fresh = [k | (k, Nothing) <- Map.toList before]
+    replaced = Map.fromListWith (++) [(v, [k]) | (k, Just v) <- Map.toList before]
+    rowsFor ks = filter (\(k, _, _, _) -> k `elem` ks) (muRows undoing)
+  unless (null fresh) $
+    liftIO (deleteKeys (stConn st) (repoText st) fresh)
+  mCommit <- verdictCommitContext
+  forM_ (Map.toList replaced) $ \(v, ks) ->
+    liftIO
+      ( recordVerdicts
+          (stConn st)
+          (repoText st)
+          (stPassId st)
+          v
+          mCommit
+          (rowsFor ks)
+      )
+  modify $ \s ->
+    s
+      { stVerdicts =
+          Map.foldrWithKey
+            (\k mv m -> maybe (Map.delete k m) (\v -> Map.insert k v m) mv)
+            (stVerdicts s)
+            before
+      , -- the tallies the summary prints, as they stood before the mark
+        stCounts = muCounts undoing
+      , stPunch = muPunch undoing
+      , stLastMarked = []
+      , stLastRows = []
+      }
 
 advanceToPending :: EventM Name St ()
 advanceToPending = do
@@ -4616,7 +4692,7 @@ runCommand input =
     ["abort"] -> setMsg "abort the rebase and lose its progress? :abort! confirms"
     ["abort!"] -> abortRebase
     ["amend"] -> amendHead
-    ["note"] -> openNotePopup
+    ["note"] -> openNotePopup NoteAsked
     ("note" : rest) -> noteCmd (T.unwords rest)
     ["unnote"] -> unnoteCmd
     ["revert"] -> revertTarget
@@ -5130,8 +5206,9 @@ unnoteCmd = do
 
 -- The note popup: a small modal buffer with the full editing keys.
 -- Enter in its normal mode saves, Ctrl-c discards; an empty note clears.
-openNotePopup :: EventM Name St ()
-openNotePopup = do
+-- Discarding one that ! or ? opened cancels that mark too.
+openNotePopup :: NoteOrigin -> EventM Name St ()
+openNotePopup origin = do
   st <- get
   let
     keys = noteTargetKeys st
@@ -5156,7 +5233,7 @@ openNotePopup = do
             , edMode = Insert
             }
       modify
-        (\s -> s {stNotePopup = Just (NotePopup ed1 (NoteFor keys)), stVi = viIdle})
+        (\s -> s {stNotePopup = Just (NotePopup ed1 (NoteFor keys origin)), stVi = viIdle})
 
 setNotePopupEd :: EdState -> EventM Name St ()
 setNotePopupEd ed = do
@@ -5176,27 +5253,41 @@ handleNotePopupKey ev np0 = do
   let
     np = np0 {npEd = (npEd np0) {edKill = stKill st0}}
     discardMsg = case npPurpose np of
-      NoteFor _ -> "note discarded"
+      NoteFor _ NoteAsked -> "note discarded"
+      NoteFor _ (NoteFromMark _) -> "mark cancelled"
       AmendMessage _ -> "amend cancelled"
+    -- Backing out of a note that ! or ? opened takes the mark with it.
+    -- The verdict was made by that same keystroke and has not been
+    -- explained yet, so abandoning the sentence abandons what it was
+    -- going to be about — and the advance the mark would have made never
+    -- happens either, since there is nothing to move on from.
+    --
+    -- A note asked for by :note is the other case: that mark was already
+    -- there and had nothing to do with this popup.
+    discard = do
+      modify
+        (\s -> s {stNotePopup = Nothing, stMsg = discardMsg, stVi = viIdle})
+      case npPurpose np of
+        NoteFor _ (NoteFromMark undoing) -> do
+          cancelMark undoing
+          modify (\s -> s {stDeferAdvance = False})
+        _ -> runDeferredAdvance
     wrapCol = case npPurpose np of
-      NoteFor _ -> cfgNoteWrap (stConfig st0)
+      NoteFor _ _ -> cfgNoteWrap (stConfig st0)
       AmendMessage _ -> 72
     saveBuffer = do
       modify (\s -> s {stNotePopup = Nothing, stVi = viIdle})
       let
         text = T.strip (T.intercalate "\n" (bufferLines (npEd np)))
       case npPurpose np of
-        NoteFor keys -> do
+        NoteFor keys _ -> do
           applyNote text keys
           runDeferredAdvance
         AmendMessage folding -> applyAmendMessage folding text
   case ev of
     -- discard works from either popup mode; nobody should need to leave
     -- insert just to bail out
-    V.EvKey (V.KChar 'c') [V.MCtrl] -> do
-      modify
-        (\s -> s {stNotePopup = Nothing, stMsg = discardMsg, stVi = viIdle})
-      runDeferredAdvance
+    V.EvKey (V.KChar 'c') [V.MCtrl] -> discard
     _ ->
       case edMode (npEd np) of
         Insert ->
@@ -5215,10 +5306,7 @@ handleNotePopupKey ev np0 = do
             V.EvKey V.KEnter [] -> saveBuffer
             -- Esc from insert lands here in the popup's normal mode; Esc
             -- again cancels the dialog outright
-            V.EvKey V.KEsc [] -> do
-              modify
-                (\s -> s {stNotePopup = Nothing, stMsg = discardMsg, stVi = viIdle})
-              runDeferredAdvance
+            V.EvKey V.KEsc [] -> discard
             -- the popup's normal mode follows the session's keymap, so a
             -- vi user gets vi here too; emacs is modeless and never
             -- reaches this branch
@@ -5330,20 +5418,24 @@ notePopupLayer st np =
       Normal -> "nor"
     thread = case npPurpose np of
       AmendMessage _ -> []
-      NoteFor keys ->
+      NoteFor keys _ ->
         case mapMaybe (`Map.lookup` stThreads st) keys of
           (t : _) -> t
           [] -> []
     act = noteAct thread
     popupName = case npPurpose np of
       AmendMessage _ -> "amend"
-      NoteFor _ -> case act of
+      NoteFor _ _ -> case act of
         NoteNew -> "note"
         NoteEdit -> "note \183 editing yours"
         NoteReply who -> "note \183 reply to " <> who
     popupHint = case npPurpose np of
       AmendMessage _ -> "\9166 amend (nor) \183 C-c cancel"
-      NoteFor _ -> case act of
+      -- what backing out costs is worth saying, since it differs: a note
+      -- the mark opened takes the mark with it, one asked for does not
+      NoteFor _ (NoteFromMark _) ->
+        "\9166 save (nor) \183 C-c cancels the mark \183 empty note clears"
+      NoteFor _ NoteAsked -> case act of
         NoteReply _ ->
           "\9166 post (nor) \183 C-c discard \183 empty clears the thread"
         _ -> "\9166 save (nor) \183 C-c discard \183 empty note clears"
@@ -5377,7 +5469,7 @@ notePopupLayer st np =
                  | length folding > 8
                  ]
               ++ [txt " "]
-      NoteFor _ -> case currentFileMay st of
+      NoteFor _ _ -> case currentFileMay st of
         Nothing -> []
         Just fv ->
           let
