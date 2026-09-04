@@ -36,8 +36,10 @@ remax                 # review everything uncommitted (working tree vs HEAD)
 remax --base REF      # review the working tree against any ref
 remax --branch        # against the merge-base with the mainline (whole branch)
 remax --unstaged      # working tree vs index
-remax --untracked     # new files, reviewed as pure additions
+remax --untracked     # new files only, reviewed as pure additions; ordinary
+                      #   reviews already include them (:set untracked 0 to stop)
 remax forget          # forget verdicts under the current directory (asks first)
+                      #   in a folder of checkouts, reaches all of them
 remax list [--json]   # flagged/questioned punch list for this repository
                       #   a leading space on a line means a remark on code the
                       #   change never touched, not feedback on the change
@@ -419,7 +421,12 @@ repository root (one pattern per line, `#` comments) keeps files out of
 the change set entirely: a path prefix matched by component (`gen`
 covers `gen/a.txt`, not `generated.hs`) or a `*suffix` form
 (`*.min.js`). Check it in — generated trees are a team-wide fact.
-Ignored files can still be `:open`ed. The header's pending
+Ignored files can still be `:open`ed. A file git does not track yet is
+part of the review as soon as it is written, reviewed as a pure addition
+— `:set untracked 0` leaves them out for a repository full of stray
+files. `:open` of a path belonging to another checkout this session knows
+about switches there and opens it, so its verdicts are recorded against
+the repository that owns it. The header's pending
 count reads `N pending here · M overall` — per current file, and across
 the whole change set.
 

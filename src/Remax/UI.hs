@@ -115,6 +115,7 @@ import System.FilePath
   ( dropTrailingPathSeparator
   , isAbsolute
   , isPathSeparator
+  , joinPath
   , makeRelative
   , normalise
   , splitDirectories
@@ -163,6 +164,7 @@ import Remax.Git
   , rebaseStatus
   , recentCommits
   , refExists
+  , reviewFiles
   , runGit
   , trackedChanges
   )
@@ -775,7 +777,10 @@ dispatchFsEvent chan root ev = do
 loadAll :: Config -> TS.HighlighterTable -> ReviewMode -> FilePath -> IO [FileView]
 loadAll cfg hls mode root = do
   ignores <- loadIgnores root
-  names <- fmap (filter (not . ignoredPath ignores)) (changedFiles mode root)
+  names <-
+    fmap
+      (filter (not . ignoredPath ignores))
+      (reviewFiles mode (cfgUntracked cfg) root)
   catMaybes <$> forMaybeBounded (loadOne cfg hls mode root) names
 
 -- Load files on a few workers at once: each one costs a git spawn for
@@ -4304,7 +4309,7 @@ refreshGit = do
         liftIO
           ( fmap
               (filter (not . ignoredPath ignores))
-              (changedFiles mode (stRoot stEff))
+              (reviewFiles mode (cfgUntracked (stConfig stEff)) (stRoot stEff))
           )
       let
         existing =
@@ -4662,6 +4667,7 @@ settingNames =
   , "note-on-flag"
   , "ignore-whitespace"
   , "word-diff"
+  , "untracked"
   , "split-threshold"
   , "piece-min"
   , "piece-max"
@@ -4676,6 +4682,7 @@ settingValue cfg key =
     "note-on-flag" -> if cfgNoteOnFlag cfg then "1" else "0"
     "ignore-whitespace" -> if cfgIgnoreWs cfg then "1" else "0"
     "word-diff" -> if cfgWordDiff cfg then "1" else "0"
+    "untracked" -> if cfgUntracked cfg then "1" else "0"
     "split-threshold" -> tshow (splitThreshold (cfgSplit cfg))
     "piece-min" -> tshow (pieceMin (cfgSplit cfg))
     "piece-max" -> tshow (pieceMax (cfgSplit cfg))
@@ -4728,6 +4735,10 @@ applySet key val = do
       withInt (\n -> cfg {cfgIgnoreWs = n /= 0}) rebuildAllFiles
     "word-diff" ->
       withInt (\n -> cfg {cfgWordDiff = n /= 0}) (pure ())
+    -- this one changes which files are in the review at all, so the
+    -- change set is asked for again rather than merely redecorated
+    "untracked" ->
+      withInt (\n -> cfg {cfgUntracked = n /= 0}) refreshGit
     "split-threshold" ->
       withInt
         (\n -> cfg {cfgSplit = splitWith (\sc -> sc {splitThreshold = max 1 n})})
@@ -6614,9 +6625,65 @@ openFilePath rawPath = do
   let
     rootP = stRoot st
     given = T.unpack rawPath
-    rel =
-      normalise
-        (makeRelative rootP (if isAbsolute given then given else rootP </> given))
+    joined = normalise (if isAbsolute given then given else rootP </> given)
+    -- normalise tidies separators and dots but leaves .. where it stands,
+    -- so a path written through a parent never matches the repository it
+    -- actually lands in. Collapsed here rather than by asking the
+    -- filesystem, so a path that does not exist yet still resolves.
+    absolute =
+      let
+        step acc part =
+          case part of
+            "." -> acc
+            ".." -> if length acc > 1 then init acc else acc
+            _ -> acc ++ [part]
+      in
+        joinPath (foldl step [] (splitDirectories joined))
+    -- Whether a path lies inside a repository, and where.
+    --
+    -- makeRelative alone is not the test. It never invents a ..,
+    -- returning the path untouched when it cannot express one under the
+    -- other — but normalise does not collapse a .. either, so a path
+    -- written ../elsewhere still starts with the root textually and comes
+    -- back looking like it belongs. Both have to be asked.
+    under root =
+      let
+        rel = makeRelative root absolute
+      in
+        if isAbsolute rel || ".." `elem` splitDirectories rel
+          then Nothing
+          else Just (normalise rel)
+    elsewhere =
+      listToMaybe
+        [ (root, rel)
+        | root <- stRoots st
+        , root /= rootP
+        , Just rel <- [under root]
+        ]
+  case under rootP of
+    Just rel -> openInRoot rel
+    Nothing ->
+      case elsewhere of
+        -- it belongs to a checkout this session already knows: go there
+        -- and open it, so it is keyed under the repository that owns it
+        -- rather than under whichever one happened to be on screen
+        Just (root, rel) -> do
+          switchRepo root
+          openInRoot rel
+        Nothing ->
+          setMsg
+            ( "outside "
+                <> T.pack (takeFileName rootP)
+                <> ": "
+                <> T.pack absolute
+            )
+
+-- Open a path already known to be inside the current repository.
+openInRoot :: FilePath -> EventM Name St ()
+openInRoot rel = do
+  st <- get
+  let
+    rootP = stRoot st
   case findIndex ((== rel) . fvPath) (stFiles st) of
     Just i -> do
       modify (\s -> s {stOpened = Set.insert rel (stOpened s)})
@@ -6922,7 +6989,7 @@ describeRepo :: St -> FilePath -> IO (FilePath, [Text])
 describeRepo st root = do
   branch <- currentBranch root
   rebase <- rebaseStatus root
-  changed <- changedFiles (VsRef "HEAD") root
+  changed <- reviewFiles (VsRef "HEAD") (cfgUntracked (stConfig st)) root
   counted <-
     if null changed || length changed > repoStatusMaxFiles
       then pure Nothing

@@ -4,7 +4,7 @@ module Main (main) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, finally, try)
-import Control.Monad (forM_, unless, void, when)
+import Control.Monad (forM, forM_, unless, void, when)
 import Data.Char (isControl, ord)
 import Data.List (nub)
 import Data.Maybe (fromMaybe)
@@ -174,13 +174,6 @@ review marg = do
         Right sha -> pure (VsRef (T.take 10 sha))
   runReview mode root roots story
 
-requireRoot :: IO FilePath
-requireRoot = do
-  got <- repoRoot
-  case got of
-    Just root -> pure root
-    Nothing -> die "Not inside a git repository."
-
 -- Every repository a command should act on: the one we are inside, or —
 -- for a directory that merely holds repositories, which is what a story
 -- directory is — all of them.
@@ -232,44 +225,84 @@ reviewStart = do
 -- deleted path scopes exactly as well as a live one.
 forget :: Maybe FilePath -> IO ()
 forget mPath = do
-  root <- requireRoot
+  -- every repository the command could act on, not just the one we are
+  -- standing in: from a story directory this is all of the checkouts,
+  -- and refusing there is what `list` and `reply` long ago stopped doing
+  roots <- targetRepos
   here <- getCurrentDirectory
   conn <- openStore
-  rows <- repoRows conn (T.pack root)
   let
     target = case mPath of
       Nothing -> here
       Just path
         | isAbsolute path -> normalise path
         | otherwise -> normalise (here </> path)
-    relative = makeRelative root target
-    scope = if relative == "." || relative == root then "" else T.pack relative
-    -- by path component, as :accept matches: "gen" covers gen/a.txt but
-    -- not generated.hs, and naming one file exactly forgets just it
-    underScope (_, f) =
-      T.null scope || f == scope || (scope <> "/") `T.isPrefixOf` f
-    doomed = filter underScope rows
-    files = nub (map snd doomed)
-    described = if T.null scope then "the repository" else T.unpack scope
-  if null doomed
+    -- Three ways a target can sit against a repository, and
+    -- makeRelative tells them apart: it hands back an absolute path when
+    -- it cannot express one under the other.
+    --
+    -- The story case is the second one — standing in the folder and
+    -- forgetting means every checkout under it, not nothing, which is
+    -- what asking only the first question gave.
+    scopeIn root =
+      let
+        inward = makeRelative root target
+        outward = makeRelative target root
+      in
+        if not (isAbsolute inward)
+          then -- target is inside this repository
+            Just (if inward == "." then "" else T.pack inward)
+          else
+            if not (isAbsolute outward)
+              then Just "" -- the repository is inside the target
+              else Nothing -- unrelated
+  found <- forM roots $ \root ->
+    case scopeIn root of
+      Nothing -> pure (root, "", [])
+      Just scope -> do
+        rows <- repoRows conn (T.pack root)
+        let
+          -- by path component, as :accept matches: "gen" covers gen/a.txt
+          -- but not generated.hs, and naming one file exactly forgets
+          -- just it
+          underScope (_, f) =
+            T.null scope || f == scope || (scope <> "/") `T.isPrefixOf` f
+        pure (root, scope, filter underScope rows)
+  let
+    hits = filter (\(_, _, rows) -> not (null rows)) found
+    doomedCount = sum (map (\(_, _, rows) -> length rows) hits)
+    fileCount = sum (map (\(_, _, rows) -> length (nub (map snd rows))) hits)
+    -- named as it was asked for: a path relativised against each root in
+    -- turn has no single answer to report, and "." is not what anybody
+    -- typed
+    described = case mPath of
+      Nothing -> if length roots > 1 then "here" else "the repository"
+      Just path -> path
+  if null hits
     then putStrLn ("Nothing is recorded for the files under " ++ described ++ ".")
     else do
       putStrLn
-        ( show (length doomed)
+        ( show doomedCount
             ++ " line verdict(s) across "
-            ++ show (length files)
+            ++ show fileCount
             ++ " file(s) under "
             ++ described
             ++ "."
         )
+      -- named when there is more than one, so a story-wide forget says
+      -- what it is about to reach into
+      when (length hits > 1) $
+        forM_ hits $ \(root, _, rows) ->
+          putStrLn ("    " ++ takeFileName root ++ ": " ++ show (length rows))
       putStrLn "  Forgetting them means reviewing those changes again from scratch."
       putStr "  Forget them? [y/n]: "
       hFlush stdout
       answer <- getLine
       if answer == "y"
         then do
-          deleteFiles conn (T.pack root) files
-          putStrLn ("  \10003 forgot " ++ show (length doomed) ++ " line verdict(s)")
+          forM_ hits $ \(root, _, rows) ->
+            deleteFiles conn (T.pack root) (nub (map snd rows))
+          putStrLn ("  \10003 forgot " ++ show doomedCount ++ " line verdict(s)")
         else putStrLn "  left alone"
 
 -- Hold a review open in the reviewer's header for as long as this runs.
