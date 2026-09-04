@@ -5,6 +5,7 @@ module Remax.Git
   , modeLabel
   , repoRoot
   , changedFiles
+  , reviewFiles
   , baseLines
   , looksBinary
   , refExists
@@ -38,6 +39,7 @@ import qualified Data.ByteString as BS
 import Data.List (sort)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Read as TR
@@ -99,6 +101,33 @@ changedFiles mode root = do
   pure $ case code of
     ExitSuccess -> filter (not . null) (lines out)
     ExitFailure _ -> []
+
+-- The files a review puts on screen: what git reports as changed, plus
+-- the ones that are new.
+--
+-- Deliberately not folded into changedFiles, because one caller must not
+-- have it. amendHead folds that list into a commit, and sweeping a
+-- brand-new scratch file into an amend is not something a review tool
+-- should do quietly.
+--
+-- New files need nothing else to render: baseLines answers [] when git
+-- cannot find the path, so one reviews as a pure addition, which is what
+-- Untracked mode has always shown.
+reviewFiles :: ReviewMode -> Bool -> FilePath -> IO [FilePath]
+reviewFiles mode withNew root = do
+  changed <- changedFiles mode root
+  let
+    -- Untracked mode is already nothing but new files
+    wanted = withNew && mode /= Untracked
+  if not wanted
+    then pure changed
+    else do
+      new <- untrackedFiles root
+      let
+        known = Set.fromList changed
+      -- changed first, so a review opens where it did before and the new
+      -- ones arrive after rather than shuffling the file order
+      pure (changed ++ filter (`Set.notMember` known) new)
 
 -- The base copy of one file. A file with no base copy (new file, or the
 -- ref side is missing) reviews against nothing.
