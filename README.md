@@ -165,6 +165,10 @@ Normal mode:
 | `x` | select line, repeat to extend |
 | `X` | select the current hunk — the review-unit object: `X r` reviews what you just saw selected, `X d` deletes it, `X >` indents it |
 | `%` | select the whole file |
+| `mm` | jump to the other half of the pair under the cursor |
+| `ms<c>` | surround the selection: `ms(`, `ms"`, `ms{` — either bracket names the pair |
+| `md<c>` / `mr<a><b>` | delete the surrounding pair, or swap it for another: `md(`, `mr({` |
+| `mi<c>` / `ma<c>` | select inside / around the enclosing pair — brackets, `"`, `'`, `` ` ``, and `w`/`W` for the word under the cursor. Composes with the verbs: `miw` then `ms(` wraps the word, `mi(` then `d` empties the parens |
 | `d` / `c` | delete / change the selection (char-wise or line-wise; or the char under the cursor) |
 | `i a I A o O` | enter insert — editing is just editing |
 | `~` | toggle case of the selection (or the char under the cursor) |

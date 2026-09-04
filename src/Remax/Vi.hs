@@ -26,7 +26,7 @@ module Remax.Vi
   , handleVi
   ) where
 
-import Data.Char (isAlphaNum, isDigit, isSpace, toLower, toUpper)
+import Data.Char (isDigit, isSpace, toLower, toUpper)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -545,77 +545,7 @@ quoteObject kind q ed =
 -- The innermost open/close pair enclosing the cursor: walk back to the
 -- first unmatched opener, then forward from it to its partner. Bounded
 -- so a stray bracket in a huge file cannot turn into a full scan.
-matchEnclosing ::
-  Char -> Char -> [Text] -> (Int, Int) -> Maybe ((Int, Int), (Int, Int))
-matchEnclosing open close ls pos =
-  let
-    charOf (r, c) =
-      let
-        l = lineAt ls r
-      in
-        if c >= 0 && c < T.length l then Just (T.index l c) else Nothing
-    -- walking back from the cursor, a closer met on the way means one
-    -- more opener to skip; the cursor's own cell does not count
-    openDelta p ch
-      | ch == open = Left ()
-      | ch == close && p /= pos = Right 1
-      | otherwise = Right 0
-    findOpen budget depth p =
-      if budget <= (0 :: Int)
-        then Nothing
-        else
-          let
-            onward d =
-              case prevPos ls p of
-                Just prev -> findOpen (budget - 1) d prev
-                Nothing -> Nothing
-          in
-            case fmap (openDelta p) (charOf p) of
-              Just (Left ()) -> if depth == 0 then Just p else onward (depth - 1)
-              Just (Right d) -> onward (depth + d)
-              Nothing -> onward depth
-    findClose budget depth p =
-      if budget <= (0 :: Int)
-        then Nothing
-        else
-          let
-            onward d =
-              case nextPos ls p of
-                Just next -> findClose (budget - 1) d next
-                Nothing -> Nothing
-          in
-            case charOf p of
-              Just ch
-                | ch == close && depth == 1 -> Just p
-                | ch == close -> onward (depth - 1)
-                | ch == open -> onward (depth + 1)
-              _ -> onward depth
-  in
-    do
-      o <- findOpen scanBudget (0 :: Int) pos
-      c <- findClose scanBudget (0 :: Int) o
-      pure (o, c)
-
-scanBudget :: Int
-scanBudget = 200000
-
 -- Motions -------------------------------------------------------------------------
-
-data WordClass = SmallWord | BigWord
-  deriving (Eq, Show)
-
-data CharClass = ClsSpace | ClsWord | ClsPunct
-  deriving (Eq, Show)
-
--- vi's two vocabularies: `w` steps between runs of identifier characters
--- and runs of punctuation, `W` only between runs of non-blank.
-charClass :: WordClass -> Char -> CharClass
-charClass cls c
-  | isSpace c = ClsSpace
-  | otherwise =
-      case cls of
-        BigWord -> ClsWord
-        SmallWord -> if isAlphaNum c || c == '_' then ClsWord else ClsPunct
 
 motionFor :: ViKeys -> Int -> V.Event -> EdState -> Maybe Span
 motionFor keys count ev ed =
@@ -744,17 +674,6 @@ firstNonBlankZ z =
 
 -- Walking the buffer one cell at a time, so word motions cross lines the
 -- way vi's do.
-nextPos :: [Text] -> (Int, Int) -> Maybe (Int, Int)
-nextPos ls (r, c) =
-  if c + 1 < T.length (lineAt ls r)
-    then Just (r, c + 1)
-    else if r + 1 < length ls then Just (r + 1, 0) else Nothing
-
-prevPos :: [Text] -> (Int, Int) -> Maybe (Int, Int)
-prevPos ls (r, c) =
-  if c > 0
-    then Just (r, c - 1)
-    else if r > 0 then Just (r - 1, max 0 (T.length (lineAt ls (r - 1)) - 1)) else Nothing
 
 classAt :: WordClass -> [Text] -> (Int, Int) -> CharClass
 classAt cls ls (r, c) =
@@ -894,30 +813,6 @@ findTarget dir n c ed =
 
 -- %: the partner of the first bracket at or after the cursor on this
 -- line.
-matchingBracket :: EdState -> Maybe (Int, Int)
-matchingBracket ed =
-  let
-    ls = bufferLines ed
-    (row, col) = cursorRC ed
-    line = lineAt ls row
-    brackets = [('(', ')'), ('[', ']'), ('{', '}')]
-    atCol i =
-      let
-        ch = T.index line i
-        hit (o, cl) = o == ch || cl == ch
-      in
-        case filter hit brackets of
-          ((o, cl) : _) -> Just (o, cl, i)
-          [] -> Nothing
-  in
-    case mapMaybe atCol [col .. T.length line - 1] of
-      [] -> Nothing
-      ((o, cl, i) : _) ->
-        case matchEnclosing o cl ls (row, i) of
-          Just (openPos, closePos) ->
-            if openPos == (row, i) then Just closePos else Just openPos
-          Nothing -> Nothing
-
 -- Applying a span -----------------------------------------------------------------
 
 -- A bare motion: move, growing the selection when visual mode is on and

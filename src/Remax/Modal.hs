@@ -24,6 +24,13 @@ module Remax.Modal
   , bufferUpward
   , cursorRC
   , lineAt
+  , WordClass (..)
+  , CharClass (..)
+  , charClass
+  , matchEnclosing
+  , matchingBracket
+  , nextPos
+  , prevPos
   , plainMove
   , greedyWrap
   , selectionRows
@@ -52,7 +59,7 @@ module Remax.Modal
   , redo
   ) where
 
-import Data.Char (isLower, isSpace, isUpper, toLower, toUpper)
+import Data.Char (isAlphaNum, isLower, isSpace, isUpper, toLower, toUpper)
 import Data.List (find)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
@@ -69,7 +76,25 @@ data SelKind = CharSel | LineSel
 
 -- A prefix key waiting for its second half: g-goto, or a find/till
 -- waiting for its target character.
-data Pending = NoPending | PendingG | PendingFind FindKind | PendingReplace
+data Pending
+  = NoPending
+  | PendingG
+  | PendingFind FindKind
+  | PendingReplace
+  | -- helix's match menu: m, then what to do with the pair
+    PendingMatch
+  | PendingSurround SurroundAct
+  | -- mr has taken the pair to look for and wants the one to put back
+    PendingSurroundTo Char
+  | PendingObject ObjSide
+  deriving (Eq, Show)
+
+-- What the m menu is about to do to a surrounding pair.
+data SurroundAct = SurroundAdd | SurroundDelete | SurroundReplace
+  deriving (Eq, Show)
+
+-- Whether a text object takes the delimiters with it.
+data ObjSide = ObjInside | ObjAround
   deriving (Eq, Show)
 
 data FindKind = FindFwd | FindBack | TillFwd | TillBack
@@ -111,6 +136,13 @@ pendingLabel :: EdState -> Maybe Text
 pendingLabel st = case edPending st of
   NoPending -> Nothing
   PendingG -> Just "g"
+  PendingMatch -> Just "m"
+  PendingSurround SurroundAdd -> Just "ms"
+  PendingSurround SurroundDelete -> Just "md"
+  PendingSurround SurroundReplace -> Just "mr"
+  PendingSurroundTo _ -> Just "mr"
+  PendingObject ObjInside -> Just "mi"
+  PendingObject ObjAround -> Just "ma"
   PendingFind FindFwd -> Just "f"
   PendingFind FindBack -> Just "F"
   PendingFind TillFwd -> Just "t"
@@ -199,6 +231,13 @@ handleNormal ev st =
     PendingG -> Just (handleG ev st {edPending = NoPending})
     PendingFind kind -> Just (handleFind kind ev st {edPending = NoPending})
     PendingReplace -> Just (handleReplace ev st {edPending = NoPending})
+    PendingMatch -> Just (handleMatch ev st {edPending = NoPending})
+    PendingSurround act ->
+      Just (handleSurround act ev st {edPending = NoPending})
+    PendingSurroundTo from ->
+      Just (handleSurroundTo from ev st {edPending = NoPending})
+    PendingObject side ->
+      Just (handleObject side ev st {edPending = NoPending})
     NoPending -> handlePlain ev st
 
 handlePlain :: V.Event -> EdState -> Maybe EdState
@@ -209,6 +248,7 @@ handlePlain ev st =
     case ev of
       V.EvKey (V.KChar 'r') [] -> Just st {edPending = PendingReplace}
       V.EvKey (V.KChar 'g') [] -> Just st {edPending = PendingG}
+      V.EvKey (V.KChar 'm') [] -> Just st {edPending = PendingMatch}
       V.EvKey (V.KChar 'f') [] -> Just st {edPending = PendingFind FindFwd}
       V.EvKey (V.KChar 'F') [] -> Just st {edPending = PendingFind FindBack}
       V.EvKey (V.KChar 't') [] -> Just st {edPending = PendingFind TillFwd}
@@ -461,6 +501,118 @@ applyFind kind c st =
             , edSelAnchor = Just anchor
             , edSelKind = CharSel
             }
+
+-- Word vocabularies ------------------------------------------------------------
+
+data WordClass = SmallWord | BigWord
+  deriving (Eq, Show)
+
+data CharClass = ClsSpace | ClsWord | ClsPunct
+  deriving (Eq, Show)
+
+-- vi's two vocabularies: `w` steps between runs of identifier characters
+-- and runs of punctuation, `W` only between runs of non-blank.
+charClass :: WordClass -> Char -> CharClass
+charClass cls c
+  | isSpace c = ClsSpace
+  | otherwise =
+      case cls of
+        BigWord -> ClsWord
+        SmallWord -> if isAlphaNum c || c == '_' then ClsWord else ClsPunct
+
+-- Matching pairs ---------------------------------------------------------------
+
+-- Shared by both keymaps: vi reaches these through % and its text
+-- objects, helix through the m menu.
+
+nextPos :: [Text] -> (Int, Int) -> Maybe (Int, Int)
+nextPos ls (r, c) =
+  if c + 1 < T.length (lineAt ls r)
+    then Just (r, c + 1)
+    else if r + 1 < length ls then Just (r + 1, 0) else Nothing
+
+prevPos :: [Text] -> (Int, Int) -> Maybe (Int, Int)
+prevPos ls (r, c) =
+  if c > 0
+    then Just (r, c - 1)
+    else if r > 0 then Just (r - 1, max 0 (T.length (lineAt ls (r - 1)) - 1)) else Nothing
+matchEnclosing ::
+  Char -> Char -> [Text] -> (Int, Int) -> Maybe ((Int, Int), (Int, Int))
+matchEnclosing open close ls pos =
+  let
+    charOf (r, c) =
+      let
+        l = lineAt ls r
+      in
+        if c >= 0 && c < T.length l then Just (T.index l c) else Nothing
+    -- walking back from the cursor, a closer met on the way means one
+    -- more opener to skip; the cursor's own cell does not count
+    openDelta p ch
+      | ch == open = Left ()
+      | ch == close && p /= pos = Right 1
+      | otherwise = Right 0
+    findOpen budget depth p =
+      if budget <= (0 :: Int)
+        then Nothing
+        else
+          let
+            onward d =
+              case prevPos ls p of
+                Just prev -> findOpen (budget - 1) d prev
+                Nothing -> Nothing
+          in
+            case fmap (openDelta p) (charOf p) of
+              Just (Left ()) -> if depth == 0 then Just p else onward (depth - 1)
+              Just (Right d) -> onward (depth + d)
+              Nothing -> onward depth
+    findClose budget depth p =
+      if budget <= (0 :: Int)
+        then Nothing
+        else
+          let
+            onward d =
+              case nextPos ls p of
+                Just next -> findClose (budget - 1) d next
+                Nothing -> Nothing
+          in
+            case charOf p of
+              Just ch
+                | ch == close && depth == 1 -> Just p
+                | ch == close -> onward (depth - 1)
+                | ch == open -> onward (depth + 1)
+              _ -> onward depth
+  in
+    do
+      o <- findOpen scanBudget (0 :: Int) pos
+      c <- findClose scanBudget (0 :: Int) o
+      pure (o, c)
+
+scanBudget :: Int
+scanBudget = 200000
+
+matchingBracket :: EdState -> Maybe (Int, Int)
+matchingBracket ed =
+  let
+    ls = bufferLines ed
+    (row, col) = cursorRC ed
+    line = lineAt ls row
+    brackets = [('(', ')'), ('[', ']'), ('{', '}')]
+    atCol i =
+      let
+        ch = T.index line i
+        hit (o, cl) = o == ch || cl == ch
+      in
+        case filter hit brackets of
+          ((o, cl) : _) -> Just (o, cl, i)
+          [] -> Nothing
+  in
+    case mapMaybe atCol [col .. T.length line - 1] of
+      [] -> Nothing
+      ((o, cl, i) : _) ->
+        case matchEnclosing o cl ls (row, i) of
+          Just (openPos, closePos) ->
+            if openPos == (row, i) then Just closePos else Just openPos
+          Nothing -> Nothing
 
 lineAt :: [Text] -> Int -> Text
 lineAt ls r =
@@ -1028,3 +1180,234 @@ wordBackSel z =
 
 wordChar :: Char -> Bool
 wordChar = not . isSpace
+
+-- The m menu ----------------------------------------------------------------------
+
+-- helix's match mode. mm jumps to the other half of the pair the cursor
+-- is on; ms, md and mr add, remove and swap the pair around it; mi and
+-- ma select what is inside or around it.
+handleMatch :: V.Event -> EdState -> EdState
+handleMatch ev st =
+  case ev of
+    V.EvKey (V.KChar 'm') [] ->
+      case matchingBracket st of
+        Just pos -> plainMove (Z.moveCursor pos) st
+        Nothing -> st
+    V.EvKey (V.KChar 's') [] -> st {edPending = PendingSurround SurroundAdd}
+    V.EvKey (V.KChar 'd') [] -> st {edPending = PendingSurround SurroundDelete}
+    V.EvKey (V.KChar 'r') [] -> st {edPending = PendingSurround SurroundReplace}
+    V.EvKey (V.KChar 'i') [] -> st {edPending = PendingObject ObjInside}
+    V.EvKey (V.KChar 'a') [] -> st {edPending = PendingObject ObjAround}
+    _ -> st
+
+handleSurround :: SurroundAct -> V.Event -> EdState -> EdState
+handleSurround act ev st =
+  case ev of
+    V.EvKey (V.KChar c) [] ->
+      case act of
+        SurroundAdd -> surroundAdd c st
+        SurroundDelete -> surroundDelete c st
+        -- mr needs both halves of the question before it can answer
+        SurroundReplace -> st {edPending = PendingSurroundTo c}
+    _ -> st
+
+handleSurroundTo :: Char -> V.Event -> EdState -> EdState
+handleSurroundTo from ev st =
+  case ev of
+    V.EvKey (V.KChar to) [] -> surroundReplace from to st
+    _ -> st
+
+handleObject :: ObjSide -> V.Event -> EdState -> EdState
+handleObject side ev st =
+  case ev of
+    V.EvKey (V.KChar 'w') [] -> selectRun side SmallWord st
+    V.EvKey (V.KChar 'W') [] -> selectRun side BigWord st
+    V.EvKey (V.KChar c) [] ->
+      case enclosingFor c st of
+        Just (open, close) -> selectPair side open close st
+        Nothing -> st
+    _ -> st
+
+-- miw takes the run of like characters under the cursor; maw takes the
+-- whitespace after it as well, or before it when the run ends the line.
+selectRun :: ObjSide -> WordClass -> EdState -> EdState
+selectRun side cls st =
+  let
+    (row, col) = cursorRC st
+    line = lineAt (bufferLines st) row
+    len = T.length line
+    classAt i = charClass cls (T.index line i)
+    here = if col < len then classAt col else ClsSpace
+    runTo step i =
+      if i >= 0 && i < len && classAt i == here
+        then runTo step (i + step)
+        else i - step
+    lo = if col < len then runTo (-1) col else col
+    hi = if col < len then runTo 1 col else col
+    after j = if j + 1 < len && classAt (j + 1) == ClsSpace then after (j + 1) else j
+    before j = if j - 1 >= 0 && classAt (j - 1) == ClsSpace then before (j - 1) else j
+    (a, b) = case side of
+      ObjInside -> (lo, hi)
+      ObjAround ->
+        let
+          grown = after hi
+        in
+          if grown /= hi then (lo, grown) else (before lo, hi)
+  in
+    if len == 0
+      then st
+      else
+        st
+          { edZipper = Z.moveCursor (row, b) (edZipper st)
+          , edSelAnchor = Just (row, a)
+          , edSelKind = CharSel
+          , edExtend = False
+          }
+
+-- The two halves a character asks for. Either side names the pair, and
+-- anything that is not a bracket stands for itself, which is how the
+-- quotes come out right.
+pairChars :: Char -> (Char, Char)
+pairChars c =
+  case c of
+    '(' -> ('(', ')')
+    ')' -> ('(', ')')
+    'b' -> ('(', ')')
+    '[' -> ('[', ']')
+    ']' -> ('[', ']')
+    '{' -> ('{', '}')
+    '}' -> ('{', '}')
+    'B' -> ('{', '}')
+    '<' -> ('<', '>')
+    '>' -> ('<', '>')
+    _ -> (c, c)
+
+-- Where the pair around the cursor sits.
+--
+-- Brackets nest, so finding one means counting; a quote does not nest
+-- and cannot be told apart from its own partner, so its pairs are taken
+-- in order along the line and the cursor picks the one it is in.
+enclosingFor :: Char -> EdState -> Maybe ((Int, Int), (Int, Int))
+enclosingFor c st =
+  let
+    ls = bufferLines st
+    pos = cursorRC st
+    (open, close) = pairChars c
+  in
+    if open /= close
+      then matchEnclosing open close ls pos
+      else
+        -- only the three that actually delimit anything. Falling through
+        -- to "it stands for itself" would make miw hunt for the letter w
+        -- and hand back whatever it found between two of them.
+        if c `elem` quoteChars
+          then enclosingQuote open ls pos
+          else Nothing
+
+quoteChars :: String
+quoteChars = "\"'`"
+
+enclosingQuote :: Char -> [Text] -> (Int, Int) -> Maybe ((Int, Int), (Int, Int))
+enclosingQuote q ls (r, c) =
+  let
+    line = lineAt ls r
+    at = filter (\i -> T.index line i == q) [0 .. T.length line - 1]
+    couples xs =
+      case xs of
+        (a : b : rest) -> (a, b) : couples rest
+        _ -> []
+    holding (a, b) = c >= a && c <= b
+  in
+    case filter holding (couples at) of
+      ((a, b) : _) -> Just ((r, a), (r, b))
+      [] -> Nothing
+
+-- Rewrite the buffer and put the cursor down, keeping undo.
+reshapeTo :: [Text] -> (Int, Int) -> EdState -> EdState
+reshapeTo ls pos st =
+  st
+    { edZipper =
+        Z.moveCursor pos (Z.textZipper (if null ls then [""] else ls) Nothing)
+    , edUndo = snapshot st
+    , edRedo = []
+    , edTouched = True
+    }
+
+withLine :: Int -> (Text -> Text) -> [Text] -> [Text]
+withLine r f ls = take r ls ++ [f (lineAt ls r)] ++ drop (r + 1) ls
+
+insertAt :: Int -> Int -> Char -> [Text] -> [Text]
+insertAt r c ch =
+  withLine r (\l -> T.take c l <> T.singleton ch <> T.drop c l)
+
+replaceAt :: Int -> Int -> Char -> [Text] -> [Text]
+replaceAt r c ch =
+  withLine r (\l -> T.take c l <> T.singleton ch <> T.drop (c + 1) l)
+
+dropAt :: Int -> Int -> [Text] -> [Text]
+dropAt r c = withLine r (\l -> T.take c l <> T.drop (c + 1) l)
+
+surroundAdd :: Char -> EdState -> EdState
+surroundAdd c st =
+  case charSelection st of
+    Nothing -> st
+    Just ((lr, lc), (hr, hc)) ->
+      let
+        (open, close) = pairChars c
+        -- the closer goes in first: putting the opener in ahead of it
+        -- would shift where it belongs and the pair would land crooked
+        ls =
+          insertAt lr lc open (insertAt hr (hc + 1) close (bufferLines st))
+        -- and on one line the opener has pushed the closer along again
+        closeCol = if lr == hr then hc + 2 else hc + 1
+        moved = reshapeTo ls (hr, closeCol) st
+      in
+        moved {edSelAnchor = Just (lr, lc), edSelKind = CharSel}
+
+surroundDelete :: Char -> EdState -> EdState
+surroundDelete c st =
+  case enclosingFor c st of
+    Nothing -> st
+    Just ((orow, ocol), (crow, ccol)) ->
+      let
+        ls = dropAt orow ocol (dropAt crow ccol (bufferLines st))
+        (r, cc) = cursorRC st
+        -- losing the opener slides everything after it on that line left
+        col = if r == orow && cc > ocol then cc - 1 else cc
+      in
+        collapse (reshapeTo ls (r, max 0 col) st)
+
+surroundReplace :: Char -> Char -> EdState -> EdState
+surroundReplace from to st =
+  case enclosingFor from st of
+    Nothing -> st
+    Just ((orow, ocol), (crow, ccol)) ->
+      let
+        (open, close) = pairChars to
+        ls = replaceAt orow ocol open (replaceAt crow ccol close (bufferLines st))
+      in
+        collapse (reshapeTo ls (cursorRC st) st)
+
+-- mi takes what is between the delimiters, ma takes them with it. An
+-- empty pair has nothing inside, so mi there only moves the cursor.
+selectPair :: ObjSide -> (Int, Int) -> (Int, Int) -> EdState -> EdState
+selectPair side (orow, ocol) (crow, ccol) st =
+  let
+    inner = ((orow, ocol + 1), (crow, ccol - 1))
+    span' = case side of
+      ObjAround -> Just ((orow, ocol), (crow, ccol))
+      ObjInside ->
+        if orow == crow && ocol + 1 > ccol - 1
+          then Nothing
+          else Just inner
+  in
+    case span' of
+      Nothing ->
+        collapse st {edZipper = Z.moveCursor (orow, ocol + 1) (edZipper st)}
+      Just (anchor, headPos) ->
+        st
+          { edZipper = Z.moveCursor headPos (edZipper st)
+          , edSelAnchor = Just anchor
+          , edSelKind = CharSel
+          , edExtend = False
+          }
