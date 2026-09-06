@@ -30,6 +30,7 @@ import Brick
   , hBox
   , hLimit
   , halt
+  , image
   , lookupViewport
   , padBottom
   , padLeft
@@ -40,6 +41,7 @@ import Brick
   , showFirstCursor
   , str
   , suspendAndResume
+  , translateBy
   , txt
   , txtWrap
   , vBox
@@ -1143,6 +1145,7 @@ draw st =
         , fmap (treeLayer st) (stTree st)
         , fmap pickerLayer (stPicker st)
         , if stSpace st then Just spaceMenu else Nothing
+        , pendingMenuLayer st
         ]
     menuRows = case promptMenu st of
       Just menu -> [menu]
@@ -1244,10 +1247,10 @@ rebaseBar rb =
 -- Shared float chrome: rounded frame with the title in the border, an
 -- elevated surface, inner breathing room, and a dim hint as the last
 -- interior row.
-floatFrame :: Text -> Text -> Widget Name -> Widget Name
-floatFrame title hint body =
-  C.centerLayer
-    . withDefAttr floatAttr
+-- The bordered box every popup is drawn in, without saying where it goes.
+frameBox :: Text -> Text -> Widget Name -> Widget Name
+frameBox title hint body =
+  withDefAttr floatAttr
     . withBorderStyle BS.unicodeRounded
     . B.borderWithLabel (withAttr floatTitleAttr (txt (" " <> title <> " ")))
     . padTop (Pad 1)
@@ -1257,6 +1260,28 @@ floatFrame title hint body =
       [ body
       , padTop (Pad 1) (withAttr hintAttr (txt hint))
       ]
+
+floatFrame :: Text -> Text -> Widget Name -> Widget Name
+floatFrame title hint = C.centerLayer . frameBox title hint
+
+-- Where the key reminders go: down in the corner, out of the way of the
+-- line being read. They answer "what can I press now", which is worth
+-- glancing at and never worth reading over the top of the code — and
+-- they all go to the same corner, so the eye learns one place.
+cornerFrame :: Text -> Text -> Widget Name -> Widget Name
+cornerFrame title hint body =
+  -- Placed by translation rather than by padding it into the corner.
+  -- Max padding is not empty space: it paints its own background, so a
+  -- box pushed down there takes the status line with it.
+  Widget Fixed Fixed $ do
+    ctx <- getContext
+    box <- render (frameBox title hint body)
+    let
+      img = image box
+      -- one column in from the right, and one row up from the status line
+      x = max 0 (availWidth ctx - V.imageWidth img - 1)
+      y = max 0 (availHeight ctx - V.imageHeight img - 1)
+    render (translateBy (Location (x, y)) (raw img))
 
 -- A read-only text popup (full commit messages and kin); any key closes.
 infoPopupLayer :: Text -> Text -> Widget Name
@@ -1570,8 +1595,71 @@ spaceMenu =
         , withAttr statusAttr (txt ("  " <> label))
         ]
   in
-    floatFrame "space" "any other key cancels" . hLimit 26 . padRight Max $
+    cornerFrame "space" "any other key cancels" . hLimit 26 . padRight Max $
       vBox (map item spaceMenuEntries)
+
+-- What a half-typed prefix is waiting for.
+--
+-- The m menu reads its own dispatch table, so it cannot describe itself
+-- wrongly. The g menu cannot: half its keys are the modal layer's
+-- (handleG) and half are review-level interceptions in handleHelixKey,
+-- so this list is written out and has to be kept beside them.
+--
+-- f, t and r are left out on purpose. They wait for any character at
+-- all, and "type a character" is not worth a box in the corner.
+pendingMenu :: Text -> Maybe (Text, [(Text, Text)])
+pendingMenu label =
+  let
+    pairs =
+      [ ("( ) [ ] { } < >", "brackets")
+      , ("\" ' `", "quotes")
+      ]
+    objects = pairs ++ [("w W", "word under the cursor")]
+    fromMatch = map (\(k, what, _) -> (T.singleton k, what)) matchMenu
+  in
+    case label of
+      "g" ->
+        Just
+          ( "goto"
+          ,
+            [ ("g", "first line")
+            , ("e", "last line")
+            , ("h", "line start")
+            , ("l", "line end")
+            , ("s", "first non-blank")
+            , ("a", "alternate file")
+            , ("n", "next file")
+            , ("p", "previous file")
+            , ("r", "another repository")
+            ]
+          )
+      "m" -> Just ("match", fromMatch)
+      "ms" -> Just ("surround with", pairs)
+      "md" -> Just ("delete surround", pairs)
+      "mr" -> Just ("replace surround", pairs)
+      "mi" -> Just ("select inside", objects)
+      "ma" -> Just ("select around", objects)
+      _ -> Nothing
+
+pendingMenuLayer :: St -> Maybe (Widget Name)
+pendingMenuLayer st = do
+  fv <- currentFileMay st
+  label <- pendingLabel (fvEd fv)
+  (title, entries) <- pendingMenu label
+  let
+    -- the key column is padded to the widest of them, so the labels line
+    -- up even where a key is a row of brackets rather than one letter
+    keyW = maximum (map (T.length . fst) entries)
+    item (key, what) =
+      hBox
+        [ withAttr noteInlineAttr (txt (" " <> T.justifyLeft keyW ' ' key))
+        , withAttr statusAttr (txt ("  " <> what))
+        ]
+    width = 5 + keyW + maximum (map (T.length . snd) entries)
+  pure
+    ( cornerFrame title "any other key cancels" . hLimit width . padRight Max $
+        vBox (map item entries)
+    )
 
 -- Ctrl-x's menu, drawn from the same table that dispatches it.
 fileMenuLayer :: TreeView -> Maybe (Widget Name)
@@ -1586,7 +1674,7 @@ fileMenuLayer view =
             ]
       in
         Just
-          ( floatFrame "file" "any other key cancels" . hLimit 24 . padRight Max $
+          ( cornerFrame "file" "any other key cancels" . hLimit 24 . padRight Max $
               vBox (map item fileMenuEntries)
           )
     _ -> Nothing

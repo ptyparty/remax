@@ -39,6 +39,7 @@ module Remax.Modal
   , selectLine
   , hasPending
   , pendingLabel
+  , matchMenu
   , handleNormal
   , handleInsert
   , deleteSel
@@ -1186,18 +1187,28 @@ wordChar = not . isSpace
 -- helix's match mode. mm jumps to the other half of the pair the cursor
 -- is on; ms, md and mr add, remove and swap the pair around it; mi and
 -- ma select what is inside or around it.
+-- One table: what each key does, and what the reminder on screen says it
+-- does. Two lists would drift, and a menu that lies about itself is
+-- worse than none.
+matchMenu :: [(Char, Text, EdState -> EdState)]
+matchMenu =
+  [
+    ( 'm'
+    , "matching bracket"
+    , \st -> maybe st (\pos -> plainMove (Z.moveCursor pos) st) (matchingBracket st)
+    )
+  , ('s', "surround with", \st -> st {edPending = PendingSurround SurroundAdd})
+  , ('d', "delete surround", \st -> st {edPending = PendingSurround SurroundDelete})
+  , ('r', "replace surround", \st -> st {edPending = PendingSurround SurroundReplace})
+  , ('i', "select inside", \st -> st {edPending = PendingObject ObjInside})
+  , ('a', "select around", \st -> st {edPending = PendingObject ObjAround})
+  ]
+
 handleMatch :: V.Event -> EdState -> EdState
 handleMatch ev st =
   case ev of
-    V.EvKey (V.KChar 'm') [] ->
-      case matchingBracket st of
-        Just pos -> plainMove (Z.moveCursor pos) st
-        Nothing -> st
-    V.EvKey (V.KChar 's') [] -> st {edPending = PendingSurround SurroundAdd}
-    V.EvKey (V.KChar 'd') [] -> st {edPending = PendingSurround SurroundDelete}
-    V.EvKey (V.KChar 'r') [] -> st {edPending = PendingSurround SurroundReplace}
-    V.EvKey (V.KChar 'i') [] -> st {edPending = PendingObject ObjInside}
-    V.EvKey (V.KChar 'a') [] -> st {edPending = PendingObject ObjAround}
+    V.EvKey (V.KChar c) []
+      | ((_, _, act) : _) <- filter (\(k, _, _) -> k == c) matchMenu -> act st
     _ -> st
 
 handleSurround :: SurroundAct -> V.Event -> EdState -> EdState

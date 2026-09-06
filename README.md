@@ -156,6 +156,7 @@ Normal mode:
 | key | action |
 |---|---|
 | `h j k l` / arrows | move (collapses the selection, helix-style) |
+| any prefix | `g`, `m`, `Space` and `Ctrl-x` put what they are waiting for in a box in the bottom-right corner, so the keys are on screen rather than in your head. `m`'s box is its own dispatch table, so it cannot describe itself wrongly. `f`/`t`/`r` have none — they take any character, and "type a character" is not worth a box |
 | `w b e` | word motions — **the crossed span becomes the selection**, so `wc` is "change word", `ed` is "delete to word end" |
 | `f F t T` + char | find / till a character (forward / back, across lines) — the crossed span becomes the selection |
 | `gh gl gs` / Home End | line start / line end / first non-blank — on a long line the view scrolls horizontally to follow the cursor (gutter stays pinned); `gh` brings it home |
