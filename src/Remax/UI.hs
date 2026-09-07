@@ -23,6 +23,7 @@ import Brick
   , ViewportType (Vertical)
   , Widget
   , attrMap
+  , attrMapLookup
   , attrName
   , customMain
   , fill
@@ -37,6 +38,7 @@ import Brick
   , padRight
   , padTop
   , raw
+  , setDefaultAttr
   , showCursor
   , showFirstCursor
   , str
@@ -55,7 +57,7 @@ import Brick
   , (<+>)
   )
 import Brick.BChan (BChan, newBChan, writeBChanNonBlocking)
-import Brick.Types (Context, Size (Fixed, Greedy), Widget (Widget), availHeight, availWidth, getContext, render)
+import Brick.Types (Size (Fixed, Greedy), Widget (Widget), availHeight, availWidth, ctxAttrMap, ctxAttrName, getContext, render, windowHeight)
 import Brick.Util (fg)
 import qualified Brick.Widgets.Border as B
 import qualified Brick.Widgets.Border.Style as BS
@@ -299,6 +301,15 @@ data FileView = FileView
   , fvBase :: [Text]
   , fvEd :: EdState
   , fvRows :: [RowR]
+  , -- Which columns of each row the word diff marks, one entry per row.
+    -- Worked out for whole blocks rather than for the rows on screen:
+    -- pairing needs the removals and the additions it chooses between,
+    -- and a block cut off by the edge of the render window offers the
+    -- tail of one against the head of the other, which pairs lines that
+    -- have nothing to do with each other. Left lazy, so a file nothing
+    -- has looked at pays nothing, and rebuilt with the rows it belongs
+    -- to, which is what keeps it from going stale.
+    fvEmph :: [[(Int, Int)]]
   , fvRowCount :: !Int -- length fvRows; wanted twice a frame, so carried
   , fvOrigin :: !Int -- first display row the body draws; see bodyWindow
   , fvRuns :: [Run]
@@ -843,6 +854,7 @@ loadOne cfg hls mode root path = do
             , fvBase = base
             , fvEd = newEdState 0 newLs
             , fvRows = []
+            , fvEmph = []
             , fvRowCount = 0
             , fvOrigin = 0
             , fvRuns = []
@@ -952,9 +964,26 @@ rebuildFV cfg repo fv = do
         , fvToks = toks
         , fvStale = False
         , fvRunDecls = decls
+        , fvEmph = emphFor cfg rows
         }
     , degraded
     )
+
+-- Which columns the word diff marks on each of these rows, or nothing on
+-- any of them when the reader has turned the marks off.
+--
+-- Lazy on purpose, and lazy all the way down: taking the window's slice
+-- forces only how long each block is, so the pairing itself is paid for
+-- by the blocks that actually have a row on screen — and paid once,
+-- because the answer stays on the FileView until the rows are rebuilt.
+emphFor :: Config -> [RowR] -> [[(Int, Int)]]
+emphFor cfg rows =
+  if cfgWordDiff cfg
+    then
+      intralineSpans
+        (if cfgIgnoreWs cfg then WhitespaceIgnored else WhitespaceMatters)
+        rows
+    else map (const []) rows
 
 -- The top-level declaration a buffer row falls under: the nearest line
 -- at or above it whose first character sits in column zero and isn't a
@@ -1041,8 +1070,8 @@ diffIO mode old new = do
     Just _ -> (dpRows parts, False)
     Nothing -> (dpCoarse parts, True)
 
-patchLine :: Int -> Text -> FileView -> FileView
-patchLine row newText fv =
+patchLine :: Config -> Int -> Text -> FileView -> FileView
+patchLine cfg row newText fv =
   let
     lineToks = plainLine newText
     isPatchedContext r = rMark r == ' ' && rNewRow r == Just row
@@ -1052,10 +1081,14 @@ patchLine row newText fv =
       if rNewRow r == Just row
         then r {rText = newText, rToks = lineToks}
         else r
+    patched = map patchRow (fvRows fv)
   in
     fv
       { fvToks = map patchTok (zip [0 ..] (fvToks fv))
-      , fvRows = map patchRow (fvRows fv)
+      , fvRows = patched
+      , -- the line just typed into is one of these rows, so the marks
+        -- that were worked out against its old text no longer describe it
+        fvEmph = emphFor cfg patched
       , fvStale = fvStale fv || touchedContext
       }
 
@@ -1132,7 +1165,7 @@ draw st =
         viewport BodyVP Vertical $
           Widget Greedy Fixed $ do
             ctx <- getContext
-            render (renderFile (availWidth ctx) st fv)
+            render (renderFile (availWidth ctx) (windowHeight ctx) st fv)
       Nothing -> idleBody st
     panes =
       if stTray st && not (null (stFiles st))
@@ -1864,10 +1897,23 @@ trayEntries st =
 trayWidth :: Int
 trayWidth = 32
 
+-- The tray is drawn as images for the same reason the body is: it holds
+-- a row per hunk in the whole change set, and every one of them was a
+-- box of boxes redrawn on each keystroke. See PenSet.
 tray :: St -> Widget Name
 tray st =
   let
-    entryWidget entry = case entry of
+    -- One walk per file rather than one per remark: a remark row asks
+    -- for the remark at an index, and rebuilding the file's list to
+    -- answer meant re-scanning every row of the file, once per remark
+    -- on it, every frame.
+    remarksByFile = map (fileRemarks st) (stFiles st)
+    markAttrFor mark = case mark of
+      '!' -> flagMarkAttr
+      '?' -> questionMarkAttr
+      '\10003' -> doneMarkAttr
+      _ -> pendingMarkAttr
+    entryInk pens width entry = case entry of
       TrayFile fi _hidden ->
         let
           fv = stFiles st !! fi
@@ -1880,14 +1926,24 @@ tray st =
             shortPath
               (trayWidth - 3 - meterCols)
               (T.pack (fvPath fv))
+          nameImg =
+            inkT
+              width
+              (penFor pens (if fi == stCurF st then trayFileCurAttr else trayFileAttr))
+              (padT name)
+          endImg = inkT (width - V.imageWidth nameImg) (penPlain pens) " "
+          -- the meter is pushed to the right of what the name leaves,
+          -- with the gap in front of it rather than behind
+          gap = width - V.imageWidth nameImg - V.imageWidth endImg
+          meterImg = meterInk pens gap done total
         in
-          hBox
-            [ withAttr
-                (if fi == stCurF st then trayFileCurAttr else trayFileAttr)
-                (txt (padT name))
-            , padLeft Max (meterW done total)
-            , txt " "
-            ]
+          fitRow (penPlain pens) width $
+            V.horizCat
+              [ nameImg
+              , V.charFill (penPlain pens) ' ' (max 0 (gap - V.imageWidth meterImg)) (1 :: Int)
+              , meterImg
+              , endImg
+              ]
       TrayHunk fi hi ->
         let
           fv = stFiles st !! fi
@@ -1900,66 +1956,65 @@ tray st =
           current =
             fi == stCurF st
               && hi == clampH (fvRuns (currentFile st)) (stCurH st)
+          -- the current row reads every attribute against the selection
+          -- as its default, so the highlight runs the width of the tray
+          rowPens = if current then penUnder floatSelAttr pens else pens
           mark = runMark (stVerdicts st) r
-          noteMark =
-            if any (`Map.member` stThreads st) (runKeys r)
-              then withAttr noteInlineAttr (txt " \8801")
-              else txt ""
-          markAttr = case mark of
-            '!' -> flagMarkAttr
-            '?' -> questionMarkAttr
-            '\10003' -> doneMarkAttr
-            _ -> pendingMarkAttr
-          lead =
-            if current
-              then withAttr floatSelBarAttr (txt "\9614 ")
-              else txt "  "
-          line =
-            hBox
-              [ lead
-              , withAttr markAttr (str [mark])
-              , txt (" :" <> tshow (runAnchor r + 1))
-              , withAttr trayDeclAttr (txt decl)
-              , noteMark
-              ]
-          w = padRight Max line
         in
-          if current then withDefAttr floatSelAttr w else w
+          fitRow (penPlain rowPens) width $
+            spanInk
+              width
+              [ \left ->
+                  if current
+                    then inkT left (penFor rowPens floatSelBarAttr) "\9614 "
+                    else inkT left (penPlain rowPens) "  "
+              , \left -> inkT left (penFor rowPens (markAttrFor mark)) (T.singleton mark)
+              , \left -> inkT left (penPlain rowPens) (" :" <> tshow (runAnchor r + 1))
+              , \left -> inkT left (penFor rowPens trayDeclAttr) decl
+              , \left ->
+                  if any (`Map.member` stThreads st) (runKeys r)
+                    then inkT left (penFor rowPens noteInlineAttr) " \8801"
+                    else V.emptyImage
+              ]
       -- A remark sits between the hunks rather than among them: it is
       -- about a line the change never touched, so it carries the line
       -- itself where a hunk carries its declaration.
       TrayRemark fi ri ->
         let
-          fv = stFiles st !! fi
-          rm = fileRemarks st fv !! ri
+          rm = (remarksByFile !! fi) !! ri
           mark = case Map.lookup (rmKey rm) (stVerdicts st) of
             Just Flagged -> '!'
             Just Questioned -> '?'
             Just Reviewed -> '\10003'
             Nothing -> '\183'
-          markAttr = case mark of
-            '!' -> flagMarkAttr
-            '?' -> questionMarkAttr
-            '\10003' -> doneMarkAttr
-            _ -> pendingMarkAttr
-          noteMark =
-            if Map.member (rmKey rm) (stThreads st)
-              then withAttr noteInlineAttr (txt " \8801")
-              else txt ""
         in
-          padRight Max $
-            hBox
-              [ txt "  "
-              , withAttr markAttr (str [mark])
-              , txt (" :" <> tshow (rmRow rm + 1))
-              , withAttr trayDeclAttr (txt (" " <> T.take 12 (T.strip (rmText rm))))
-              , noteMark
+          fitRow (penPlain pens) width $
+            spanInk
+              width
+              [ \left -> inkT left (penPlain pens) "  "
+              , \left -> inkT left (penFor pens (markAttrFor mark)) (T.singleton mark)
+              , \left -> inkT left (penPlain pens) (" :" <> tshow (rmRow rm + 1))
+              , \left ->
+                  inkT
+                    left
+                    (penFor pens trayDeclAttr)
+                    (" " <> T.take 12 (T.strip (rmText rm)))
+              , \left ->
+                  if Map.member (rmKey rm) (stThreads st)
+                    then inkT left (penFor pens noteInlineAttr) " \8801"
+                    else V.emptyImage
               ]
-    rows = map entryWidget (trayEntries st)
   in
     hLimit trayWidth $
       padRight (Pad 1) $
-        viewport TrayVP Vertical (vBox rows)
+        viewport TrayVP Vertical $
+          Widget Greedy Fixed $ do
+            ctx <- getContext
+            let
+              pens = PenSet (ctxAttrName ctx) (ctxAttrMap ctx)
+              width = availWidth ctx
+            render . raw . V.vertCat $
+              map (entryInk pens width) (trayEntries st)
 
 -- Long paths compress like s/R/Quote.hs: every directory shrinks to its
 -- first character, the file name stays whole, and if even that is too
@@ -1981,8 +2036,28 @@ shortPath w path =
           then squeezed
           else "\8230" <> T.takeEnd (w - 1) squeezed
 
-windowRows :: Int
-windowRows = 300
+-- How far the render window reaches past the cursor, measured in screens
+-- rather than in a flat number of rows.
+--
+-- The window has to outrun the viewport in both directions or the pane
+-- shows blank where the body ran out, and the slack below is exactly one
+-- screen — see bodyWindow for why that is the bound. A constant big
+-- enough for the tallest terminal is a constant far too big for an
+-- ordinary one, and every row of it is drawn on every keystroke: six
+-- hundred rows for a pane that shows forty was most of what a keypress
+-- cost. The floor keeps a very short pane from re-anchoring constantly.
+windowRowsFor :: Int -> Int
+windowRowsFor screenRows = max 100 (2 * screenRows)
+
+-- The terminal's height. Read afresh rather than remembered: the draw
+-- and the handlers that move the window have to size it the same way or
+-- the body slides under the cursor, and a resize must not be able to
+-- reach one of them before the other.
+terminalRows :: EventM Name St Int
+terminalRows = do
+  vty <- getVtyHandle
+  (_, rows) <- liftIO (V.displayBounds (V.outputIface vty))
+  pure rows
 
 -- Tell the store whether a note is being written into this repository.
 --
@@ -2029,8 +2104,9 @@ reanchorBody = do
   case currentFileMay st of
     Nothing -> pure ()
     Just fv -> do
+      screenRows <- terminalRows
       let
-        (_, origin) = bodyWindow st fv
+        (_, origin) = bodyWindow screenRows st fv
         moved = origin - fvOrigin fv
       unless (moved == 0) $ do
         modify (updateFile (stCurF st) (\f -> f {fvOrigin = origin}))
@@ -2041,11 +2117,17 @@ reanchorBody = do
 
 -- How many display rows the body draws at once, and how close the cursor
 -- may come to an edge before the window is moved.
-windowSpan :: Int
-windowSpan = 2 * windowRows
+--
+-- The slack is a whole screen because that is what it takes. The
+-- viewport shows one screen containing the cursor, and it may sit
+-- anywhere in that screen, so the rows drawn have to reach a screen
+-- either side of the cursor for the pane to be full whichever way the
+-- reader arrived at the line.
+windowSpanFor :: Int -> Int
+windowSpanFor screenRows = 2 * windowRowsFor screenRows
 
-windowSlack :: Int
-windowSlack = windowRows `div` 2
+windowSlackFor :: Int -> Int
+windowSlackFor screenRows = windowRowsFor screenRows `div` 2
 
 -- The display row the body is framed on, and the first row of the render
 -- window.
@@ -2068,9 +2150,12 @@ windowSlack = windowRows `div` 2
 -- line. So a stored origin is kept as long as the cursor stays clear of
 -- the window's edges, and only when it does not is the window moved to
 -- sit around the cursor again.
-bodyWindow :: St -> FileView -> (Int, Int)
-bodyWindow st fv =
+bodyWindow :: Int -> St -> FileView -> (Int, Int)
+bodyWindow screenRows st fv =
   let
+    windowRows = windowRowsFor screenRows
+    windowSpan = windowSpanFor screenRows
+    windowSlack = windowSlackFor screenRows
     rows = fvRows fv
     curH = clampH (fvRuns fv) (stCurH st)
     curRow = fst (cursorRC (fvEd fv))
@@ -2160,8 +2245,8 @@ data NoteLine = NoteLine
   }
   deriving (Eq)
 
-renderFile :: Int -> St -> FileView -> Widget Name
-renderFile paneWidth st fv =
+renderFile :: Int -> Int -> St -> FileView -> Widget Name
+renderFile paneWidth screenRows st fv =
   let
     rows = fvRows fv
     ed = fvEd fv
@@ -2184,8 +2269,8 @@ renderFile paneWidth st fv =
     -- Which display row the view keeps in sight, and where the window
     -- that carries it starts. lo is the body's origin: nothing above it
     -- is drawn, so the pane never asks brick for a row it cannot reach.
-    (cursorOut, lo) = bodyWindow st fv
-    hi = min (fvRowCount fv) (lo + windowSpan)
+    (cursorOut, lo) = bodyWindow screenRows st fv
+    hi = min (fvRowCount fv) (lo + windowSpanFor screenRows)
     -- one walk to the window, shared by everything that reads it
     fromLo = drop lo rows
     windowed = take (hi - lo) fromLo
@@ -2205,27 +2290,19 @@ renderFile paneWidth st fv =
         (scanr (\row acc -> fromMaybe acc (rNewRow row)) seedPoint windowed)
     noteRowsList =
       take (hi - lo) (drop lo (shownNoteLines (noteTextWidth paneWidth fv) st rows))
-    -- worked out for the window only: the pairing needs neighbouring
-    -- rows, and the rows on screen are the ones that can show a mark
-    emphList =
-      if cfgWordDiff (stConfig st)
-        then
-          intralineSpans
-            ( if cfgIgnoreWs (stConfig st)
-                then WhitespaceIgnored
-                else WhitespaceMatters
-            )
-            windowed
-        else map (const []) windowed
+    -- worked out once for the whole file when the rows were built, so
+    -- the marks are the same wherever the window happens to sit
+    emphList = take (hi - lo) (drop lo (fvEmph fv))
     rowsWithPoints = zip (zip3 windowed points noteRowsList) emphList
     numW = gutterWidth fv
-    -- padding rows carry the border too, so the tray/body divider runs
-    -- unbroken through regions the render window skips
-    pad k =
-      if k <= 0
-        then txt T.empty
-        else raw (V.charFill (stBorder st) '\9614' (1 :: Int) k)
-    lineWidget ((r, point, shownNotes), emph) =
+    -- how far the whole window is shifted right; every line shifts in
+    -- step, so it is worked out once rather than per row
+    hOff = hScrollFor paneWidth numW curCol
+    -- One row's images: the line itself, then any note rows folded under
+    -- it, paired with whether the cursor sits on this line. Counting the
+    -- cursor's screen row off the images that precede it is how the
+    -- cursor stays with its line whatever the notes above it do.
+    rowInk pens ((r, point, shownNotes), emph) =
       let
         isCurRun = case rRunIx r of
           Just runIx -> runIx == curH
@@ -2240,18 +2317,20 @@ renderFile paneWidth st fv =
             -- a removed line counts when its resting point does,
             -- matching how verdicts scope it
             Nothing -> point >= a && point <= b
+        -- a selected line reads every attribute it draws against a map
+        -- whose default is the selection, so tokens that set only a
+        -- foreground pick the highlight up behind them
+        rowPens = if inSel then penUnder selAttr pens else pens
         -- the first gutter column doubles as the border between tray
         -- and body: drawn on every row, in the highlight color across
         -- the current hunk's rows; the second column carries the
         -- line's status, so neither ever hides the other
-        curBar =
-          if isCurRun
-            then withAttr curRunAttr (str "\9612") -- wide: ▌
-            else withAttr borderAttr (str "\9614") -- thin: ▎
-            -- the cursor paints this cell yellow and renders the verdict
-            -- glyph in black over it — shape carries the meaning where the
-            -- colors would fight the background (• pending, ✓ reviewed,
-            -- ! flagged, ? questioned)
+        barName = if isCurRun then curRunAttr else borderAttr
+        barGlyph = if isCurRun then '\9612' else '\9614' -- wide ▌, thin ▎
+        -- the cursor paints this cell yellow and renders the verdict
+        -- glyph in black over it — shape carries the meaning where the
+        -- colors would fight the background (• pending, ✓ reviewed,
+        -- ! flagged, ? questioned)
         statusPick = case verdict of
           Just Flagged -> Just ('!', flagMarkAttr)
           Just Questioned -> Just ('?', questionMarkAttr)
@@ -2260,17 +2339,15 @@ renderFile paneWidth st fv =
             case rKey r of
               Just _ -> Just ('\8226', pendingMarkAttr)
               Nothing -> Nothing
-        statusCol = case (isCursor, statusPick) of
+        statusInk left = case (isCursor, statusPick) of
           (True, Just (c, a)) ->
-            withDefAttr cursorMarkAttr (withAttr a (str [c]))
-          (True, Nothing) -> withAttr cursorMarkAttr (str " ")
-          (False, Just (c, a)) -> withAttr a (str [c])
-          (False, Nothing) -> str " "
-        numCol = case rNewRow r of
+            inkT left (penFor (penUnder cursorMarkAttr rowPens) a) (T.singleton c)
+          (True, Nothing) -> inkT left (penFor rowPens cursorMarkAttr) " "
+          (False, Just (c, a)) -> inkT left (penFor rowPens a) (T.singleton c)
+          (False, Nothing) -> inkT left (penPlain rowPens) " "
+        numInk left = case rNewRow r of
           Just nr ->
             let
-              shown = show (nr + 1)
-              padded = replicate (numW - length shown) ' ' ++ shown
               numAttr =
                 if isCursor
                   then lineNrCurAttr
@@ -2279,24 +2356,27 @@ renderFile paneWidth st fv =
                       then lineNrDoneAttr
                       else lineNrAttr
             in
-              withAttr numAttr (str (padded ++ " "))
-          Nothing -> withAttr lineNrAttr (str (replicate numW ' ' ++ " "))
-        markW = withAttr (markerAttrFor (rMark r)) (str [rMark r, ' '])
+              inkT
+                left
+                (penFor rowPens numAttr)
+                (T.justifyRight numW ' ' (tshow (nr + 1)) <> " ")
+          Nothing ->
+            inkT left (penFor rowPens lineNrAttr) (T.replicate (numW + 1) " ")
         -- content shifted hOff columns left, for reading long lines:
         -- the view follows the cursor horizontally while the gutter
         -- stays pinned
-        contentFor hOff =
+        contentInk left =
           let
             marks = shiftSpans hOff emph
           in
             if rMark r == '-'
               then
                 let
-                  shown = [(removedTextAttr, padT (T.drop hOff (rText r)))]
+                  shown = padT (T.drop hOff (rText r))
                 in
                   if null marks
-                    then withAttr removedTextAttr (txt (padT (T.drop hOff (rText r))))
-                    else emphSegsWidget marks shown
+                    then inkT left (penFor rowPens removedTextAttr) shown
+                    else emphInk rowPens left marks [(removedTextAttr, shown)]
               else
                 let
                   sliced = snd (splitAtCol hOff (effRuns r))
@@ -2306,40 +2386,37 @@ renderFile paneWidth st fv =
                     -- reader is pointing at this instant
                     Just (s, mEnd)
                       | fromMaybe maxBound mEnd >= hOff ->
-                          selTokensWidget
+                          selInk
+                            rowPens
+                            left
                             sliced
                             (max 0 (s - hOff))
                             (fmap (subtract hOff) mEnd)
                     _
-                      | not (null marks) -> emphSegsWidget marks sliced
+                      | not (null marks) -> emphInk rowPens left marks sliced
                     _ ->
                       case nonEmptySegs sliced of
-                        [] -> txt " "
-                        filled ->
-                          hBox (map (\(a, t) -> withAttr a (txt t)) filled)
+                        [] -> inkT left (penPlain rowPens) " "
+                        filled -> segsInk rowPens left filled
         -- reviewed lines keep their full syntax colors; the gutter dot
         -- and the tray checkmark already say "answered for", and dimming
         -- whole regions made the buffer feel murky
-        buildLine hOff =
-          let
-            body1 = markW <+> contentFor hOff
-            lineW0 = curBar <+> statusCol <+> numCol <+> body1
-            lineW = if inSel then withDefAttr selAttr lineW0 else lineW0
-          in
-            if isCursor
-              then
-                showCursor
-                  TheCursor
-                  (Location (numW + 5 + curCol - hOff, 0))
-                  lineW
-              else lineW
-        lineScrolled =
-          Widget Greedy Fixed $ do
-            ctx <- getContext
-            render (buildLine (hScrollFor ctx numW curCol))
+        lineImg =
+          spanInk
+            paneWidth
+            [ \left -> inkT left (penFor rowPens barName) (T.singleton barGlyph)
+            , statusInk
+            , numInk
+            , \left ->
+                inkT
+                  left
+                  (penFor rowPens (markerAttrFor (rMark r)))
+                  (T.pack [rMark r, ' '])
+            , contentInk
+            ]
         -- the reviewer's note renders inline as virtual rows under
         -- the line it annotates — visible where the feedback lives
-        noteRowW nl =
+        noteImg nl =
           let
             fromReviewer = nlAuthor nl == "reviewer"
             glyph
@@ -2352,14 +2429,21 @@ renderFile paneWidth st fv =
                 else ""
             noteAttr = if fromReviewer then noteInlineAttr else replyInlineAttr
           in
-            curBar
-              <+> withAttr
-                noteAttr
-                (txt (T.replicate (numW + 4) " " <> glyph <> label <> padT (nlText nl)))
+            spanInk
+              paneWidth
+              [ \left -> inkT left (penFor pens barName) (T.singleton barGlyph)
+              , \left ->
+                  inkT
+                    left
+                    (penFor pens noteAttr)
+                    ( T.replicate (numW + 4) " "
+                        <> glyph
+                        <> label
+                        <> padT (nlText nl)
+                    )
+              ]
       in
-        case shownNotes of
-          [] -> lineScrolled
-          notes -> vBox (lineScrolled : map noteRowW notes)
+        (lineImg : map noteImg shownNotes, isCursor)
     -- keep a margin of context visible around the cursor, so the view
     -- scrolls before the cursor reaches the top or bottom edge; virtual
     -- note rows above the cursor shift where it lands in the rendering
@@ -2369,24 +2453,65 @@ renderFile paneWidth st fv =
     marginTop = max 0 (cursorRender - scrollOff)
     marginHeight = cursorRender + scrollOff - marginTop + 1
   in
-    visibleRegion (Location (0, marginTop)) (1, marginHeight) $
-      vBox
-        [ vBox (map lineWidget rowsWithPoints)
-        , -- always leave border tail below the window so the divider
-          -- spans the pane even when the content is shorter than the
-          -- screen. Rows past the window are never addressed, so the
-          -- tail only has to outlast the pane, not the file.
-          pad (max (min (fvRowCount fv - hi) windowRows) 60)
-        ]
+    Widget Greedy Fixed $ do
+      ctx <- getContext
+      let
+        pens = PenSet (ctxAttrName ctx) (ctxAttrMap ctx)
+        blocks = map (rowInk pens) rowsWithPoints
+        -- the cursor's screen row, or nothing at all when the window
+        -- carries no row for the cursor's line — an all-removed file
+        -- owns no buffer rows, and nothing there can wear a cursor
+        cursorAt =
+          let
+            findY _ [] = Nothing
+            findY y ((imgs, isCursor) : rest) =
+              if isCursor
+                then Just y
+                else findY (y + length imgs) rest
+          in
+            findY (0 :: Int) blocks
+        -- always leave border tail below the window so the divider
+        -- spans the pane even when the content is shorter than the
+        -- screen. Rows past the window are never addressed, so the
+        -- tail only has to outlast the pane, not the file.
+        tailRows =
+          max
+            (min (fvRowCount fv - hi) (windowRowsFor screenRows))
+            (max 60 screenRows)
+        bodyRows =
+          concatMap fst blocks
+            ++ [V.charFill (stBorder st) '\9614' (1 :: Int) tailRows]
+        -- every row filled out to the width of the widest, so no
+        -- attribute runs on past the text it belongs to
+        fullWidth = maximum (0 : map V.imageWidth bodyRows)
+        squared img =
+          let
+            short = fullWidth - V.imageWidth img
+          in
+            if short <= 0
+              then img
+              else
+                V.horizJoin
+                  img
+                  (V.charFill (penPlain pens) ' ' short (V.imageHeight img))
+        bodyImg = raw (V.vertCat (map squared bodyRows))
+        placed = case cursorAt of
+          Just y ->
+            showCursor
+              TheCursor
+              (Location (numW + 5 + curCol - hOff, y))
+              bodyImg
+          Nothing -> bodyImg
+      render (visibleRegion (Location (0, marginTop)) (1, marginHeight) placed)
 
 -- How far the view is shifted right: zero until the cursor closes in on
 -- the pane's right edge, then just enough to keep a small margin ahead
 -- of it. Depends only on the cursor column and the pane width, so every
 -- line shifts in step.
-hScrollFor :: Context Name -> Int -> Int -> Int
-hScrollFor ctx numW curCol =
+hScrollFor :: Int -> Int -> Int -> Int
+hScrollFor paneWidth numW curCol =
   let
-    contentWidth = max 1 (availWidth ctx - (numW + 5))
+    contentWidth = max 1 (paneWidth - (numW + 5))
     margin = 8
   in
     max 0 (curCol - (contentWidth - margin))
@@ -2596,46 +2721,137 @@ shiftSpans off =
         if e < off then Nothing else Just (max 0 (s - off), e - off)
     )
 
--- Segments with the given columns wearing the word-change wash. The wash
--- sets only a background, so a token keeps whatever colour the grammar
--- gave it and gains the mark on top.
-emphSegsWidget :: [(Int, Int)] -> [Seg] -> Widget Name
-emphSegsWidget spans segs =
-  let
-    lay xs = hBox (map (\(a, t) -> withAttr a (txt t)) (nonEmptySegs xs))
-    washed xs = case nonEmptySegs xs of
-      [] -> txt ""
-      ws -> withDefAttr wordChangeAttr (lay ws)
-    go _ [] rest = [lay rest]
-    go col ((s, e) : more) rest =
-      let
-        (before, fromStart) = splitAtCol (s - col) rest
-        (mid, after) = splitAtCol (e + 1 - s) fromStart
-      in
-        lay before : washed mid : go (e + 1) more after
-  in
-    hBox (go 0 spans segs)
-
--- Token runs with the char selection's columns highlighted.
 effRuns :: RowR -> [Seg]
 effRuns r =
   case nonEmptySegs (rToks r) of
     [] -> [(attrName "plain", rText r)]
     filled -> filled
 
-selTokensWidget :: [Seg] -> Int -> Maybe Int -> Widget Name
-selTokensWidget segs s mEnd =
+-- Drawing the body ---------------------------------------------------------------
+
+-- The body is drawn as vty images rather than composed out of brick
+-- widgets. Brick's boxes carry border-map bookkeeping through every
+-- composition — merging, translating and cropping the border segments a
+-- box might have to join — and a six-hundred-row window whose every row
+-- was a dozen nested boxes paid for that thousands of times a frame, for
+-- borders the body does not have. It was three quarters of the time
+-- spent between a keystroke and the screen.
+--
+-- What a widget did at render time is done here instead, and the pens
+-- are how: an attribute name resolves against exactly the map a withAttr
+-- would have consulted, so the colors are the ones the widgets produced.
+data PenSet = PenSet
+  { penBaseName :: AttrName -- the ambient name, what plain text renders in
+  , penAttrs :: AttrMap
+  }
+
+-- The attribute a withAttr of this name would have resolved to.
+penFor :: PenSet -> AttrName -> V.Attr
+penFor pens name = attrMapLookup name (penAttrs pens)
+
+-- The attribute unnamed text renders in: the map's default, which is
+-- what withDefAttr replaces.
+penPlain :: PenSet -> V.Attr
+penPlain pens = penFor pens (penBaseName pens)
+
+-- withDefAttr: the named attribute becomes the default everything under
+-- it inherits from, so a token that sets only a foreground picks up the
+-- selection or the word-change wash behind it.
+penUnder :: AttrName -> PenSet -> PenSet
+penUnder name pens =
+  pens {penAttrs = setDefaultAttr (penFor pens name) (penAttrs pens)}
+
+-- Text clipped to a column budget, the way a nested box clipped it
+-- against the width its siblings had left. Empty text draws nothing,
+-- which is what brick's txt does with it.
+inkT :: Int -> V.Attr -> Text -> V.Image
+inkT width attr t =
+  if width <= 0 || T.null t
+    then V.emptyImage
+    else
+      let
+        -- a column is never narrower than a character, so taking that
+        -- many characters cannot come up short of the budget
+        img = V.text' attr (T.take width t)
+      in
+        if V.imageWidth img > width
+          then V.cropRight width img
+          else img
+
+-- A row filled out to the pane's width, or cropped back to it: what a
+-- padRight Max did, and what the box around it did afterwards.
+fitRow :: V.Attr -> Int -> V.Image -> V.Image
+fitRow attr width img =
+  let
+    short = width - V.imageWidth img
+  in
+    if short > 0
+      then V.horizJoin img (V.charFill attr ' ' short (1 :: Int))
+      else
+        if short < 0
+          then V.cropRight width img
+          else img
+
+-- Pieces laid left to right against one shared budget, each offered only
+-- what the pieces before it did not use.
+spanInk :: Int -> [Int -> V.Image] -> V.Image
+spanInk width pieces =
+  let
+    go _ [] = []
+    go left (piece : rest) =
+      if left <= 0
+        then []
+        else
+          let
+            img = piece left
+          in
+            img : go (left - V.imageWidth img) rest
+  in
+    V.horizCat (go width pieces)
+
+-- One run of segments, each drawn in the attribute its name resolves to.
+segsInk :: PenSet -> Int -> [Seg] -> V.Image
+segsInk pens width segs =
+  spanInk width (map (\(a, t) left -> inkT left (penFor pens a) t) segs)
+
+-- Runs of segments that read their attributes against different pens,
+-- sharing one budget across the lot.
+runsInk :: Int -> [(PenSet, [Seg])] -> V.Image
+runsInk width parts =
+  spanInk width (map (\(pens, segs) left -> segsInk pens left segs) parts)
+
+-- Segments with the given columns wearing the word-change wash. The wash
+-- sets only a background, so a token keeps whatever colour the grammar
+-- gave it and gains the mark on top.
+emphInk :: PenSet -> Int -> [(Int, Int)] -> [Seg] -> V.Image
+emphInk pens width spans segs =
+  let
+    washed = penUnder wordChangeAttr pens
+    go _ [] rest = [(pens, rest)]
+    go col ((s, e) : more) rest =
+      let
+        (before, fromStart) = splitAtCol (s - col) rest
+        (mid, after) = splitAtCol (e + 1 - s) fromStart
+      in
+        (pens, before) : (washed, mid) : go (e + 1) more after
+  in
+    runsInk width (go 0 spans segs)
+
+-- Token runs with the char selection's columns highlighted.
+selInk :: PenSet -> Int -> [Seg] -> Int -> Maybe Int -> V.Image
+selInk pens width segs s mEnd =
   let
     (before, rest) = splitAtCol s segs
     (mid, after) = case mEnd of
       Nothing -> (rest, [])
       Just e -> splitAtCol (e + 1 - s) rest
-    seg xs = hBox (map (\(a, t) -> withAttr a (txt t)) (nonEmptySegs xs))
-    midW = case nonEmptySegs mid of
-      [] -> txt " " -- keep the selection visible across empty stretches
-      ms -> seg ms
+    selPens = penUnder selAttr pens
+    midSegs = case nonEmptySegs mid of
+      -- keep the selection visible across empty stretches
+      [] -> [(penBaseName pens, " ")]
+      ms -> ms
   in
-    seg before <+> withDefAttr selAttr midW <+> seg after
+    runsInk width [(pens, before), (selPens, midSegs), (pens, after)]
 
 splitAtCol :: Int -> [Seg] -> ([Seg], [Seg])
 splitAtCol =
@@ -2770,8 +2986,10 @@ padT t = if T.null t then " " else t
 
 -- Progress as quiet blocks: one cell per hunk up to ten, then scaled.
 -- The filled run only completes when the work does.
-meterW :: Int -> Int -> Widget Name
-meterW done total =
+-- How many cells the meter has, and how many of them are filled. The
+-- filled run only completes when the work does.
+meterCells :: Int -> Int -> (Int, Int)
+meterCells done total =
   let
     cells = min 10 (max 1 total)
     filled =
@@ -2779,10 +2997,30 @@ meterW done total =
         then cells
         else min (cells - 1) (div (done * cells) (max 1 total))
   in
+    (cells, filled)
+
+meterW :: Int -> Int -> Widget Name
+meterW done total =
+  let
+    (cells, filled) = meterCells done total
+  in
     hBox
       [ withAttr meterOnAttr (txt (T.replicate filled "\9648"))
       , withAttr meterOffAttr (txt (T.replicate (cells - filled) "\9649"))
       , withAttr hintAttr (txt (" " <> tshow done <> "/" <> tshow total))
+      ]
+
+meterInk :: PenSet -> Int -> Int -> Int -> V.Image
+meterInk pens width done total =
+  let
+    (cells, filled) = meterCells done total
+  in
+    spanInk
+      width
+      [ \left -> inkT left (penFor pens meterOnAttr) (T.replicate filled "\9648")
+      , \left -> inkT left (penFor pens meterOffAttr) (T.replicate (cells - filled) "\9649")
+      , \left ->
+          inkT left (penFor pens hintAttr) (" " <> tshow done <> "/" <> tshow total)
       ]
 
 meterTextWidth :: Int -> Int -> Int
@@ -3083,9 +3321,16 @@ handleInsertKey i ed ev =
           if length newLs == length oldLs
             then
               modify
-                ( updateFile
-                    i
-                    (patchLine (fst (cursorRC edNext)) (currentLineOf edNext) . withEd edNext)
+                ( \s ->
+                    updateFile
+                      i
+                      ( patchLine
+                          (stConfig s)
+                          (fst (cursorRC edNext))
+                          (currentLineOf edNext)
+                          . withEd edNext
+                      )
+                      s
                 )
             else rebuildWith i edNext
     InsertExit edNext -> do
@@ -3448,6 +3693,7 @@ scrollHunkIntoViewOf :: FileView -> EventM Name St ()
 scrollHunkIntoViewOf fv = do
   st <- get
   mvp <- lookupViewport BodyVP
+  screenRows <- terminalRows
   let
     rs = fvRuns fv
     h = clampH rs (stCurH st)
@@ -3462,7 +3708,7 @@ scrollHunkIntoViewOf fv = do
         -- coordinates are relative to that same origin. A jump can land
         -- anywhere, so the window is moved with it and written back here
         -- rather than left for the drift check to discover.
-        origin = snd (bodyWindow st fv)
+        origin = snd (bodyWindow screenRows st fv)
         noteRoom = noteTextWidth (fst (_vpSize vp)) fv
         startIn = max 0 (start - origin)
         -- best-effort correction for virtual note rows rendered above
@@ -4400,10 +4646,11 @@ reloadFromDisk rel = do
                       fresh {edZipper = Z.moveCursor (newRow, newCol) (edZipper fresh)}
                   rebuildWith i placed
                   reloaded <- get
+                  screenRows <- terminalRows
                   let
                     reloadedFv = stFiles reloaded !! i
                     newOut = cursorDisplayRow (fvRows reloadedFv) newRow
-                    origin = snd (bodyWindow reloaded reloadedFv)
+                    origin = snd (bodyWindow screenRows reloaded reloadedFv)
                   modify (updateFile i (\f -> f {fvOrigin = origin}))
                   setTop
                     (viewportScroll BodyVP)
@@ -6982,6 +7229,7 @@ loadOpened cfg hls root path = do
                 , fvBase = newLs
                 , fvEd = newEdState 0 newLs
                 , fvRows = []
+                , fvEmph = []
                 , fvRowCount = 0
                 , fvOrigin = 0
                 , fvRuns = []
