@@ -719,13 +719,26 @@ trueColorTerms =
 fileDir :: FilePath -> FilePath -> FilePath
 fileDir root path = normalise (root </> takeDirectory path)
 
+-- Every (file, hunk) pair in display order, each carrying its run.
+--
+-- One walk down the files, rather than a pair and then an index back
+-- into them to find out what it names. Reading a run by its pair costs
+-- a walk to it, so asking once per hunk is quadratic in the size of the
+-- change set — and the header and the status meter both ask once per
+-- hunk on every frame. A single file with a few thousand hunks put
+-- whole seconds between a keystroke and the screen, which is not merely
+-- slow: there is no leaving a session that cannot process the three
+-- keys of :q, and helix's keymap binds no other way out.
+allRunsInOrder :: St -> [((Int, Int), Run)]
+allRunsInOrder st =
+  let
+    fileRuns (fi, fv) = zipWith (\hi r -> ((fi, hi), r)) [0 ..] (fvRuns fv)
+  in
+    concatMap fileRuns (zip [0 ..] (stFiles st))
+
 -- Every (file, hunk) pair in display order.
 allRunPairs :: St -> [(Int, Int)]
-allRunPairs st =
-  let
-    filePairs (fi, fv) = map (\h -> (fi, h)) [0 .. length (fvRuns fv) - 1]
-  in
-    concatMap filePairs (zip [0 ..] (stFiles st))
+allRunPairs = map fst . allRunsInOrder
 
 runAt :: St -> (Int, Int) -> Maybe Run
 runAt st (f, h) = do
@@ -756,17 +769,30 @@ pairInFilter st pair =
 
 -- Every hunk the filter admits, in display order.
 filteredRunPairs :: St -> [(Int, Int)]
-filteredRunPairs st = filter (pairInFilter st) (allRunPairs st)
+filteredRunPairs st =
+  map fst (filter (runFilterAllows (stRunFilter st) . snd) (allRunsInOrder st))
+
+-- The pairs whose hunks are still pending, in display order. What the
+-- header counts and the meter measures, worked out in one walk.
+pendingRunPairs :: St -> [(Int, Int)]
+pendingRunPairs st =
+  map fst (filter (runPending (stVerdicts st) . snd) (allRunsInOrder st))
 
 -- Where a session begins: the first hunk nothing has been said about
 -- yet; only when every hunk has some response does the first still-
 -- pending (flagged/questioned) one win.
 firstUnrespondedOrPending :: St -> Maybe (Int, Int)
 firstUnrespondedOrPending st =
-  find (pairUnvisited st) (filteredRunPairs st) <|> firstPending st
+  fmap fst (find (runUnvisited (stVerdicts st) . snd) (filteredRunsInOrder st))
+    <|> firstPending st
 
 firstPending :: St -> Maybe (Int, Int)
-firstPending st = find (pairPending st) (filteredRunPairs st)
+firstPending st =
+  fmap fst (find (runPending (stVerdicts st) . snd) (filteredRunsInOrder st))
+
+filteredRunsInOrder :: St -> [((Int, Int), Run)]
+filteredRunsInOrder st =
+  filter (runFilterAllows (stRunFilter st) . snd) (allRunsInOrder st)
 
 printSummary :: St -> IO ()
 printSummary st = do
@@ -1127,8 +1153,19 @@ runMark m r =
 clampH :: [Run] -> Int -> Int
 clampH rs h = max 0 (min h (length rs - 1))
 
+-- The element at an index, if the list reaches that far.
+--
+-- Counted to rather than measured first: asking `i < length xs` walks
+-- the whole list before the index does, so reading one hunk out of a
+-- file that has thousands cost a walk over all of them twice. That is
+-- charged per lookup, and the frame asks per hunk.
 safeIdx :: [a] -> Int -> Maybe a
-safeIdx xs i = if i >= 0 && i < length xs then Just (xs !! i) else Nothing
+safeIdx xs i =
+  if i < 0
+    then Nothing
+    else case drop i xs of
+      (x : _) -> Just x
+      [] -> Nothing
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show
@@ -1773,7 +1810,7 @@ headerBar st =
             rs = fvRuns fv
             h = clampH rs (stCurH st)
             shownH = if null rs then 0 else h + 1
-            pendingPairs = filter (pairPending st) (allRunPairs st)
+            pendingPairs = pendingRunPairs st
             pendingAll = length pendingPairs
             pendingHere =
               length (filter (\(f, _) -> f == stCurF st) pendingPairs)
@@ -1840,6 +1877,26 @@ data TrayEntry
   | TrayHunk Int Int -- file index, hunk index
   | TrayRemark Int Int -- file index, index into that file's remarks
 
+-- A tray row together with what it needs to draw itself.
+--
+-- The payload travels with the row because looking it up afterwards
+-- means counting into the file's list of runs, once per row — and the
+-- tray holds a row per hunk in the whole change set, so that is
+-- quadratic in the size of the change set on every frame. A single file
+-- with a few thousand hunks put seconds between a keystroke and the
+-- screen; see allRunsInOrder for the other half of the same mistake.
+data TrayRow
+  = TrayRowFile Int Int FileView -- file index, hidden hunks, the file
+  | TrayRowHunk Int Int Run Text -- file, hunk, the run, its declaration
+  | TrayRowRemark Int Int Remark -- file, index among that file's remarks
+
+-- Which row this is, for the places that only need to point at one.
+trayEntryOf :: TrayRow -> TrayEntry
+trayEntryOf row = case row of
+  TrayRowFile fi hidden _ -> TrayFile fi hidden
+  TrayRowHunk fi hi _ _ -> TrayHunk fi hi
+  TrayRowRemark fi ri _ -> TrayRemark fi ri
+
 -- Remarks on lines nobody has changed: the buffer row to sit on, the key
 -- they are recorded under, and the line itself.
 --
@@ -1867,11 +1924,14 @@ fileRemarks st fv =
     mapMaybe pick (fvRows fv)
 
 trayEntries :: St -> [TrayEntry]
-trayEntries st =
+trayEntries = map trayEntryOf . trayRows
+
+trayRows :: St -> [TrayRow]
+trayRows st =
   let
     curF = stCurF st
     curH = clampH (fvRuns (currentFile st)) (stCurH st)
-    hiddenHunk fi (hi, r) =
+    hiddenHunk fi (hi, r, _) =
       let
         mark = runMark (stVerdicts st) r
         isCurrent = fi == curF && hi == curH
@@ -1881,12 +1941,15 @@ trayEntries st =
         not isCurrent && (settled || wrongKind)
     fileGroup (fi, fv) =
       let
-        numbered = zip [0 ..] (fvRuns fv)
+        -- the declarations are a list parallel to the runs, and a file
+        -- whose decls have not been worked out yet simply has none
+        numbered =
+          zip3 [0 ..] (fvRuns fv) (fvRunDecls fv ++ repeat T.empty)
         (hiddenOnes, shown) = splitHiddenShown fi numbered
       in
-        TrayFile fi (length hiddenOnes)
-          : map (\(hi, _) -> TrayHunk fi hi) shown
-          ++ zipWith (\ri _ -> TrayRemark fi ri) [0 ..] (fileRemarks st fv)
+        TrayRowFile fi (length hiddenOnes) fv
+          : map (\(hi, r, decl) -> TrayRowHunk fi hi r decl) shown
+          ++ zipWith (TrayRowRemark fi) [0 ..] (fileRemarks st fv)
     splitHiddenShown fi numbered =
       ( filter (hiddenHunk fi) numbered
       , filter (not . hiddenHunk fi) numbered
@@ -1903,20 +1966,18 @@ trayWidth = 32
 tray :: St -> Widget Name
 tray st =
   let
-    -- One walk per file rather than one per remark: a remark row asks
-    -- for the remark at an index, and rebuilding the file's list to
-    -- answer meant re-scanning every row of the file, once per remark
-    -- on it, every frame.
-    remarksByFile = map (fileRemarks st) (stFiles st)
+    -- asked once for the frame, not once per row: clampH measures the
+    -- run list, and a row per hunk asking how many hunks there are is
+    -- the change set squared
+    curHunk = clampH (fvRuns (currentFile st)) (stCurH st)
     markAttrFor mark = case mark of
       '!' -> flagMarkAttr
       '?' -> questionMarkAttr
       '\10003' -> doneMarkAttr
       _ -> pendingMarkAttr
     entryInk pens width entry = case entry of
-      TrayFile fi _hidden ->
+      TrayRowFile fi _hidden fv ->
         let
-          fv = stFiles st !! fi
           total = length (fvRuns fv)
           done =
             length
@@ -1944,18 +2005,13 @@ tray st =
               , meterImg
               , endImg
               ]
-      TrayHunk fi hi ->
+      TrayRowHunk fi hi r rawDecl ->
         let
-          fv = stFiles st !! fi
-          r = fvRuns fv !! hi
-          decl = case safeIdx (fvRunDecls fv) hi of
-            Just d
-              | not (T.null d) ->
-                  " " <> T.take 12 (declName d)
-            _ -> ""
-          current =
-            fi == stCurF st
-              && hi == clampH (fvRuns (currentFile st)) (stCurH st)
+          decl =
+            if T.null rawDecl
+              then ""
+              else " " <> T.take 12 (declName rawDecl)
+          current = fi == stCurF st && hi == curHunk
           -- the current row reads every attribute against the selection
           -- as its default, so the highlight runs the width of the tray
           rowPens = if current then penUnder floatSelAttr pens else pens
@@ -1979,9 +2035,8 @@ tray st =
       -- A remark sits between the hunks rather than among them: it is
       -- about a line the change never touched, so it carries the line
       -- itself where a hunk carries its declaration.
-      TrayRemark fi ri ->
+      TrayRowRemark _fi _ri rm ->
         let
-          rm = (remarksByFile !! fi) !! ri
           mark = case Map.lookup (rmKey rm) (stVerdicts st) of
             Just Flagged -> '!'
             Just Questioned -> '?'
@@ -2014,7 +2069,7 @@ tray st =
               pens = PenSet (ctxAttrName ctx) (ctxAttrMap ctx)
               width = availWidth ctx
             render . raw . V.vertCat $
-              map (entryInk pens width) (trayEntries st)
+              map (entryInk pens width) (trayRows st)
 
 -- Long paths compress like s/R/Quote.hs: every directory shrinks to its
 -- first character, the file name stays whole, and if even that is too
@@ -2947,9 +3002,9 @@ statusBar st =
         (if fvStale fv then "hunks refresh on Esc · " else "") <> verbHint
     meterSeg =
       let
-        pairs = allRunPairs st
-        total = length pairs
-        pending = length (filter (pairPending st) pairs)
+        runs = allRunsInOrder st
+        total = length runs
+        pending = length (filter (runPending (stVerdicts st) . snd) runs)
       in
         if total == 0
           then txt ""
