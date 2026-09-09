@@ -958,6 +958,34 @@ newSideLineCount fv =
       then 0
       else n
 
+-- Where a removed line rests when nothing follows it.
+--
+-- Removed lines own no buffer row; each answers to the row it now sits
+-- before, which is how a deletion is selectable at all. The ones at the
+-- very end of a file have no row after them, and their point used to be
+-- one past the last line — a place no cursor can reach. So a hunk of
+-- nothing but removals at the end of a file could not be got at: the
+-- cursor was never in it, X would not select it, Enter would not accept
+-- it, and each refusal named another that refused in turn.
+--
+-- They rest on the last line instead, which is the line a reader puts
+-- the cursor on to mean them, and is what a removal in the middle of a
+-- file has always done with the line below it.
+lastRestingRow :: FileView -> Int
+lastRestingRow fv = max 0 (newSideLineCount fv - 1)
+
+-- The buffer row each display row answers to, in display order: its own
+-- row, or for a removed line the row it rests before.
+restingPoints :: FileView -> [Int]
+restingPoints fv =
+  drop
+    1
+    ( scanr
+        (\row acc -> fromMaybe acc (rNewRow row))
+        (lastRestingRow fv)
+        (fvRows fv)
+    )
+
 -- Real tokenization is paid only for files that have actually been shown;
 -- everything else carries plain tokens until the cursor arrives. Shown
 -- files use the vendored tree-sitter grammar when one claims the file,
@@ -2343,7 +2371,7 @@ renderFile paneWidth screenRows st fv =
     seedPoint =
       case mapMaybe rNewRow beyond of
         (p : _) -> p
-        [] -> newSideLineCount fv
+        [] -> lastRestingRow fv
     points =
       drop
         1
@@ -3721,9 +3749,7 @@ firstUnacceptedRow :: St -> FileView -> Int -> Maybe Int
 firstUnacceptedRow st fv h =
   let
     rows = fvRows fv
-    bufferLen = newSideLineCount fv
-    points =
-      drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
+    points = restingPoints fv
     unaccepted (row, point) = do
       k <- rKey row
       if rRunIx row == Just h && Map.lookup k (stVerdicts st) /= Just Reviewed
@@ -4006,9 +4032,7 @@ selectedChanges :: Bool -> FileView -> Int -> Int -> [(Text, Text, Int)]
 selectedChanges withRemarks fv lo hi =
   let
     rows = fvRows fv
-    bufferLen = newSideLineCount fv
-    points =
-      drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
+    points = restingPoints fv
     inSpan row point = case rNewRow row of
       Just nr -> nr >= lo && nr <= hi
       Nothing -> point >= lo && point <= hi
@@ -4030,9 +4054,7 @@ selectedRuns :: FileView -> Int -> Int -> Set.Set Int
 selectedRuns fv lo hi =
   let
     rows = fvRows fv
-    bufferLen = newSideLineCount fv
-    points =
-      drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
+    points = restingPoints fv
     inSpan row point = case rNewRow row of
       Just nr -> nr >= lo && nr <= hi
       Nothing -> point >= lo && point <= hi
@@ -4045,9 +4067,7 @@ runChanges :: FileView -> Int -> [(Text, Text, Int)]
 runChanges fv h =
   let
     rows = fvRows fv
-    bufferLen = newSideLineCount fv
-    points =
-      drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
+    points = restingPoints fv
     pick (row, point) = do
       k <- rKey row
       if rRunIx row == Just h
@@ -4069,14 +4089,7 @@ runChanges fv h =
 -- anything that reasons about rows by buffer position has to consult
 -- this or it will simply not see such a hunk.
 rowRestPoints :: FileView -> [(RowR, Int)]
-rowRestPoints fv =
-  let
-    rows = fvRows fv
-    bufferLen = newSideLineCount fv
-    points =
-      drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) bufferLen rows)
-  in
-    zip rows points
+rowRestPoints fv = zip (fvRows fv) (restingPoints fv)
 
 -- The buffer line a row answers to, whether it owns one or rests before
 -- one.
