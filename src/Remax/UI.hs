@@ -6625,9 +6625,13 @@ browseTreeKey ev view = do
               close
               openFilePath (T.pack (trPath row))
   case ev of
-    V.EvKey V.KEsc []
-      | not (T.null (tvInput view)) -> retype ""
-      | otherwise -> close
+    -- Escape leaves, whatever has been typed. It used to clear the
+    -- filter first and only close on a second press, which made leaving
+    -- a two-step gesture that also threw the filter away — so ␣' brought
+    -- the dialog back empty, having watched the query be deleted on the
+    -- way out. The picker has always closed on the first Escape, and so
+    -- does helix; a filter is cleared by deleting it.
+    V.EvKey V.KEsc [] -> close
     V.EvKey V.KUp [] -> move (-1)
     V.EvKey (V.KChar 'p') [V.MCtrl] -> move (-1)
     V.EvKey V.KDown [] -> move 1
@@ -7183,10 +7187,7 @@ treeLayer st view =
       flat = tvMode view == TreeFlat
       title = if flat then "files" else "tree"
       folding = if flat then "" else "\8594\8592 fold \183 "
-      leaving =
-        if T.null (tvInput view)
-          then "esc closes"
-          else "esc clears the filter"
+      leaving = "esc closes"
       other = if flat then "tree" else "flat"
       showing = case stFileScope st of
         AllFiles -> "^a hide ignored \183 "
