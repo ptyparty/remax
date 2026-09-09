@@ -353,6 +353,9 @@ data St = St
   , stPicker :: Maybe Picker
   , stNotePopup :: Maybe NotePopup
   , stThreads :: Map.Map Text [Post] -- note conversations by line key, posts in order
+  , -- which named group each noted key belongs to. Two notes worded the
+    -- same are two notes, and only the name says so.
+    stNoteGroups :: Map.Map Text Text
   , stSpace :: Bool -- the space menu prefix is pending
   , stConfig :: Config
   , stCmdFiles :: [Text] -- completion caches, filled when : opens
@@ -506,6 +509,7 @@ runReview mode root roots story = do
   verdicts <- loadVerdicts conn (T.pack root)
   hls <- TS.initHighlighters
   threads0 <- loadThreads conn (T.pack root)
+  noteGroups0 <- loadNoteGroups conn (T.pack root)
   cfg <- loadConfig
   rebase0 <- rebaseStatus root
   branch0 <- currentBranch root
@@ -606,6 +610,7 @@ runReview mode root roots story = do
           , stPicker = Nothing
           , stNotePopup = Nothing
           , stThreads = threads0
+          , stNoteGroups = noteGroups0
           , stSpace = False
           , stConfig = cfg
           , stCmdFiles = []
@@ -3100,7 +3105,8 @@ handleEvent brickEvent =
     AppEvent StoreChanged -> do
       st <- get
       threads <- liftIO (loadThreads (stConn st) (repoText st))
-      modify (\s -> s {stThreads = threads})
+      groups <- liftIO (loadNoteGroups (stConn st) (repoText st))
+      modify (\s -> s {stThreads = threads, stNoteGroups = groups})
     AppEvent (Attending seen) ->
       modify (\s -> s {stAttending = seen, stThrob = stThrob s + 1})
     AppEvent Tick -> scrollHunkIntoView
@@ -5468,7 +5474,8 @@ resolveAllAnswered = do
   st <- get
   n <- liftIO (resolveAnswered (stConn st) (repoText st))
   threads <- liftIO (loadThreads (stConn st) (repoText st))
-  modify (\s -> s {stThreads = threads})
+  groups <- liftIO (loadNoteGroups (stConn st) (repoText st))
+  modify (\s -> s {stThreads = threads, stNoteGroups = groups})
   setMsg $
     if n == 0
       then "no answered notes to resolve"
@@ -5476,10 +5483,21 @@ resolveAllAnswered = do
 
 -- Acceptance closes the note conversation; the store upsert already
 -- cleared the rows, this keeps the inline display in step.
+-- Re-read which named group each noted key belongs to. The names are
+-- assigned by the store when a note is saved, so the session cannot
+-- work them out for itself; it asks again after any write that could
+-- have formed or dissolved a group.
+refreshNoteGroups :: EventM Name St ()
+refreshNoteGroups = do
+  st <- get
+  groups <- liftIO (loadNoteGroups (stConn st) (repoText st))
+  modify (\s -> s {stNoteGroups = groups})
+
 resolveNotesInMemory :: [Text] -> EventM Name St ()
-resolveNotesInMemory keys =
+resolveNotesInMemory keys = do
   modify $ \s ->
     s {stThreads = foldr Map.delete (stThreads s) keys}
+  refreshNoteGroups
 
 -- Every key carrying the same conversation as one of these.
 --
@@ -5568,32 +5586,36 @@ noteTargetKeys st =
         relevant k =
           Map.member k (stVerdicts st) || Map.member k (stThreads st)
       let
-        groupOf thread =
+        -- The whole group, found by its name, so editing keeps it a
+        -- single thread rather than forking per line.
+        --
+        -- By name and not by what the note says: two notes worded the
+        -- same — "typo", "why?" — are two notes, and matching on the
+        -- words made them one. Editing one then rewrote the other, and
+        -- an agent's reply to one appeared under both.
+        groupOf gid =
           let
             inGroup r =
               listToMaybe
                 ( filter
-                    (\k -> Map.lookup k (stThreads st) == Just thread)
+                    (\k -> Map.lookup k (stNoteGroups st) == Just gid)
                     (rowFeedbackKeys r)
                 )
           in
             mapMaybe inGroup (fvRows fv)
+        groupAmong keys =
+          listToMaybe (mapMaybe (\k -> Map.lookup k (stNoteGroups st)) keys)
         -- a conversation anywhere in the hunk under the cursor: from any
         -- line of the hunk, :note continues that thread rather than
         -- opening a second one a few lines away
-        hunkThread = do
+        hunkGroup = do
           h <- hunkUnderCursor st
           r <- safeIdx (fvRuns fv) h
-          case mapMaybe (\k -> Map.lookup k (stThreads st)) (runKeys r) of
-            (t : _) -> Just t
-            [] -> Nothing
-      noted <- case mapMaybe (\k -> Map.lookup k (stThreads st)) ks of
-        (n : _) ->
-          -- the whole group sharing this conversation, so editing keeps
-          -- it a single thread rather than forking per line
-          Just (Just (groupOf n))
-        [] -> case hunkThread of
-          Just t -> Just (Just (groupOf t))
+          groupAmong (runKeys r)
+      noted <- case groupAmong ks of
+        Just gid -> Just (Just (groupOf gid))
+        Nothing -> case hunkGroup of
+          Just gid -> Just (Just (groupOf gid))
           Nothing ->
             if any relevant ks
               then Just Nothing
@@ -5623,6 +5645,7 @@ applyNote text keys = do
       n <- liftIO (clearThread (stConn st) (repoText st) keys)
       modify $ \s ->
         s {stThreads = foldr Map.delete (stThreads s) keys}
+      refreshNoteGroups
       setMsg $
         if n == 0
           then "no notes here"
@@ -5637,6 +5660,7 @@ applyNote text keys = do
         update k m = Map.insert k (place (Map.findWithDefault [] k m)) m
       modify $ \s ->
         s {stThreads = foldr update (stThreads s) markedKeys}
+      refreshNoteGroups
       setMsg $
         if n == 0
           then "no verdicts here yet — mark with ! or ? first"
@@ -6073,6 +6097,7 @@ switchRepo target = do
       loaded <- liftIO $ do
         verdicts <- loadVerdicts conn (T.pack target)
         threads <- loadThreads conn (T.pack target)
+        groups <- loadNoteGroups conn (T.pack target)
         rebase <- rebaseStatus target
         branch <- currentBranch target
         headAt <- headCommit target
@@ -6087,15 +6112,17 @@ switchRepo target = do
         -- and the rest of it in the background, so the first change in a
         -- directory nothing is changed in yet is noticed here too
         watchTracked (stWatch st) target
-        pure (verdicts, threads, rebase, branch, headAt, files, passId)
+        pure (verdicts, threads, groups, rebase, branch, headAt, files, passId)
       let
-        (verdicts, threads, rebase, branch, headAt, files, passId) = loaded
+        (verdicts, threads, groups, rebase, branch, headAt, files, passId) =
+          loaded
       modify $ \s ->
         s
           { stRoot = target
           , stFiles = files
           , stVerdicts = verdicts
           , stThreads = threads
+          , stNoteGroups = groups
           , stRebase = rebase
           , stBranch = branch
           , stHead = headAt
