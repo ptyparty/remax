@@ -145,7 +145,9 @@ Start one as soon as the one-off pass is done, and **always pass
 `--state`**:
 
 ```sh
-remax -C "$REPO" list --wait --state /tmp/remax-seen --json > /tmp/feedback.json
+SEEN="/tmp/remax-seen$(printf %s "$REPO" | tr / -)"
+FEEDBACK="/tmp/remax-feedback$(printf %s "$REPO" | tr / -).json"
+remax -C "$REPO" list --wait --state "$SEEN" --json > "$FEEDBACK"
 ```
 
 The state file is where remax keeps a fingerprint of the listing you were
@@ -154,6 +156,18 @@ which is not the moment you last looked — everything that happened while
 you were reading, thinking and writing has been absorbed into the new
 baseline, and the wait sits through it. With it, a change that landed
 while you were busy is still there waiting for you.
+
+**Name both files after the review**, as above, rather than picking one
+fixed path. The fingerprint is of a particular repository, and it has to
+survive from one of your waits to the next — so it cannot be per-process
+— which means a fixed path is shared with every other agent on the
+machine watching some other review. remax will not act on a fingerprint
+recorded for somewhere else, so nothing wakes you spuriously; but it has
+nothing to measure from either, and falls back to measuring from now.
+That is exactly the case `--state` exists to prevent: whatever the
+reviewer did while you were busy is absorbed into the baseline and you
+sit through it. The output file wants its own name for the plainer
+reason that two agents writing one path overwrite each other's feedback.
 
 When it completes you are woken with it. Read the file, act on it, and
 **start another one** — a wait is a single shot, and while none is

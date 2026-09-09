@@ -353,11 +353,24 @@ list fmt while stateFile = do
     digest = do
       rows <- mapM (\r -> fmap ((,) r) (punchRows conn (T.pack r))) roots
       pure (punchJson "" rows)
+    -- which review the fingerprint below is of
+    watching = T.intercalate "\t" (map T.pack roots)
     remembered = case stateFile of
       Nothing -> pure Nothing
       Just path -> do
         got <- try (TIO.readFile path) :: IO (Either IOException Text)
-        pure (either (const Nothing) Just got)
+        pure $ case got of
+          Left _ -> Nothing
+          Right raw -> case T.breakOn "\n" raw of
+            (recorded, rest)
+              | recorded == watching -> Just (T.drop 1 rest)
+            -- a fingerprint of somewhere else says nothing about here,
+            -- and believing one is worse than having none: this
+            -- repository's listing will not match it, so the wait
+            -- returns at once with nothing to report. Measure from now
+            -- instead. A file written before the scope was recorded
+            -- reads as somewhere else, and costs one such measurement.
+            _ -> Nothing
   case while of
     ListNow -> pure ()
     ListOnChange -> do
@@ -383,7 +396,10 @@ list fmt while stateFile = do
       settle `finally` clearWaiting
   forM_ stateFile $ \path -> do
     now <- digest
-    void (try (TIO.writeFile path now) :: IO (Either IOException ()))
+    void
+      ( try (TIO.writeFile path (watching <> "\n" <> now)) ::
+          IO (Either IOException ())
+      )
   here <- getCurrentDirectory
   found <- mapM (\r -> fmap ((,) r) (punchRows conn (T.pack r))) roots
   let
