@@ -213,6 +213,18 @@ data Picker = Picker
   , pkSel :: Int
   }
 
+-- The selector that was last on screen, kept whole so it can be brought
+-- back exactly as it was left — the query typed into it, what that
+-- matched, and which row was under the cursor.
+--
+-- Two overlays answer to this. The tree is the file finder, flat or
+-- hierarchical; the picker is buffers, commits, branches, repositories
+-- and project search. Which of the two it was is part of what gets
+-- remembered, because coming back to the other one is not coming back.
+data Selector
+  = LastTree TreeView
+  | LastPicker Picker
+
 -- The note editor overlay: a small modal buffer over the lines it will
 -- annotate (resolved when the popup opened).
 data NotePopup = NotePopup
@@ -351,6 +363,7 @@ data St = St
   , stLastRows :: [(Text, Text, Text, Int)] -- and the rows it wrote, to undo it
   , stOpened :: Set.Set FilePath -- files opened by hand, pinned across refreshes
   , stPicker :: Maybe Picker
+  , stLastSelector :: Maybe Selector -- brought back by ␣', as it was
   , stNotePopup :: Maybe NotePopup
   , stThreads :: Map.Map Text [Post] -- note conversations by line key, posts in order
   , -- which named group each noted key belongs to. Two notes worded the
@@ -608,6 +621,7 @@ runReview mode root roots story = do
           , stLastRows = []
           , stOpened = Set.empty
           , stPicker = Nothing
+          , stLastSelector = Nothing
           , stNotePopup = Nothing
           , stThreads = threads0
           , stNoteGroups = noteGroups0
@@ -1216,6 +1230,7 @@ app theme =
             >> ensureCurrentHighlighted
             >> reanchorBody
             >> syncComposing
+            >> rememberSelector
     , appStartEvent = do
         vty <- getVtyHandle
         let
@@ -1428,6 +1443,7 @@ aroundGroups mode =
     ( "getting around"
     ,
       [ ("Ctrl-p", "find a file, flat and ranked")
+      , ("\9251 '", "the last selector again, as you left it")
       , ("\9251 t", "the same dialog, as a tree")
       , ("\8633", "in either: flat \8596 tree, filter kept")
       , ("Ctrl-a", "in either: show the ignored files too")
@@ -1673,6 +1689,7 @@ spaceMenuEntries =
   , ("b", "open files", openBufferPicker)
   , ("t", "project tree", openTree)
   , ("R", "switch repository", openRepoPicker)
+  , ("'", "last selector", reopenLastSelector)
   , ("n", "note popup", openNotePopup NoteAsked)
   , ("e", "$EDITOR here", editCurrent)
   , ("p", "pending filter", togglePendingOnly)
@@ -2173,6 +2190,38 @@ syncComposing = do
     forM_ (stComposing st) (\was -> liftIO (setComposing (stConn st) was False))
     forM_ writing (\now -> liftIO (setComposing (stConn st) now True))
     modify (\s -> s {stComposing = writing})
+
+-- Keep whichever selector is on screen, so ␣' can bring it back.
+--
+-- Watched after every event rather than saved wherever one closes. They
+-- close from several places — Escape, a choice taken, a repository
+-- switched out from under them — and the one that forgot to save would
+-- quietly reopen something older instead. What is open now is what
+-- comes back, and the last event that had one open is the state it was
+-- left in: Escape and Enter both close without disturbing the query or
+-- the row, so what is remembered is what was on screen.
+rememberSelector :: EventM Name St ()
+rememberSelector = do
+  st <- get
+  let
+    onScreen = case (stTree st, stPicker st) of
+      (Just tv, _) -> Just (LastTree tv)
+      (_, Just pk) -> Just (LastPicker pk)
+      _ -> Nothing
+  forM_ onScreen (\sel -> modify (\s -> s {stLastSelector = Just sel}))
+
+-- Reopen it. Helix spells this ␣' and means the same thing by it: not
+-- a fresh dialog of the same kind, but the one you had, with what you
+-- had typed into it and where you had got to in the results.
+reopenLastSelector :: EventM Name St ()
+reopenLastSelector = do
+  st <- get
+  case stLastSelector st of
+    Nothing -> setMsg "nothing selected yet this session"
+    Just (LastTree tv) ->
+      modify (\s -> s {stTree = Just tv, stPicker = Nothing})
+    Just (LastPicker pk) ->
+      modify (\s -> s {stPicker = Just pk, stTree = Nothing})
 
 -- Write the window's origin back after an event, and move the viewport
 -- by the same amount so nothing jumps.
@@ -6142,6 +6191,9 @@ switchRepo target = do
           , stPassId = passId
           , stMode = mode
           , stPlaces = saved
+          , -- it listed the repository we just left; bringing it back
+            -- here would offer files that are not in front of us
+            stLastSelector = Nothing
           , stCurF = 0
           , stCurH = 0
           , stWritten = Set.empty
