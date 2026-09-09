@@ -11,9 +11,11 @@
 -- and when hunk boundaries move.
 module Remax.Key
   ( lineKeys
+  , noteGroupId
   ) where
 
 import Data.Digest.Pure.SHA (sha256, showDigest)
+import Data.List (sort)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -39,6 +41,23 @@ lineKeys repo file markedLines =
         key : go (Map.insert lid (ordinal + 1) seen) rest
   in
     go Map.empty markedLines
+
+-- One name for the lines a note was written across.
+--
+-- A note is stored under every key of its group, so something has to be
+-- able to find the siblings again. Comparing what the notes *say* was
+-- that something, and two notes worded the same — "typo", "why?" — were
+-- indistinguishable from one note spanning both places: an agent's
+-- reply to one landed on all of them, and the same conversation
+-- appeared under hunks nobody had asked about. So the group is named
+-- instead, from the keys it covers, and the name is what is stored.
+--
+-- Derived from the keys rather than drawn at random so that noting the
+-- same lines again continues the group it continued before, and so that
+-- nothing here needs a source of entropy.
+noteGroupId :: Text -> [Text] -> Text
+noteGroupId repo keys =
+  sha256Hex (T.intercalate "\NUL" ("remax/group/1" : repo : sort keys))
 
 sha256Hex :: Text -> Text
 sha256Hex =

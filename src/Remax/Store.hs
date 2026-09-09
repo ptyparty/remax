@@ -7,8 +7,8 @@
 -- at the time (advisory — content keys are the identity; the number is
 -- a courtesy for humans and agents reading the punch list). Notes are a
 -- conversation: ordered posts with an author, kept per line key in
--- note_post (every key of a noted group carries the same thread, the
--- same way the old single note column did). Passes record when each
+-- note_post, every key of a noted group carrying the same thread under
+-- the same group name (see Remax.Key.noteGroupId). Passes record when each
 -- review ran, so "what did I review yesterday" stays answerable.
 module Remax.Store
   ( Verdict (..)
@@ -21,6 +21,7 @@ module Remax.Store
   , recordVerdicts
   , Post (..)
   , loadThreads
+  , loadNoteGroups
   , saveReviewerPost
   , appendAgentPost
   , clearThread
@@ -43,7 +44,7 @@ import Control.Monad (unless, void, when)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -60,6 +61,8 @@ import System.Directory
 import System.FilePath ((</>))
 import System.IO.Error (catchIOError)
 import System.Posix.Process (getProcessID)
+
+import Remax.Key (noteGroupId)
 
 data Verdict = Reviewed | Flagged | Questioned
   deriving (Eq, Ord, Show)
@@ -131,6 +134,7 @@ openStore = do
     \  author TEXT NOT NULL,\
     \  body TEXT NOT NULL,\
     \  created_at TEXT NOT NULL DEFAULT (datetime('now')),\
+    \  group_id TEXT,\
     \  PRIMARY KEY (repo, key, seq))"
   -- A flag whose note is still being typed is not news yet: remax marks
   -- the repository while a note popup is open, and an agent waiting on
@@ -167,6 +171,11 @@ migrate conn = do
     execute_ conn "ALTER TABLE line_verdict ADD COLUMN commit_subject TEXT"
   unless ("reply" `elem` names) $
     execute_ conn "ALTER TABLE line_verdict ADD COLUMN reply TEXT"
+  postCols <-
+    query_ conn "PRAGMA table_info(note_post)" ::
+      IO [(Int, Text, Text, Int, Maybe Text, Int)]
+  let
+    postNames = map (\(_, name, _, _, _, _) -> name) postCols
   -- one-time carry-over from the old note/reply column pair into the
   -- conversation table: note becomes the opening reviewer post, reply
   -- the agent's answer after it
@@ -190,6 +199,11 @@ migrate conn = do
         \ SELECT repo, key, 1, 'agent', reply, updated_at\
         \ FROM line_verdict WHERE reply IS NOT NULL"
       execute_ conn "UPDATE line_verdict SET note = NULL, reply = NULL"
+  -- last, so that anything the carry-over above just inserted is named
+  -- too rather than left without a group
+  unless ("group_id" `elem` postNames) $ do
+    execute_ conn "ALTER TABLE note_post ADD COLUMN group_id TEXT"
+    nameExistingGroups conn
 
 loadVerdicts :: Connection -> Text -> IO (Map Text Verdict)
 loadVerdicts conn repo = do
@@ -378,6 +392,50 @@ composingNow conn repos = do
       repos
   pure (any (not . null) rows)
 
+-- Name the groups that were recorded before groups had names.
+--
+-- Done the way the code used to do it, which is the point: keys of one
+-- file whose conversation read the same were treated as one group,
+-- because comparing the words was the only handle there was. Those
+-- notes keep behaving exactly as they did; only what happens from here
+-- is different. Run once, when the column appears.
+nameExistingGroups :: Connection -> IO ()
+nameExistingGroups conn = withTransaction conn $ do
+  rows <-
+    query_
+      conn
+      "SELECT repo, key, author, body FROM note_post ORDER BY repo, key, seq" ::
+      IO [(Text, Text, Text, Text)]
+  places <-
+    query_ conn "SELECT repo, key, file FROM line_verdict" ::
+      IO [(Text, Text, Text)]
+  let
+    fileOf =
+      Map.fromList (map (\(repo, key, file) -> ((repo, key), file)) places)
+    -- each key's conversation, in order, as something comparable
+    saidBy =
+      Map.fromListWith
+        (flip (++))
+        ( map
+            (\(repo, key, author, body) -> ((repo, key), [(author, body)]))
+            rows
+        )
+    -- what used to count as one group: same repository, same file, same
+    -- words. A note on a key no verdict remains for groups alone.
+    sameGroup ((repo, key), said) =
+      ((repo, Map.findWithDefault key (repo, key) fileOf, said), [key])
+    grouped = Map.fromListWith (++) (map sameGroup (Map.toList saidBy))
+    name ((repo, _, _), keys) =
+      map (\key -> (noteGroupId repo keys, repo, key)) keys
+  mapM_
+    ( \(gid, repo, key) ->
+        execute
+          conn
+          "UPDATE note_post SET group_id = ? WHERE repo = ? AND key = ?"
+          (gid, repo, key)
+    )
+    (concatMap name (Map.toList grouped))
+
 loadThreads :: Connection -> Text -> IO (Map Text [Post])
 loadThreads conn repo = do
   rows <-
@@ -390,6 +448,19 @@ loadThreads conn repo = do
     add (key, author, body) =
       Map.insertWith (flip (++)) key [Post author body]
   pure (foldr add Map.empty (reverse rows))
+
+-- Which named group each key's conversation belongs to. The session
+-- needs this to tell one note from another note worded the same.
+loadNoteGroups :: Connection -> Text -> IO (Map Text Text)
+loadNoteGroups conn repo = do
+  rows <-
+    query
+      conn
+      "SELECT DISTINCT key, group_id FROM note_post\
+      \ WHERE repo = ? AND group_id IS NOT NULL"
+      (Only repo) ::
+      IO [(Text, Text)]
+  pure (Map.fromList rows)
 
 nextSeq :: Connection -> Text -> Text -> IO Int
 nextSeq conn repo key = do
@@ -423,6 +494,13 @@ saveReviewerPost :: Connection -> Text -> Text -> [Text] -> IO Int
 saveReviewerPost conn repo body keys =
   withTransaction conn $ do
     marked <- markedKeys conn repo keys
+    -- a group that already has a name keeps it, so editing a note does
+    -- not re-form the group under a second one
+    held <- heldGroupId conn repo marked
+    let
+      gid = case held of
+        Just g -> g
+        Nothing -> noteGroupId repo marked
     mapM_
       ( \key -> do
           trailing <- trailingPost conn repo key
@@ -437,17 +515,70 @@ saveReviewerPost conn repo body keys =
               seq_ <- nextSeq conn repo key
               execute
                 conn
-                "INSERT INTO note_post (repo, key, seq, author, body)\
-                \ VALUES (?, ?, ?, 'reviewer', ?)"
-                (repo, key, seq_, body)
+                "INSERT INTO note_post (repo, key, seq, author, body, group_id)\
+                \ VALUES (?, ?, ?, 'reviewer', ?, ?)"
+                (repo, key, seq_, body, gid)
+      )
+      marked
+    -- every post on these keys answers to the one name, including any
+    -- that predate it and any key joining the group now
+    mapM_
+      ( \key ->
+          execute
+            conn
+            "UPDATE note_post SET group_id = ? WHERE repo = ? AND key = ?"
+            (gid, repo, key)
       )
       marked
     pure (length marked)
 
+-- The name these keys' conversation already goes by, if any of them
+-- carries one.
+heldGroupId :: Connection -> Text -> [Text] -> IO (Maybe Text)
+heldGroupId conn repo keys =
+  let
+    batch ks = do
+      let
+        holes = mconcat (replicate (length ks - 1) ", ?")
+      rows <-
+        query
+          conn
+          ( Query
+              ( "SELECT group_id FROM note_post WHERE repo = ?\
+                \ AND group_id IS NOT NULL AND key IN (?"
+                  <> holes
+                  <> ") LIMIT 1"
+              )
+          )
+          (toRow (Only repo) <> toRow ks) ::
+          IO [Only Text]
+      pure (map (\(Only g) -> g) rows)
+  in
+    if null keys
+      then pure Nothing
+      else do
+        found <- mapM batch (chunks 400 keys)
+        pure (listToMaybe (concat found))
+
+-- Every key the named group covers.
+groupMembers :: Connection -> Text -> Text -> IO [Text]
+groupMembers conn repo gid = do
+  rows <-
+    query
+      conn
+      "SELECT DISTINCT key FROM note_post WHERE repo = ? AND group_id = ?"
+      (repo, gid) ::
+      IO [Only Text]
+  pure (map (\(Only k) -> k) rows)
+
 -- An agent's post, addressed by any line key of a noted group; it lands
--- on every key carrying the same thread in the same file, so the
--- session shows one conversation under the group. A key without a
--- thread takes the post alone. Returns how many lines it landed on.
+-- on every key of that group, so the session shows one conversation
+-- under the lines the note was written across. A key without a thread
+-- takes the post alone. Returns how many lines it landed on.
+--
+-- The group is found by name. It used to be found by comparing what the
+-- notes said, which made two notes worded alike into one group and sent
+-- a reply to hunks nobody had asked about; see noteGroupId.
 appendAgentPost :: Connection -> Text -> Text -> Text -> Text -> IO Int
 appendAgentPost conn repo author key body = do
   present <-
@@ -459,21 +590,21 @@ appendAgentPost conn repo author key body = do
   case present of
     (Only 0 : _) -> pure 0
     _ -> do
-      threads <- loadThreads conn repo
-      let
-        groupKeys = case Map.lookup key threads of
-          Nothing -> [key]
-          Just thread ->
-            Map.keys (Map.filter (== thread) threads)
+      held <- heldGroupId conn repo [key]
+      (gid, groupKeys) <- case held of
+        -- a line nobody has noted takes the post by itself, under a name
+        -- of its own, so an answer to it can be found again later
+        Nothing -> pure (noteGroupId repo [key], [key])
+        Just g -> fmap ((,) g) (groupMembers conn repo g)
       withTransaction conn $
         mapM_
           ( \k -> do
               seq_ <- nextSeq conn repo k
               execute
                 conn
-                "INSERT INTO note_post (repo, key, seq, author, body)\
-                \ VALUES (?, ?, ?, ?, ?)"
-                (repo, k, seq_, author, body)
+                "INSERT INTO note_post (repo, key, seq, author, body, group_id)\
+                \ VALUES (?, ?, ?, ?, ?, ?)"
+                (repo, k, seq_, author, body, gid)
           )
           groupKeys
       pure (length groupKeys)
