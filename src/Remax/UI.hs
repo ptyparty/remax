@@ -1465,12 +1465,14 @@ aroundGroups mode =
       ]
     )
   ,
-    ( "the : line"
+    ( "the " <> promptKeys mode <> " line"
     ,
-      [ (":", "commands — a bare : lists them all")
+      [ (promptKeys mode, "commands — a bare one lists them all")
       , (":base", "pick what to diff against")
       , (":rebase", "review commit by commit")
-      , (":q", "quit")
+      , -- the command is :q whatever the keymap, but an emacs hand
+        -- reaches for its own chord and should find it here
+        (quitKeys mode, "quit")
       ]
     )
   ]
@@ -1810,21 +1812,51 @@ fileMenuLayer view =
 -- The resting screen names the way out that fits the session it is in:
 -- with other checkouts in reach, a clean one is most often a cue to go
 -- and look at the next, and gr is hard to guess from an empty pane.
+-- How to leave, and how to reach the command line, in the words of the
+-- keymap the reader chose.
+--
+-- The command is q whatever they are using, but the way to it is not.
+-- Emacs has no : — it opens the command line with M-x, so telling an
+-- emacs reader to press : is telling them to type a colon into their
+-- buffer — and it has its own chord for leaving outright, which is the
+-- one that hand will reach for.
+quitKeys :: KeyMode -> Text
+quitKeys mode = case mode of
+  KeysEmacs -> "C-x C-c"
+  _ -> ":q"
+
+promptKeys :: KeyMode -> Text
+promptKeys mode = case mode of
+  KeysEmacs -> "M-x"
+  _ -> ":"
+
 idleBody :: St -> Widget Name
 idleBody st =
   let
+    keys = cfgKeys (stConfig st)
     hint =
       if length (stRoots st) > 1
-        then "  watching for changes · gr switches repository · :base · :q quits"
-        else
-          "  watching for changes · :base REF or :mode switches the view · :q quits"
+        then "  watching for changes · gr switches repository · :base"
+        else "  watching for changes · :base REF or :mode switches the view"
   in
+    -- On its own line, and last, because this is the screen a reader
+    -- reaches with nothing to do on it — and the one they reach by
+    -- opening remax somewhere there was nothing to review, wanting out
+    -- again. It used to sit at the end of the line above, behind three
+    -- other things.
+
     padBottom Max . padRight Max $
       vBox
         [ txt " "
         , withAttr doneMarkAttr (txt "  ✓ all clear — nothing to review")
         , txt " "
         , withAttr hintAttr (txt hint)
+        , -- the key lit and the word dim, the way the space menu reads,
+          -- rather than in the colour that everywhere else means reviewed
+          hBox
+            [ withAttr noteInlineAttr (txt ("  " <> quitKeys keys))
+            , withAttr hintAttr (txt " quits")
+            ]
         ]
 
 headerBar :: St -> Widget Name
@@ -3130,11 +3162,21 @@ statusBar st =
           Nothing -> txt ""
       Nothing -> txt ""
     -- in vi the verbs sit under the leader, so the hint has to say so
+    -- Named for the keymap in use, all three of them. The verbs sit
+    -- under a leader in vi and under C-c in emacs, and emacs has no
+    -- space leader at all — so it has no space menu and no ␣? either,
+    -- and reaches the sheet the way it reaches every other command.
     verbHint = case cfgKeys (stConfig st) of
       KeysVi -> "\9251\9166 accept · \9251! flag · \9251q question · \9251? keys "
-      _ -> "\9166 accept · ! flag · ? question · \9251 menu · \9251? keys "
+      KeysEmacs ->
+        "C-c \9166 accept · C-c ! flag · C-c ? question · M-x help "
+      KeysHelix -> "\9166 accept · ! flag · ? question · \9251 menu · \9251? keys "
     hint = case currentFileMay st of
-      Nothing -> ": command · \9251? keys · :q quit "
+      Nothing ->
+        promptKeys (cfgKeys (stConfig st))
+          <> " command · \9251? keys · "
+          <> quitKeys (cfgKeys (stConfig st))
+          <> " quit "
       Just fv ->
         (if fvStale fv then "hunks refresh on Esc · " else "") <> verbHint
     meterSeg =
@@ -4757,7 +4799,16 @@ advanceToPending = do
     pending = filter (pairPending st) wrapped
   case unvisited ++ pending of
     ((f, h) : _) -> parkAnchor f h
-    [] -> modify (\s -> s {stMsg = "All hunks have verdicts — :q to quit."})
+    [] ->
+      modify
+        ( \s ->
+            s
+              { stMsg =
+                  "All hunks have verdicts — "
+                    <> quitKeys (cfgKeys (stConfig s))
+                    <> " to quit."
+              }
+        )
 
 -- Write the buffer through to the working file. remax writes eagerly —
 -- a normal-mode edit and Esc from insert both land here — which a
