@@ -364,6 +364,10 @@ data St = St
   , stOpened :: Set.Set FilePath -- files opened by hand, pinned across refreshes
   , stPicker :: Maybe Picker
   , stLastSelector :: Maybe Selector -- brought back by ␣', as it was
+  , -- where the tray viewport was sitting as of the last event: the
+    -- first row on screen and how many fit. Only the band around it is
+    -- actually drawn; see tray.
+    stTraySeen :: (Int, Int)
   , stNotePopup :: Maybe NotePopup
   , stThreads :: Map.Map Text [Post] -- note conversations by line key, posts in order
   , -- which named group each noted key belongs to. Two notes worded the
@@ -622,6 +626,7 @@ runReview mode root roots story = do
           , stOpened = Set.empty
           , stPicker = Nothing
           , stLastSelector = Nothing
+          , stTraySeen = (0, 0)
           , stNotePopup = Nothing
           , stThreads = threads0
           , stNoteGroups = noteGroups0
@@ -1231,6 +1236,7 @@ app theme =
             >> reanchorBody
             >> syncComposing
             >> rememberSelector
+            >> noteTrayView
     , appStartEvent = do
         vty <- getVtyHandle
         let
@@ -2118,8 +2124,45 @@ tray st =
             let
               pens = PenSet (ctxAttrName ctx) (ctxAttrMap ctx)
               width = availWidth ctx
+              rows = trayRows st
+              total = length rows
+              (seenTop, seenHeight) = stTraySeen st
+              -- Before the first frame there is no viewport to have seen,
+              -- so start at the top and draw enough to fill any pane.
+              paneRows = if seenHeight <= 0 then 200 else seenHeight
+              -- Where the tray is pointed, or is about to be. Before the
+              -- first frame there is no reading to go on, and the tray
+              -- follows the hunk under review — which on a large change
+              -- set is nowhere near the top, so assuming the top drew a
+              -- band nobody could see. A jump lands there in the same
+              -- event that scrolls, one frame ahead of any reading, so
+              -- the current row is worth covering either way.
+              focus = trayCurrentRow st
+              anchor =
+                if seenHeight <= 0
+                  then max 0 (focus - paneRows `div` 2)
+                  else seenTop
+              -- A margin either side of what is on screen, because this
+              -- reckoning is a frame behind: the scroll that moved the
+              -- tray happened after the last time brick told us where it
+              -- was. Scrolling moves it eight rows at a time and a jump
+              -- re-frames it outright, so a screen of slack is plenty.
+              margin = max 60 paneRows
+              lo = max 0 (min anchor focus - margin)
+              hi = min total (max (anchor + paneRows) focus + margin)
+              -- The rows outside the band are still *there* — the tray
+              -- holds a row per hunk in the change set, and the viewport
+              -- has to keep measuring the whole thing or scrolling would
+              -- stop short of the end. They are one background fill
+              -- apiece rather than an image per row, which costs nothing
+              -- to build and is never rasterized: the viewport crops it
+              -- away. Drawing all of them cost thirteen milliseconds a
+              -- keystroke on a change set of thirteen thousand hunks,
+              -- which is most of a frame spent on rows nobody can see.
+              blank n = if n <= 0 then V.emptyImage else V.backgroundFill width n
+              band = map (entryInk pens width) (take (hi - lo) (drop lo rows))
             render . raw . V.vertCat $
-              map (entryInk pens width) (trayRows st)
+              [blank lo] ++ band ++ [blank (total - hi)]
 
 -- Long paths compress like s/R/Quote.hs: every directory shrinks to its
 -- first character, the file name stays whole, and if even that is too
@@ -2209,6 +2252,18 @@ rememberSelector = do
       (_, Just pk) -> Just (LastPicker pk)
       _ -> Nothing
   forM_ onScreen (\sel -> modify (\s -> s {stLastSelector = Just sel}))
+
+-- Note where the tray is sitting, so the next frame knows which of its
+-- rows can be seen. Read after the event rather than during the draw
+-- because that is where brick will tell us; it is therefore one frame
+-- behind, which the margin in tray covers.
+noteTrayView :: EventM Name St ()
+noteTrayView = do
+  mvp <- lookupViewport TrayVP
+  forM_ mvp $ \vp -> do
+    let
+      seen = (_vpTop vp, snd (_vpSize vp))
+    modify (\s -> s {stTraySeen = seen})
 
 -- Reopen it. Helix spells this ␣' and means the same thing by it: not
 -- a fresh dialog of the same kind, but the one you had, with what you
@@ -3880,16 +3935,28 @@ scrollTrayToCurrent :: EventM Name St ()
 scrollTrayToCurrent = do
   st <- get
   mtvp <- lookupViewport TrayVP
-  case (mtvp, currentFileMay st) of
-    (Just tvp, Just fv) -> do
+  case mtvp of
+    Just tvp ->
+      setTop
+        (viewportScroll TrayVP)
+        (max 0 (trayCurrentRow st - (snd (_vpSize tvp) `div` 2)))
+    Nothing -> pure ()
+
+-- Which tray row the hunk under review is on. Where the tray is pointed
+-- when it follows, and — because that is where it will be pointed — part
+-- of deciding which rows are worth drawing.
+trayCurrentRow :: St -> Int
+trayCurrentRow st =
+  case currentFileMay st of
+    Nothing -> 0
+    Just fv ->
       let
         h = clampH (fvRuns fv) (stCurH st)
         isCur entry = case entry of
           TrayHunk f hh -> f == stCurF st && hh == h
           _ -> False
-        idx = fromMaybe 0 (findIndex isCur (trayEntries st))
-      setTop (viewportScroll TrayVP) (max 0 (idx - (snd (_vpSize tvp) `div` 2)))
-    _ -> pure ()
+      in
+        fromMaybe 0 (findIndex isCur (trayEntries st))
 
 -- Walk hunks in (file, hunk) order, wrapping; with pending-only mode on,
 -- hunks that already have verdicts are skipped entirely, and the
