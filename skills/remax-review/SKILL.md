@@ -52,11 +52,13 @@ the human says they are done reviewing, or closes the session.
 ## Reading the feedback
 
 ```sh
-remax -C /path/to/repo list --json
+remax -C /path/to/repo list --awaiting agent --json
 ```
 
-This prints the punch list (run it from anywhere — `-C` points at the
-target). It has one entry per conversation: the lines a note was written
+This prints the conversations waiting on you (run it from anywhere —
+`-C` points at the target). Drop `--awaiting agent` to see every
+conversation, including ones you have answered and ones with no note
+yet. Each entry is one conversation: the lines a note was written
 across, and the thread about them. Shape:
 
 ```json
@@ -71,6 +73,8 @@ across, and the thread about them. Shape:
               {"line_no": 43, "line": "+  in sum xs", "verdict": "questioned"}],
     "thread": [{"author": "reviewer", "body": "use mapMaybe here instead"},
                {"author": "agent", "body": "done — switched to mapMaybe"}],
+    "awaiting": "reviewer",
+    "lines_in_file": "none",
     "updated_at": "2026-08-23 19:23:51"}]}
 ```
 
@@ -132,6 +136,18 @@ which one it landed in.
   with) and a `body`. **Read the whole thread and act on the newest
   reviewer post**; if your own post is already the last word and still
   answers it, don't repeat yourself.
+- `awaiting` — whose turn it is. `"agent"`: the reviewer spoke last, so
+  act on it. `"reviewer"`: your post is the last word, so leave it unless
+  they answer. `"note"`: a verdict with no note yet — see *A
+  conversation with no note yet*.
+- `lines_in_file` — whether the conversation's `+` and unchanged lines
+  still stand together in the working file, spaced as their `line_no`s
+  were: `"all"`, `"some"` or `"none"`. The block may have moved up or
+  down. `"none"` usually means the code was already changed or deleted,
+  by you or in another commit. Check that the thread's point was met,
+  then say so with `reply` rather than editing again. `null` when there
+  is nothing distinctive to look for: every line is a `-` line, blank,
+  or only punctuation such as `}`.
 - `commit_sha` — set when the feedback was given during a
   commit-by-commit rebase review: that is the commit the feedback is
   about. Look its subject up in the top-level `commits` map. `null` for
@@ -159,8 +175,16 @@ Start one as soon as the one-off pass is done, and **always pass
 ```sh
 SEEN="/tmp/remax-seen$(printf %s "$REPO" | tr / -)"
 FEEDBACK="/tmp/remax-feedback$(printf %s "$REPO" | tr / -).json"
-remax -C "$REPO" list --wait --state "$SEEN" --json > "$FEEDBACK"
+remax -C "$REPO" list --wait --state "$SEEN" --json > "$FEEDBACK.part" &&
+  mv "$FEEDBACK.part" "$FEEDBACK"
 ```
+
+The rename keeps `$FEEDBACK` holding the last complete listing while
+the next wait runs. Reading it mid-wait gives you what you last saw
+rather than an empty file.
+
+Only the reviewer wakes a wait. Your replies and edits are not a change
+to it, so you never need to wait twice to get past your own work.
 
 The state file is where remax keeps a fingerprint of the listing you were
 last shown. Without it a wait measures change from the moment it starts,
