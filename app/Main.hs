@@ -6,8 +6,9 @@ import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, finally, try)
 import Control.Monad (forM, forM_, unless, void, when)
 import Data.Char (isControl, ord)
+import Data.Foldable (toList)
 import Data.List (nub)
-import Data.Maybe (fromMaybe)
+import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -31,6 +32,7 @@ import System.IO (hFlush, stdout)
 
 import Paths_remax (version)
 import Remax.Git (ReviewMode (..), branchRoot, childRepos, refExists, repoRoot)
+import Remax.Punch
 import Remax.Store
 import Remax.UI (runReview)
 import System.Posix.Process (getParentProcessID)
@@ -87,7 +89,7 @@ main = do
         Review marg -> review marg
         Forget mPath -> forget mPath
         List fmt while stateFile -> list fmt while stateFile
-        Reply key text -> reply key text
+        Reply target text -> reply target text
         Attend -> attend
         ShowVersion -> putStrLn ("remax " ++ showVersion version)
 
@@ -120,7 +122,7 @@ usage =
   \                                     you last saw rather than from now, so\n\
   \                                     a change while you were busy is not\n\
   \                                     missed\n\
-  \       remax [-C DIR] reply KEY TEXT  answer a note; shows in the review session\n\
+  \       remax [-C DIR] reply ID TEXT   answer a note; shows in the review session\n\
   \       remax [-C DIR] watching       say an agent is on this review, until\n\
   \                                     stopped; the session shows it in its\n\
   \                                     header, working or waiting\n\
@@ -149,9 +151,9 @@ parseArgs args0 =
           | Just cmd <- listArgs rest -> Right (mDir, cmd)
         ["watching"] -> Right (mDir, Attend)
         ["--version"] -> Right (mDir, ShowVersion)
-        ("reply" : key : rest)
+        ("reply" : target : rest)
           | not (null rest) ->
-              Right (mDir, Reply (T.pack key) (T.pack (unwords rest)))
+              Right (mDir, Reply (T.pack target) (T.pack (unwords rest)))
         _ -> Left usage
   in
     go Nothing args0
@@ -418,26 +420,32 @@ list fmt while stateFile = do
           -- play, so a single-repo listing reads exactly as before
           when (length roots > 1) $
             putStrLn ("── " ++ takeFileName repo ++ " ──")
-          printPunchRows rows
+          printPunchRows repo rows
 
-printPunchRows :: [PunchRow] -> IO ()
-printPunchRows rows =
-  forM_ rows $ \row -> do
-    let
-      position = case punchLineNo row of
-        Just n -> ":" <> T.pack (show n)
-        Nothing -> ""
+printPunchRows :: FilePath -> [PunchRow] -> IO ()
+printPunchRows repo rows = do
+  let
+    subjects = commitSubjects rows
+  forM_ (conversations repo rows) $ \conversation -> do
     TIO.putStrLn
-      ( punchVerdict row
-          <> "  "
-          <> punchFile row
-          <> position
+      ( conversationFile conversation
           <> "  ("
-          <> punchAt row
+          <> conversationUpdatedAt conversation
           <> ")"
       )
-    TIO.putStrLn ("    " <> punchLine row)
-    forM_ (punchThread row) $ \post ->
+    forM_ (conversationLines conversation) $ \line -> do
+      let
+        position = case punchLineNumber line of
+          Just n -> " :" <> T.pack (show n)
+          Nothing -> ""
+      TIO.putStrLn
+        ( "    "
+            <> verdictText (punchLineVerdict line)
+            <> position
+            <> "  "
+            <> punchLineText line
+        )
+    forM_ (conversationThread conversation) $ \post ->
       case T.lines (postBody post) of
         [] -> pure ()
         (firstLine : more) -> do
@@ -446,28 +454,27 @@ printPunchRows rows =
             indent = T.replicate (T.length label) " "
           TIO.putStrLn ("    " <> label <> firstLine)
           forM_ more (\l -> TIO.putStrLn ("    " <> indent <> l))
-    forM_ (punchCommitSha row) $ \sha ->
+    forM_ (conversationCommitSha conversation) $ \sha ->
       TIO.putStrLn
         ( "    commit: "
             <> sha
-            <> " "
-            <> fromMaybe "" (punchCommitSubject row)
+            <> maybe "" (" " <>) (Map.lookup sha subjects)
         )
 
--- An agent's post in a note conversation: KEY is the item's key from
+-- An agent's post in a note conversation: ID is a conversation's id from
 -- `list --json`; the post appends to the whole thread's group and
 -- renders in order, with its author, in a running session.
--- A key belongs to exactly one repository — it hashes the repo path
--- along with the line — so from a directory of checkouts we can simply
--- offer the key to each and let the one that owns it answer.
+-- An id belongs to exactly one repository — it hashes the repo path
+-- along with the lines — so from a directory of checkouts we can simply
+-- offer the id to each and let the one that owns it answer.
 reply :: Text -> Text -> IO ()
-reply key text = do
+reply target text = do
   roots <- targetRepos
   conn <- openStore
   attached <-
-    mapM (\r -> fmap ((,) r) (appendAgentPost conn (T.pack r) "agent" key text)) roots
+    mapM (\r -> fmap ((,) r) (appendAgentPost conn (T.pack r) "agent" target text)) roots
   case filter ((> 0) . snd) attached of
-    [] -> die "No such key recorded for this repository."
+    [] -> die "No such conversation recorded for this repository."
     hits ->
       forM_ hits $ \(repo, n) ->
         putStrLn
@@ -482,49 +489,44 @@ reply key text = do
 -- The punch list for machines (agents acting on review feedback). The
 -- line text carries its +/- marker; line numbers are advisory positions
 -- from when the verdict was recorded.
--- Items carry their own repo, because a listing can now span several:
--- an agent aggregating a story's feedback needs to know which checkout
--- each item lives in before it can act on any of it.
+-- Conversations have their own repo, because a listing can now span
+-- several: an agent aggregating a story's feedback needs to know which
+-- checkout each conversation lives in before it can act on any of it.
 punchJson :: Text -> [(FilePath, [PunchRow])] -> Text
 punchJson scope found =
   let
-    item repo row =
+    lineJson line =
       jsonObject
-        [ ("key", jsonString (punchKey row))
-        , ("repo", jsonString (T.pack repo))
-        , ("file", jsonString (punchFile row))
-        , ("verdict", jsonString (punchVerdict row))
-        , ("line", jsonString (punchLine row))
-        , ("line_no", maybe "null" (T.pack . show) (punchLineNo row))
-        , ("note", maybe "null" jsonString (openingNote row))
-        , ("reply", maybe "null" jsonString (latestAnswer row))
-        , ("thread", threadJson (punchThread row))
-        , ("commit_sha", maybe "null" jsonString (punchCommitSha row))
-        , ("commit_subject", maybe "null" jsonString (punchCommitSubject row))
-        , ("updated_at", jsonString (punchAt row))
+        [ ("line_no", maybe "null" (T.pack . show) (punchLineNumber line))
+        , ("line", jsonString (punchLineText line))
+        , ("verdict", jsonString (verdictText (punchLineVerdict line)))
         ]
-    items =
-      concatMap (\(repo, rows) -> map (item repo) rows) found
+    conversationJson conversation =
+      jsonObject
+        [ ("id", jsonString (groupIdToText (conversationId conversation)))
+        , ("repo", jsonString (T.pack (conversationRepo conversation)))
+        , ("file", jsonString (conversationFile conversation))
+        , ("commit_sha", maybe "null" jsonString (conversationCommitSha conversation))
+        , ("lines", jsonArray (map lineJson (toList (conversationLines conversation))))
+        , ("thread", threadJson (conversationThread conversation))
+        , ("updated_at", jsonString (conversationUpdatedAt conversation))
+        ]
+    commits =
+      jsonObject
+        ( map
+            (\(sha, subject) -> (sha, jsonString subject))
+            (Map.toList (commitSubjects (concatMap snd found)))
+        )
   in
     jsonObject
       [ ("repo", jsonString scope)
-      , ("items", "[" <> T.intercalate ", " items <> "]")
+      , ("commits", commits)
+      ,
+        ( "conversations"
+        , jsonArray
+            (map conversationJson (concatMap (uncurry conversations) found))
+        )
       ]
-
--- Compatibility views of the thread: the opening reviewer post is the
--- "note", the newest non-reviewer post the "reply".
-openingNote :: PunchRow -> Maybe Text
-openingNote row =
-  case punchThread row of
-    (post : _)
-      | postAuthor post == "reviewer" -> Just (postBody post)
-    _ -> Nothing
-
-latestAnswer :: PunchRow -> Maybe Text
-latestAnswer row =
-  case filter (\p -> postAuthor p /= "reviewer") (reverse (punchThread row)) of
-    (post : _) -> Just (postBody post)
-    [] -> Nothing
 
 threadJson :: [Post] -> Text
 threadJson posts =
@@ -535,7 +537,10 @@ threadJson posts =
         , ("body", jsonString (postBody post))
         ]
   in
-    "[" <> T.intercalate ", " (map one posts) <> "]"
+    jsonArray (map one posts)
+
+jsonArray :: [Text] -> Text
+jsonArray values = "[" <> T.intercalate ", " values <> "]"
 
 jsonObject :: [(Text, Text)] -> Text
 jsonObject fields =
