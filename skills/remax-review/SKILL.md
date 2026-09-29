@@ -1,6 +1,6 @@
 ---
 name: remax-review
-description: Act on code-review feedback recorded by remax — read the reviewer's flagged/questioned lines and notes for a repository, fix them, and understand how the review session sees your edits. Use when asked to address review feedback, check for remax flags, or work alongside a human reviewing in remax. Takes an argument: no argument answers what is outstanding once and stops; `watch` keeps waiting on the reviewer and reacting until told to stop; `stop` ends a watch.
+description: "Act on code-review feedback recorded by remax — read the reviewer's flagged/questioned lines and notes for a repository, fix them, and understand how the review session sees your edits. Use when asked to address review feedback, check for remax flags, or work alongside a human reviewing in remax. Takes an argument: no argument answers what is outstanding once and stops; `watch` keeps waiting on the reviewer and reacting until told to stop; `stop` ends a watch."
 ---
 
 # Working with a remax reviewer
@@ -56,26 +56,28 @@ remax -C /path/to/repo list --json
 ```
 
 This prints the punch list (run it from anywhere — `-C` points at the
-target). Shape:
+target). It has one entry per conversation: the lines a note was written
+across, and the thread about them. Shape:
 
 ```json
 {"repo": "/path/to/repo",
- "items": [
-   {"file": "src/Foo.hs",
+ "commits": {"8b36d626c": "Lists the air carriers an integration supports"},
+ "conversations": [
+   {"id": "3f9c…",
     "repo": "/path/to/repo",
-    "verdict": "flagged",
-    "line": "+  let xs = map fromJust ys",
-    "line_no": 42,
-    "note": "use mapMaybe here instead",
+    "file": "src/Foo.hs",
+    "commit_sha": "8b36d626c",
+    "lines": [{"line_no": 42, "line": "+  let xs = map fromJust ys", "verdict": "flagged"},
+              {"line_no": 43, "line": "+  in sum xs", "verdict": "questioned"}],
     "thread": [{"author": "reviewer", "body": "use mapMaybe here instead"},
                {"author": "agent", "body": "done — switched to mapMaybe"}],
     "updated_at": "2026-08-23 19:23:51"}]}
 ```
 
-### The `line` field says which side it is
+### Each line's marker says which side it is
 
-`line` carries the line with a diff marker on the front, and the marker
-tells you what kind of feedback this is:
+Each entry in `lines` has a `line` with a diff marker on the front, and
+the marker tells you what kind of feedback this is:
 
 - `+` — a line your change added. Ordinary feedback on your work.
 - `-` — a line your change removed.
@@ -100,38 +102,48 @@ repository you get that repository, at a folder of them you get **all of
 them at once**, which is usually what you want, since one story's
 feedback is spread across its repos.
 
-That is why every item carries its own **`repo`**. Read it rather than
-the top-level one: when the listing spans checkouts, the top level names
-the directory you asked about, and only `item.repo` tells you which
-checkout an item lives in. `cd` there before editing the file named by
-`item.file`, which is always relative to `item.repo`.
+That is why every conversation has its own **`repo`**. Read it rather
+than the top-level one: when the listing spans checkouts, the top level
+names the directory you asked about, and only `conversation.repo` tells
+you which checkout a conversation lives in. `cd` there before editing the
+file named by `conversation.file`, which is always relative to
+`conversation.repo`.
 
-`remax reply KEY TEXT` works from the folder too — a key belongs to
+`remax reply ID TEXT` works from the folder too — an id belongs to
 exactly one repository, so remax finds the owner itself and tells you
 which one it landed in.
 
-- `verdict: "flagged"` (`!`) — the reviewer wants this changed. Fix it.
-- `verdict: "questioned"` (`?`) — the reviewer wants an explanation or a
-  fix. If the code is wrong, fix it. If the code is right as written,
-  answer the question — see **Replying to notes** below. Never answer
-  by adding comments to the code, and never edit the reviewer's note.
-- `thread` — the conversation on this item, oldest first. Each post
-  has an `author` (`"reviewer"` is the human; agents appear under the
-  name they replied with) and a `body`. **Read the whole thread and act
-  on the newest reviewer post**; if your own post is already the last
-  word and still answers it, don't repeat yourself.
-- `note` / `reply` — compatibility views of the thread: the opening
-  reviewer post and the newest non-reviewer post. Prefer `thread`.
-- `key` — the item's stable identifier; the address for `remax reply`.
-- `line` — the exact line text, prefixed `+` (added) or `-` (removed
-  from the base). Find it by content.
+- `id` — the conversation's address for `remax reply`.
+- `lines` — the lines the conversation is about, by `line_no`. The `-`
+  and `+` sides of a change are numbered separately, so they can
+  interleave; pair them by content, not by position. Each has its own
+  `verdict`, and the lines of one conversation can differ:
+  - `"flagged"` (`!`) — the reviewer wants this changed. Fix it.
+  - `"questioned"` (`?`) — the reviewer wants an explanation or a fix.
+    If the code is wrong, fix it. If the code is right as written,
+    answer the question — see **Replying to notes** below. Never answer
+    by adding comments to the code, and never edit the reviewer's note.
+- `line` — the exact line text, prefixed `+` (added), `-` (removed from
+  the base) or a space (unchanged). Find it by content.
 - `line_no` — where the line sat when the verdict was recorded;
   advisory, may have drifted. Trust `line` over `line_no`.
-- `commit_sha` / `commit_subject` — set when the feedback was given
-  during a commit-by-commit rebase review: that is the commit the
-  feedback is about. `null` for ambient reviews; recover the introducing
-  commit yourself from the line text when it matters
-  (`git log -S"<line text>"` or `git blame`).
+- `thread` — the conversation, oldest first. Each post has an `author`
+  (`"reviewer"` is the human; agents appear under the name they replied
+  with) and a `body`. **Read the whole thread and act on the newest
+  reviewer post**; if your own post is already the last word and still
+  answers it, don't repeat yourself.
+- `commit_sha` — set when the feedback was given during a
+  commit-by-commit rebase review: that is the commit the feedback is
+  about. Look its subject up in the top-level `commits` map. `null` for
+  ambient reviews; recover the introducing commit yourself from the line
+  text when it matters (`git log -S"<line text>"` or `git blame`).
+
+One `id` can head more than one conversation. That happens when some of
+a note's lines differ from the rest in thread, file or commit: the
+reviewer edited or added a note over only some of them, or re-verdicted
+some at a later commit. Read each thread. It is still one piece of
+feedback: fix it once and reply once. A reply to the `id` reaches every
+line under it, in all of them.
 
 ## Staying and reacting (`watch`)
 
@@ -186,7 +198,7 @@ of that task ending, however it ended — so a watch you have quietly
 dropped is not a secret, and one you forgot to stop is a lie you are
 still telling.
 
-### An item with no note yet
+### A conversation with no note yet
 
 Recording a verdict and writing its note are two separate events: remax
 records the verdict the instant the key is pressed, so the reviewer's
@@ -195,30 +207,31 @@ saying what is wrong. A wait holds while a note is being written, so
 ordinarily you are woken once, with it:
 
 ```json
-{"line": "+TWO CHANGED", "verdict": "flagged", "note": "use a constant"}
+{"lines": [{"line": "+TWO CHANGED", "verdict": "flagged"}],
+ "thread": [{"author": "reviewer", "body": "use a constant"}]}
 ```
 
-You can still meet an item with `"note": null` — a bare `!` with the note
-popup turned off, or one they opened and abandoned. There is nothing to
-act on. Do not guess at what they meant: say you are holding off, and
-wait again with the same `--state` file.
+You can still meet a conversation whose `thread` is `[]` — a bare `!`
+with the note popup turned off, or one they opened and abandoned. There
+is nothing to act on. Do not guess at what they meant: say you are
+holding off, and wait again with the same `--state` file.
 
 Never answer a flag whose note you have not read. Your reply would land
 *ahead* of theirs in the thread, which reads as a non-sequitur to them.
 
-### One flagged line, two items
+### One flagged line, two sides
 
-Flagging a line that was *changed* covers both sides of the change, so it
-comes back as two items — one for the removal, one for the addition —
-carrying the same note:
+Flagging a line that was *changed* covers both sides of the change, so
+its conversation has two lines — the removal and the addition:
 
 ```json
-{"line": "-two",        "verdict": "flagged", "note": "use a named constant"}
-{"line": "+TWO CHANGED", "verdict": "flagged", "note": "use a named constant"}
+{"lines": [{"line": "-two", "verdict": "flagged"},
+           {"line": "+TWO CHANGED", "verdict": "flagged"}],
+ "thread": [{"author": "reviewer", "body": "use a named constant"}]}
 ```
 
-That is one piece of feedback. Fix it once, and `reply` to one of the
-keys rather than both, or the reviewer reads your answer twice.
+That is one piece of feedback. Fix it once, and `reply` once to its
+`id`.
 
 ### Both sides need the same store
 
@@ -231,11 +244,11 @@ is writing to.
 ## Replying to notes
 
 ```sh
-remax -C /path/to/repo reply KEY "answer text"
+remax -C /path/to/repo reply ID "answer text"
 ```
 
-`KEY` is the item's `key` from `list --json`. The reply **appends a
-post to the item's conversation** and renders inline, in order and
+`ID` is the conversation's `id` from `list --json`. The reply **appends
+a post to that conversation** and renders inline, in order and
 under your name, in the reviewer's live session — this is the primary
 way to answer a `?`, because the answer appears exactly where the
 question was asked. Also summarize the answer in your chat reply when
@@ -247,9 +260,9 @@ closes the whole conversation.
 
 ## Fixing per-commit feedback
 
-When items carry `commit_sha`, the reviewer reviewed commit by commit
-and the fix should usually land in that commit, not at the branch tip.
-Group items by `commit_sha` and either amend surgically
+When conversations have a `commit_sha`, the reviewer reviewed commit by
+commit and the fix should usually land in that commit, not at the branch
+tip. Group conversations by `commit_sha` and either amend surgically
 (`git rebase --exec false <base>`, fix at each relevant stop,
 `git commit -a --amend --no-edit`, `git rebase --continue`) or make
 fixup commits (`git commit --fixup <sha>` per group, then
@@ -271,7 +284,7 @@ tip is the safe fallback.
   itself; the fixed lines go back to pending and they re-review.
 - Never write to `~/.local/state/remax/review.db` directly, and never
   run `remax forget` unless the human explicitly asks.
-- An empty `items` list means no outstanding feedback.
+- An empty `conversations` list means no outstanding feedback.
 - Under `watch`, keep one `list --wait` in flight and start a fresh one
   each time it wakes you. With none running you are only as current as
   the last time you asked. Without `watch`, do not start one at all —
