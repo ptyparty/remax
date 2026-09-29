@@ -9,6 +9,7 @@ module Remax.Git
   , baseLines
   , looksBinary
   , refExists
+  , readFileOr
   , mainlineRef
   , branchRoot
   , trackedChanges
@@ -42,6 +43,8 @@ import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import qualified Data.Text.Encoding.Error as TEE
 import qualified Data.Text.Read as TR
 import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
 import qualified System.Environment as Env
@@ -609,7 +612,9 @@ rebaseStatus root = do
 
 readFileOr :: Text -> FilePath -> IO Text
 readFileOr fallback path =
-  catchIOError (fmap T.pack (readFile path)) (const (pure fallback))
+  catchIOError
+    (fmap (TE.decodeUtf8With TEE.lenientDecode) (BS.readFile path))
+    (const (pure fallback))
 
 -- The full message (with author and date) of one commit, for the
 -- commit-under-review popup.

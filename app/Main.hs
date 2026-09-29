@@ -9,6 +9,8 @@ import Data.Char (isControl, ord)
 import Data.Foldable (toList)
 import Data.List (nub)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (mapMaybe)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -31,7 +33,14 @@ import System.FilePath
 import System.IO (hFlush, stdout)
 
 import Paths_remax (version)
-import Remax.Git (ReviewMode (..), branchRoot, childRepos, refExists, repoRoot)
+import Remax.Git
+  ( ReviewMode (..)
+  , branchRoot
+  , childRepos
+  , readFileOr
+  , refExists
+  , repoRoot
+  )
 import Remax.Punch
 import Remax.Store
 import Remax.UI (runReview)
@@ -45,7 +54,7 @@ data Cmd
     -- exist, which is the point — you forget a directory *because* it
     -- is gone.
     Forget (Maybe FilePath)
-  | List ListFormat ListWhen (Maybe FilePath)
+  | List ListOptions
   | Reply Text Text
   | Attend
   | ShowVersion
@@ -60,6 +69,13 @@ data ListFormat = ListText | ListJson
 -- ask again on a timer.
 data ListWhen = ListNow | ListOnChange
   deriving (Eq)
+
+data ListOptions = ListOptions
+  { listFormat :: ListFormat
+  , listWhen :: ListWhen
+  , listStateFile :: Maybe FilePath
+  , listAwaiting :: Maybe Awaiting
+  }
 
 -- A file remax keeps the last listing's fingerprint in. With one, a wait
 -- is measured from what the caller last saw rather than from the moment
@@ -88,7 +104,7 @@ main = do
       case cmd of
         Review marg -> review marg
         Forget mPath -> forget mPath
-        List fmt while stateFile -> list fmt while stateFile
+        List options -> list options
         Reply target text -> reply target text
         Attend -> attend
         ShowVersion -> putStrLn ("remax " ++ showVersion version)
@@ -97,16 +113,31 @@ main = do
 listArgs :: [String] -> Maybe Cmd
 listArgs =
   let
-    go fmt while stateFile args =
+    go options args =
       case args of
-        [] -> Just (List fmt while stateFile)
-        ("--json" : rest) | fmt == ListText -> go ListJson while stateFile rest
-        ("--wait" : rest) | while == ListNow -> go fmt ListOnChange stateFile rest
+        [] -> Just (List options)
+        ("--json" : rest)
+          | listFormat options == ListText ->
+              go options {listFormat = ListJson} rest
+        ("--wait" : rest)
+          | listWhen options == ListNow ->
+              go options {listWhen = ListOnChange} rest
         ("--state" : path : rest)
-          | stateFile == Nothing -> go fmt while (Just path) rest
+          | listStateFile options == Nothing ->
+              go options {listStateFile = Just path} rest
+        ("--awaiting" : who : rest)
+          | listAwaiting options == Nothing
+          , Just a <- parseAwaiting (T.pack who) ->
+              go options {listAwaiting = Just a} rest
         _ -> Nothing
   in
-    go ListText ListNow Nothing
+    go
+      ListOptions
+        { listFormat = ListText
+        , listWhen = ListNow
+        , listStateFile = Nothing
+        , listAwaiting = Nothing
+        }
 
 usage :: String
 usage =
@@ -114,6 +145,7 @@ usage =
   \       remax [-C DIR] forget [PATH]  forget verdicts under PATH (default: the\n\
   \                                     current directory); PATH need not still exist\n\
   \       remax [-C DIR] list [--json] [--wait] [--state FILE]\n\
+  \                      [--awaiting note|agent|reviewer]\n\
   \                                     show flagged and questioned lines;\n\
   \                                     --wait prints nothing until the list\n\
   \                                     changes, so an agent can wait on a\n\
@@ -121,7 +153,11 @@ usage =
   \                                     --state FILE measures that from what\n\
   \                                     you last saw rather than from now, so\n\
   \                                     a change while you were busy is not\n\
-  \                                     missed\n\
+  \                                     missed; your own replies and edits\n\
+  \                                     do not count as a change; --awaiting\n\
+  \                                     shows only conversations waiting on\n\
+  \                                     that party, and a wait wakes only\n\
+  \                                     when one is new or changed\n\
   \       remax [-C DIR] reply ID TEXT   answer a note; shows in the review session\n\
   \       remax [-C DIR] watching       say an agent is on this review, until\n\
   \                                     stopped; the session shows it in its\n\
@@ -345,18 +381,30 @@ attendBeatUs = 1000000
 waitPollUs :: Int
 waitPollUs = 400000
 
-list :: ListFormat -> ListWhen -> Maybe FilePath -> IO ()
-list fmt while stateFile = do
+list :: ListOptions -> IO ()
+list options = do
+  let
+    fmt = listFormat options
+    while = listWhen options
+    stateFile = listStateFile options
   roots <- targetRepos
   conn <- openStore
   let
-    -- what the caller would be shown, as one comparable value: the
-    -- listing has changed exactly when what they would read has
     digest = do
-      rows <- mapM (\r -> fmap ((,) r) (punchRows conn (T.pack r))) roots
-      pure (punchJson "" rows)
+      rows <- mapM (punchRows conn . T.pack) roots
+      pure (reviewerDigest (listAwaiting options) (concat rows))
+    news before now =
+      case listAwaiting options of
+        Nothing -> now /= before
+        Just _ -> not (now `Set.isSubsetOf` before)
     -- which review the fingerprint below is of
-    watching = T.intercalate "\t" (map T.pack roots)
+    watching =
+      T.intercalate
+        "\t"
+        ( "digest/2"
+            : maybe "all" awaitingText (listAwaiting options)
+            : map T.pack roots
+        )
     remembered = case stateFile of
       Nothing -> pure Nothing
       Just path -> do
@@ -365,7 +413,7 @@ list fmt while stateFile = do
           Left _ -> Nothing
           Right raw -> case T.breakOn "\n" raw of
             (recorded, rest)
-              | recorded == watching -> Just (T.drop 1 rest)
+              | recorded == watching -> Just (Set.fromList (T.lines (T.drop 1 rest)))
             -- a fingerprint of somewhere else says nothing about here,
             -- and believing one is worse than having none: this
             -- repository's listing will not match it, so the wait
@@ -388,7 +436,7 @@ list fmt while stateFile = do
           -- what is wrong with it, and returning on it means answering
           -- before being told
           busy <- composingNow conn (map T.pack roots)
-          unless (now /= before && not busy) $ do
+          unless (news before now && not busy) $ do
             -- re-announced rather than announced: the timestamp is what
             -- tells a session somebody is still here, so an agent that
             -- dies stops saying so without having to say anything
@@ -399,38 +447,73 @@ list fmt while stateFile = do
   forM_ stateFile $ \path -> do
     now <- digest
     void
-      ( try (TIO.writeFile path (watching <> "\n" <> now)) ::
+      ( try (TIO.writeFile path (T.unlines (watching : Set.toList now))) ::
           IO (Either IOException ())
       )
   here <- getCurrentDirectory
   found <- mapM (\r -> fmap ((,) r) (punchRows conn (T.pack r))) roots
+  listed <-
+    mapM
+      ( \(repo, rows) -> do
+          groups <- loadNoteGroups conn (T.pack repo)
+          let
+            wanted conversation =
+              maybe True (== conversationAwaiting conversation) (listAwaiting options)
+            shown = filter wanted (conversations repo groups rows)
+            files = nub (map conversationFile shown)
+          contents <- mapM (readFileOr "" . (repo </>) . T.unpack) files
+          let
+            fileLines = Map.fromList (zip files (map T.lines contents))
+          pure (repo, map (describe fileLines) shown)
+      )
+      found
   let
     asJson = fmt == ListJson
-    nonEmpty = filter (not . null . snd) found
+    subjects = commitSubjects (concatMap snd found)
+    nonEmpty = filter (not . null . snd) listed
     scope = case roots of
       [only] -> only
       _ -> here
   if asJson
-    then TIO.putStrLn (punchJson (T.pack scope) found)
+    then TIO.putStrLn (punchJson (T.pack scope) subjects listed)
     else
       if null nonEmpty
-        then putStrLn "No flagged or questioned lines recorded for this repository."
-        else forM_ nonEmpty $ \(repo, rows) -> do
+        then putStrLn $
+          case listAwaiting options of
+            Nothing -> "No flagged or questioned lines recorded for this repository."
+            Just party -> "No conversations awaiting " ++ T.unpack (awaitingText party) ++ "."
+        else forM_ nonEmpty $ \(repo, described) -> do
           -- name the repository only when there is more than one in
           -- play, so a single-repo listing reads exactly as before
           when (length roots > 1) $
             putStrLn ("── " ++ takeFileName repo ++ " ──")
-          printPunchRows repo rows
+          printConversations subjects described
 
-printPunchRows :: FilePath -> [PunchRow] -> IO ()
-printPunchRows repo rows = do
-  let
-    subjects = commitSubjects rows
-  forM_ (conversations repo rows) $ \conversation -> do
+data Described = Described
+  { describedConversation :: Conversation
+  , describedLinesInFile :: Maybe LinesInFile
+  }
+
+describe :: Map.Map Text [Text] -> Conversation -> Described
+describe fileLines conversation =
+  Described
+    { describedConversation = conversation
+    , describedLinesInFile =
+        linesInFile
+          (Map.findWithDefault [] (conversationFile conversation) fileLines)
+          (conversationLines conversation)
+    }
+
+printConversations :: Map.Map Text Text -> [Described] -> IO ()
+printConversations subjects described =
+  forM_ described $ \(Described conversation inFile) -> do
     TIO.putStrLn
       ( conversationFile conversation
           <> "  ("
           <> conversationUpdatedAt conversation
+          <> ", awaiting "
+          <> awaitingText (conversationAwaiting conversation)
+          <> maybe "" (\l -> ", lines in file: " <> linesInFileText l) inFile
           <> ")"
       )
     forM_ (conversationLines conversation) $ \line -> do
@@ -492,8 +575,8 @@ reply target text = do
 -- Conversations have their own repo, because a listing can now span
 -- several: an agent aggregating a story's feedback needs to know which
 -- checkout each conversation lives in before it can act on any of it.
-punchJson :: Text -> [(FilePath, [PunchRow])] -> Text
-punchJson scope found =
+punchJson :: Text -> Map.Map Text Text -> [(FilePath, [Described])] -> Text
+punchJson scope subjects listed =
   let
     lineJson line =
       jsonObject
@@ -501,7 +584,7 @@ punchJson scope found =
         , ("line", jsonString (punchLineText line))
         , ("verdict", jsonString (verdictText (punchLineVerdict line)))
         ]
-    conversationJson conversation =
+    conversationJson (Described conversation inFile) =
       jsonObject
         [ ("id", jsonString (groupIdToText (conversationId conversation)))
         , ("repo", jsonString (T.pack (conversationRepo conversation)))
@@ -509,13 +592,19 @@ punchJson scope found =
         , ("commit_sha", maybe "null" jsonString (conversationCommitSha conversation))
         , ("lines", jsonArray (map lineJson (toList (conversationLines conversation))))
         , ("thread", threadJson (conversationThread conversation))
+        , ("awaiting", jsonString (awaitingText (conversationAwaiting conversation)))
+        , ("lines_in_file", maybe "null" (jsonString . linesInFileText) inFile)
         , ("updated_at", jsonString (conversationUpdatedAt conversation))
         ]
+    shown = concatMap snd listed
+    listedShas =
+      Set.fromList
+        (mapMaybe (conversationCommitSha . describedConversation) shown)
     commits =
       jsonObject
         ( map
             (\(sha, subject) -> (sha, jsonString subject))
-            (Map.toList (commitSubjects (concatMap snd found)))
+            (Map.toList (Map.restrictKeys subjects listedShas))
         )
   in
     jsonObject
@@ -524,9 +613,25 @@ punchJson scope found =
       ,
         ( "conversations"
         , jsonArray
-            (map conversationJson (concatMap (uncurry conversations) found))
+            (map conversationJson shown)
         )
       ]
+
+reviewerDigest :: Maybe Awaiting -> [PunchRow] -> Set.Set Text
+reviewerDigest party rows =
+  let
+    wanted row = maybe True (== awaiting (punchThread row)) party
+    rowJson row =
+      jsonObject
+        [ ("key", jsonString (lineKeyToText (punchKey row)))
+        , ("file", jsonString (punchFile row))
+        , ("commit_sha", maybe "null" jsonString (punchCommitSha row))
+        , ("line", jsonString (punchLine row))
+        , ("verdict", jsonString (verdictText (punchVerdict row)))
+        , ("thread", threadJson (filter isReviewerPost (punchThread row)))
+        ]
+  in
+    Set.fromList (map rowJson (filter wanted rows))
 
 threadJson :: [Post] -> Text
 threadJson posts =

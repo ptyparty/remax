@@ -20,6 +20,11 @@ module Remax.Store
   , finishPass
   , recordVerdicts
   , Post (..)
+  , Awaiting (..)
+  , isReviewerPost
+  , awaiting
+  , awaitingText
+  , parseAwaiting
   , loadThreads
   , loadNoteGroups
   , saveReviewerPost
@@ -77,6 +82,35 @@ data Post = Post
   , postBody :: Text
   }
   deriving (Eq, Ord, Show)
+
+data Awaiting = AwaitingNote | AwaitingAgent | AwaitingReviewer
+  deriving (Eq, Show)
+
+isReviewerPost :: Post -> Bool
+isReviewerPost post = postAuthor post == "reviewer"
+
+awaiting :: [Post] -> Awaiting
+awaiting posts =
+  case reverse posts of
+    [] -> AwaitingNote
+    (newest : _)
+      | isReviewerPost newest -> AwaitingAgent
+      | otherwise -> AwaitingReviewer
+
+awaitingText :: Awaiting -> Text
+awaitingText a =
+  case a of
+    AwaitingNote -> "note"
+    AwaitingAgent -> "agent"
+    AwaitingReviewer -> "reviewer"
+
+parseAwaiting :: Text -> Maybe Awaiting
+parseAwaiting t =
+  case t of
+    "note" -> Just AwaitingNote
+    "agent" -> Just AwaitingAgent
+    "reviewer" -> Just AwaitingReviewer
+    _ -> Nothing
 
 verdictText :: Verdict -> Text
 verdictText Reviewed = "reviewed"
@@ -684,12 +718,7 @@ resolveAnswered conn repo = do
 
 answeredKeys :: Map Text [Post] -> [Text]
 answeredKeys threads =
-  let
-    endsElsewhere posts = case reverse posts of
-      (p : _) -> postAuthor p /= "reviewer"
-      [] -> False
-  in
-    Map.keys (Map.filter endsElsewhere threads)
+  Map.keys (Map.filter ((== AwaitingReviewer) . awaiting) threads)
 
 -- Threads attach only to lines that already carry verdicts; noting an
 -- unmarked line would record a conversation nothing displays.
@@ -739,7 +768,6 @@ newtype LineKey = LineKey {lineKeyToText :: Text}
 
 data PunchRow = PunchRow
   { punchKey :: LineKey
-  , punchGroup :: Maybe GroupId
   , punchFile :: Text
   , punchVerdict :: Verdict
   , punchLine :: Text
@@ -762,14 +790,12 @@ punchRows conn repo = do
       \ ORDER BY file, line_no, updated_at DESC"
       (Only repo)
   threads <- loadThreads conn repo
-  groups <- loadNoteGroups conn repo
   let
     toPunch (key, file, verdictName, line, lineNo, sha, subject, at) =
       fmap
         ( \verdict ->
             PunchRow
               { punchKey = LineKey key
-              , punchGroup = fmap GroupId (Map.lookup key groups)
               , punchFile = file
               , punchVerdict = verdict
               , punchLine = line
