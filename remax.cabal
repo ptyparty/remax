@@ -111,6 +111,7 @@ executable remax
       Remax.Highlight
       Remax.Key
       Remax.Modal
+      Remax.Punch
       Remax.Store
       Remax.Theme
       Remax.Tree

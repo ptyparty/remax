@@ -34,6 +34,8 @@ module Remax.Store
   , clearWaiting
   , presenceNow
   , deleteKeys
+  , GroupId (..)
+  , LineKey (..)
   , PunchRow (..)
   , punchRows
   , repoRows
@@ -74,7 +76,7 @@ data Post = Post
   { postAuthor :: Text
   , postBody :: Text
   }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 verdictText :: Verdict -> Text
 verdictText Reviewed = "reviewed"
@@ -571,31 +573,21 @@ groupMembers conn repo gid = do
       IO [Only Text]
   pure (map (\(Only k) -> k) rows)
 
--- An agent's post, addressed by any line key of a noted group; it lands
--- on every key of that group, so the session shows one conversation
--- under the lines the note was written across. A key without a thread
--- takes the post alone. Returns how many lines it landed on.
+-- An agent's post, addressed by a group's name or by any line key of a
+-- noted group; it lands on every key of that group, so the session shows
+-- one conversation under the lines the note was written across. A key
+-- without a thread takes the post alone. Returns how many lines it
+-- landed on.
 --
 -- The group is found by name. It used to be found by comparing what the
 -- notes said, which made two notes worded alike into one group and sent
 -- a reply to hunks nobody had asked about; see noteGroupId.
 appendAgentPost :: Connection -> Text -> Text -> Text -> Text -> IO Int
-appendAgentPost conn repo author key body = do
-  present <-
-    query
-      conn
-      "SELECT COUNT(*) FROM line_verdict WHERE repo = ? AND key = ?"
-      (repo, key) ::
-      IO [Only Int]
-  case present of
-    (Only 0 : _) -> pure 0
-    _ -> do
-      held <- heldGroupId conn repo [key]
-      (gid, groupKeys) <- case held of
-        -- a line nobody has noted takes the post by itself, under a name
-        -- of its own, so an answer to it can be found again later
-        Nothing -> pure (noteGroupId repo [key], [key])
-        Just g -> fmap ((,) g) (groupMembers conn repo g)
+appendAgentPost conn repo author target body = do
+  addressed <- listedConversation conn repo target
+  case addressed of
+    Nothing -> pure 0
+    Just (gid, groupKeys) -> do
       withTransaction conn $
         mapM_
           ( \k -> do
@@ -608,6 +600,49 @@ appendAgentPost conn repo author key body = do
           )
           groupKeys
       pure (length groupKeys)
+
+listedConversation :: Connection -> Text -> Text -> IO (Maybe (Text, [Text]))
+listedConversation conn repo target = do
+  named <- groupMembers conn repo target
+  found <-
+    if null named
+      then do
+        byKey <- keyConversation conn repo target
+        case byKey of
+          Just conversation -> pure (Just conversation)
+          Nothing -> bareLineConversation conn repo target
+      else pure (Just (target, named))
+  case found of
+    Nothing -> pure Nothing
+    Just (_, keys) -> do
+      listed <- listedKeys conn repo keys
+      pure (if null listed then Nothing else found)
+
+bareLineConversation :: Connection -> Text -> Text -> IO (Maybe (Text, [Text]))
+bareLineConversation conn repo gid = do
+  rows <- repoRows conn repo
+  pure $
+    case filter (\(key, _) -> noteGroupId repo [key] == gid) rows of
+      ((key, _) : _) -> Just (gid, [key])
+      [] -> Nothing
+
+keyConversation :: Connection -> Text -> Text -> IO (Maybe (Text, [Text]))
+keyConversation conn repo key = do
+  present <-
+    query
+      conn
+      "SELECT COUNT(*) FROM line_verdict WHERE repo = ? AND key = ?"
+      (repo, key) ::
+      IO [Only Int]
+  case present of
+    (Only 0 : _) -> pure Nothing
+    _ -> do
+      held <- heldGroupId conn repo [key]
+      fmap Just $ case held of
+        -- a line nobody has noted takes the post by itself, under a name
+        -- of its own, so an answer to it can be found again later
+        Nothing -> pure (noteGroupId repo [key], [key])
+        Just g -> fmap ((,) g) (groupMembers conn repo g)
 
 -- Drop the whole conversation from some lines. Returns how many lines
 -- actually had one.
@@ -674,10 +709,39 @@ markedKeys conn repo keys =
   in
     fmap concat (mapM batch (chunks 400 keys))
 
+listedKeys :: Connection -> Text -> [Text] -> IO [Text]
+listedKeys conn repo keys =
+  let
+    batch ks = do
+      let
+        holes = mconcat (replicate (length ks - 1) ", ?")
+      rows <-
+        query
+          conn
+          ( Query
+              ( "SELECT key FROM line_verdict WHERE repo = ?\
+                \ AND verdict <> 'reviewed' AND key IN (?"
+                  <> holes
+                  <> ")"
+              )
+          )
+          (toRow (Only repo) <> toRow ks) ::
+          IO [Only Text]
+      pure (map (\(Only k) -> k) rows)
+  in
+    fmap concat (mapM batch (chunks 400 keys))
+
+newtype GroupId = GroupId {groupIdToText :: Text}
+  deriving (Eq, Ord, Show)
+
+newtype LineKey = LineKey {lineKeyToText :: Text}
+  deriving (Eq, Ord, Show)
+
 data PunchRow = PunchRow
-  { punchKey :: Text
+  { punchKey :: LineKey
+  , punchGroup :: Maybe GroupId
   , punchFile :: Text
-  , punchVerdict :: Text
+  , punchVerdict :: Verdict
   , punchLine :: Text
   , punchLineNo :: Maybe Int
   , punchThread :: [Post]
@@ -698,20 +762,26 @@ punchRows conn repo = do
       \ ORDER BY file, line_no, updated_at DESC"
       (Only repo)
   threads <- loadThreads conn repo
+  groups <- loadNoteGroups conn repo
   let
-    toPunch (key, file, verdict, line, lineNo, sha, subject, at) =
-      PunchRow
-        { punchKey = key
-        , punchFile = file
-        , punchVerdict = verdict
-        , punchLine = line
-        , punchLineNo = lineNo
-        , punchThread = Map.findWithDefault [] key threads
-        , punchCommitSha = sha
-        , punchCommitSubject = subject
-        , punchAt = at
-        }
-  pure (map toPunch rows)
+    toPunch (key, file, verdictName, line, lineNo, sha, subject, at) =
+      fmap
+        ( \verdict ->
+            PunchRow
+              { punchKey = LineKey key
+              , punchGroup = fmap GroupId (Map.lookup key groups)
+              , punchFile = file
+              , punchVerdict = verdict
+              , punchLine = line
+              , punchLineNo = lineNo
+              , punchThread = Map.findWithDefault [] key threads
+              , punchCommitSha = sha
+              , punchCommitSubject = subject
+              , punchAt = at
+              }
+        )
+        (parseVerdict verdictName)
+  pure (mapMaybe toPunch rows)
 
 repoRows :: Connection -> Text -> IO [(Text, Text)]
 repoRows conn repo =
