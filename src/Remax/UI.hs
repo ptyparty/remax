@@ -56,7 +56,7 @@ import Brick
   , withDefAttr
   , (<+>)
   )
-import Brick.BChan (BChan, newBChan, writeBChanNonBlocking)
+import Brick.BChan (BChan, newBChan, writeBChan, writeBChanNonBlocking)
 import Brick.Types (Size (Fixed, Greedy), Widget (Widget), availHeight, availWidth, ctxAttrMap, ctxAttrName, getContext, render, windowHeight)
 import Brick.Util (fg)
 import qualified Brick.Widgets.Border as B
@@ -64,7 +64,8 @@ import qualified Brick.Widgets.Border.Style as BS
 import qualified Brick.Widgets.Center as C
 import Control.Applicative ((<|>))
 import Control.Concurrent
-  ( forkIO
+  ( QSem
+  , forkIO
   , newEmptyMVar
   , newQSem
   , putMVar
@@ -73,16 +74,17 @@ import Control.Concurrent
   , threadDelay
   , waitQSem
   )
-import Control.Exception (IOException, evaluate, finally, try)
+import Control.Exception (IOException, SomeException, evaluate, finally, throwIO, try)
 import Control.Monad (forM, forM_, forever, guard, unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.State (get, modify, put)
 import Data.Algorithm.Diff (PolyDiff (..), getGroupedDiff)
 import Data.Char (chr, isAlphaNum, isSpace, ord, toLower)
-import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
 import Data.List
-  ( find
+  ( delete
+  , find
   , findIndex
   , groupBy
   , isPrefixOf
@@ -98,6 +100,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Read as TR
+import Data.Time.Clock (UTCTime)
 import Database.SQLite.Simple (Connection)
 import GHC.Clock (getMonotonicTime)
 import qualified Graphics.Vty as V
@@ -108,6 +111,7 @@ import System.Directory
   , createDirectoryIfMissing
   , doesDirectoryExist
   , doesFileExist
+  , getModificationTime
   , removeDirectoryRecursive
   , removeFile
   , renamePath
@@ -157,8 +161,10 @@ import Remax.Git
   , gitStateWatchDirs
   , hasStagedChanges
   , headCommit
+  , isIgnored
   , isTracked
   , listFiles
+  , listFilesUnder
   , listRefs
   , localBranches
   , looksBinary
@@ -195,6 +201,8 @@ data REvent
     -- to animate by
     Attending ([Text], [Text])
   | Tick
+  | Pulse
+  | JobDone Text (EventM Name St ())
 
 -- The one-line prompt at the bottom of the screen: / search or : command.
 data Prompt = SearchPrompt Text | CmdPrompt Text
@@ -331,6 +339,9 @@ data FileView = FileView
   , fvHighlighted :: Bool -- real syntax colors computed yet? plain until shown
   , fvHl :: Maybe TS.Highlighter -- vendored tree-sitter grammar, when we have one
   , fvRunDecls :: [Text] -- per run: the top-level declaration it falls under
+  , fvRemarks :: [Remark]
+  , fvPending :: !Int
+  , fvMtime :: Maybe UTCTime
   }
 
 data St = St
@@ -384,6 +395,17 @@ data St = St
   , stComposing :: Maybe Text -- repository we told the store is mid-note
   , stAttending :: ([Text], [Text]) -- repositories agents wait on / work on
   , stThrob :: !Int -- which frame the watching indicator is on
+  , stBusy :: [Text]
+  , stRepoInfo :: Map.Map FilePath [Text]
+  , stCountedVerdicts :: Map.Map Text Verdict
+  , stCountedThreads :: Map.Map Text [Post]
+  , stHighlighting :: Maybe FilePath
+  , stJobs :: IORef Int
+  , stWorkSlots :: QSem
+  , stEpoch :: !Int
+  , stReloading :: Map.Map FilePath Bool
+  , stRefreshing :: Bool
+  , stLoadedOnce :: Bool
   , stVi :: ViKeys -- a half-typed vi command: count, operator, what it awaits
   , stSearchDir :: Int -- which way / (or vi's ?) last searched: 1 or -1
   , stDeferAdvance :: Bool -- hold the post-mark jump until the note popup closes
@@ -488,8 +510,9 @@ watchTracked watch root =
     mapM_ (watch . fileDir root) tracked
 
 -- Shown once, in the status line, when the native watcher was refused.
--- Polling still notices everything; it just notices it a beat late, so
--- the message leads with the fix rather than the consequence.
+-- Polling follows git state and the file on screen; an edit to another
+-- file is picked up when that file is visited, so the message leads
+-- with the fix rather than the consequence.
 watchPollWarning :: Text
 watchPollWarning =
   "\9888 inotify full \8212 polling; sudo sysctl -w fs.inotify.max_user_instances=512"
@@ -531,30 +554,61 @@ runReview mode root roots story = do
   rebase0 <- rebaseStatus root
   branch0 <- currentBranch root
   head0 <- headCommit root
-  files <- loadAll cfg hls (rebaseEffMode rebase0 mode) root
   passId <- beginPass conn (T.pack root) (modeLabel mode)
   theme <- loadHelixTheme
   chan <- newBChan 64
+  jobs <- newIORef (0 :: Int)
+  slots <- newQSem 2
   final <- withWatcher $ \mgr polling -> do
     -- Watch only the directories that actually matter: where the
     -- changed files live, plus .git itself for index/HEAD updates.
     -- A recursive watch over the whole repository walks every build
     -- artifact directory and dominates startup on real projects.
-    watchedRef <- newIORef Set.empty
+    watchedRef <- newIORef (Map.empty :: Map.Map FilePath (Maybe FS.StopListening))
     let
-      watchDirOnce dir = do
-        seen <- readIORef watchedRef
-        unless (Set.member dir seen) $ do
+      asRemembered = normalise . dropTrailingPathSeparator
+      watchDirOnce given = do
+        let
+          dir = asRemembered given
+          claim seen =
+            if Map.member dir seen
+              then (seen, False)
+              else (Map.insert dir Nothing seen, True)
+        claimed <- atomicModifyIORef' watchedRef claim
+        when claimed $ do
           got <-
-            try (FS.watchDir mgr dir (const True) (dispatchFsEvent chan root)) ::
+            try (FS.watchDir mgr dir (const True) (dispatchFsEvent chan root dirWatch)) ::
               IO (Either IOException FS.StopListening)
-          -- remembered only when it took: a directory whose watch was
-          -- refused (inotify full, or gone between listing and watching)
-          -- is worth trying again the next time it comes up, and marking
-          -- it seen regardless meant it never was
+          -- a directory whose watch was refused (inotify full, or gone
+          -- between listing and watching) is worth trying again the next
+          -- time it comes up, and remembering it regardless meant it
+          -- never was
           case got of
-            Right _ -> modifyIORef' watchedRef (Set.insert dir)
-            Left _ -> pure ()
+            Right stop -> atomicModifyIORef' watchedRef (\seen -> (Map.insert dir (Just stop) seen, ()))
+            Left _ -> atomicModifyIORef' watchedRef (\seen -> (Map.delete dir seen, ()))
+      forgetDir given = do
+        let
+          dir = asRemembered given
+          beneath k = k == dir || (dir ++ "/") `isPrefixOf` k
+        dead <-
+          atomicModifyIORef'
+            watchedRef
+            ( \seen ->
+                let
+                  (gone, kept) = Map.partitionWithKey (\k _ -> beneath k) seen
+                in
+                  (kept, catMaybes (Map.elems gone))
+            )
+        forM_ dead (\stop -> void (try stop :: IO (Either IOException ())))
+      followDir dir =
+        if polling && ".git" `notElem` splitDirectories dir
+          then pure ()
+          else watchDirOnce dir
+      dirWatch =
+        DirWatch
+          { dirWatchFollow = followDir
+          , dirWatchForget = forgetDir
+          }
     gitDirs <- gitStateWatchDirs root
     forM_ gitDirs watchDirOnce
     -- the verdict store lives outside the repository; watching it makes
@@ -570,8 +624,7 @@ runReview mode root roots story = do
           ) ::
           IO (Either IOException FS.StopListening)
       )
-    forM_ files (watchDirOnce . fileDir root . fvPath)
-    watchTracked watchDirOnce root
+    watchTracked followDir root
     -- probed once: doing it per yank would be a process spawn a keystroke
     clip <- discoverClipboard
     -- and read once on the way in, so whatever was already on the
@@ -580,27 +633,13 @@ runReview mode root roots story = do
     -- the line you just cut, and `dd p` would not put the line back.
     alreadyThere <- readClipboard clip
     let
-      pendingCount =
-        length
-          (filter (runPending verdicts) (concatMap fvRuns files))
-      totalCount = length (concatMap fvRuns files)
       st0 =
         St
-          { stFiles = files
+          { stFiles = []
           , stCurF = 0
           , stCurH = 0
           , stVerdicts = verdicts
-          , stMsg =
-              if polling
-                then watchPollWarning
-                else
-                  if null files
-                    then "change set is empty — watching for changes"
-                    else
-                      tshow pendingCount
-                        <> " of "
-                        <> tshow totalCount
-                        <> " hunks pending"
+          , stMsg = if polling then watchPollWarning else "loading\8230"
           , stRoot = root
           , stMode = mode
           , stConn = conn
@@ -611,7 +650,7 @@ runReview mode root roots story = do
           , stLastGit = 0
           , stGitQueued = False
           , stChan = chan
-          , stWatch = watchDirOnce
+          , stWatch = followDir
           , stPrompt = Nothing
           , stLastSearch = ""
           , stBorder = fgOnly (scopeAttr theme "ui.linenr" (fg V.brightBlack))
@@ -641,6 +680,17 @@ runReview mode root roots story = do
           , stComposing = Nothing
           , stAttending = ([], [])
           , stThrob = 0
+          , stBusy = []
+          , stRepoInfo = Map.empty
+          , stCountedVerdicts = verdicts
+          , stCountedThreads = threads0
+          , stHighlighting = Nothing
+          , stJobs = jobs
+          , stWorkSlots = slots
+          , stEpoch = 0
+          , stReloading = Map.empty
+          , stRefreshing = False
+          , stLoadedOnce = False
           , stVi = viIdle
           , stSearchDir = 1
           , stDeferAdvance = False
@@ -673,6 +723,7 @@ runReview mode root roots story = do
     -- the first frame paints with plain tokens; this tick colorizes
     -- the file on screen immediately after, off the startup path
     void (writeBChanNonBlocking chan Tick)
+    void (writeBChanNonBlocking chan GitStateChanged)
     -- Who is waiting on this review, asked for on a beat.
     --
     -- The beat is the animation's as well as the question's, so it runs
@@ -760,10 +811,6 @@ allRunsInOrder st =
   in
     concatMap fileRuns (zip [0 ..] (stFiles st))
 
--- Every (file, hunk) pair in display order.
-allRunPairs :: St -> [(Int, Int)]
-allRunPairs = map fst . allRunsInOrder
-
 runAt :: St -> (Int, Int) -> Maybe Run
 runAt st (f, h) = do
   fv <- safeIdx (stFiles st) f
@@ -781,26 +828,10 @@ pairUnvisited st pair =
     Just r -> runUnvisited (stVerdicts st) r
     Nothing -> False
 
--- Does the code/comment filter let this hunk through? Unlike the pending
--- filter, this one governs every way of arriving at a hunk — walking,
--- auto-advance, and where a session opens — because "walk just the
--- comment hunks" is the whole point of asking for it.
-pairInFilter :: St -> (Int, Int) -> Bool
-pairInFilter st pair =
-  case runAt st pair of
-    Just r -> runFilterAllows (stRunFilter st) r
-    Nothing -> False
-
 -- Every hunk the filter admits, in display order.
 filteredRunPairs :: St -> [(Int, Int)]
 filteredRunPairs st =
   map fst (filter (runFilterAllows (stRunFilter st) . snd) (allRunsInOrder st))
-
--- The pairs whose hunks are still pending, in display order. What the
--- header counts and the meter measures, worked out in one walk.
-pendingRunPairs :: St -> [(Int, Int)]
-pendingRunPairs st =
-  map fst (filter (runPending (stVerdicts st) . snd) (allRunsInOrder st))
 
 -- Where a session begins: the first hunk nothing has been said about
 -- yet; only when every hunk has some response does the first still-
@@ -834,27 +865,56 @@ printSummary st = do
   forM_ (reverse (stPunch st)) $ \(path, line, v) ->
     putStrLn ("  " ++ T.unpack (verdictText v) ++ ": " ++ path ++ ":" ++ show line)
 
-dispatchFsEvent :: BChan REvent -> FilePath -> FS.Event -> IO ()
-dispatchFsEvent chan root ev = do
+data DirWatch = DirWatch
+  { dirWatchFollow :: FilePath -> IO ()
+  , dirWatchForget :: FilePath -> IO ()
+  }
+
+noisyDirNames :: [String]
+noisyDirNames =
+  filter (/= ".git") (map dropTrailingPathSeparator buildOutputDirs)
+
+followNewDirectory :: BChan REvent -> FilePath -> DirWatch -> FilePath -> IO ()
+followNewDirectory chan root dirWatch dir = do
+  ignored <- isIgnored root dir
+  unless ignored $ do
+    dirWatchFollow dirWatch dir
+    files <- listFilesUnder VisibleFiles root [dir]
+    mapM_ (dirWatchFollow dirWatch . fileDir root) files
+    void (writeBChanNonBlocking chan GitStateChanged)
+
+dispatchFsEvent :: BChan REvent -> FilePath -> DirWatch -> FS.Event -> IO ()
+dispatchFsEvent chan root dirWatch ev = do
   let
     absolute = FS.eventPath ev
     rel = makeRelative root absolute
     parts = splitDirectories rel
-    -- the same directories the file listing declines to enumerate: a
-    -- build writing thousands of files is not news about the review
-    noisy = any (`elem` map dropTrailingPathSeparator buildOutputDirs) parts
+    noisy = any (`elem` noisyDirNames) parts
+    underGit = ".git" `elem` parts
+    isDir = FS.eventIsDirectory ev == FS.IsDirectory
   unless noisy $
-    if ".git" `elem` parts
-      then
-        -- git updates the index by writing index.lock and renaming it, so
-        -- the lock file is the reliably-delivered signal
-        when
-          ( takeFileName rel
-              `elem` ["index", "index.lock", "HEAD", "HEAD.lock", "COMMIT_EDITMSG"]
-              || "refs" `elem` parts
-          )
-          (void (writeBChanNonBlocking chan GitStateChanged))
-      else void (writeBChanNonBlocking chan (FileChangedOnDisk absolute))
+    case ev of
+      FS.WatchedDirectoryRemoved {} -> do
+        dirWatchForget dirWatch absolute
+        void (writeBChanNonBlocking chan GitStateChanged)
+      FS.Removed {}
+        | isDir -> do
+            dirWatchForget dirWatch absolute
+            void (writeBChanNonBlocking chan GitStateChanged)
+      FS.Added {}
+        | isDir && not underGit ->
+            void (forkIO (followNewDirectory chan root dirWatch absolute))
+      _
+        | underGit ->
+            -- git updates the index by writing index.lock and renaming it,
+            -- so the lock file is the reliably-delivered signal
+            when
+              ( takeFileName rel
+                  `elem` ["index", "index.lock", "HEAD", "HEAD.lock", "COMMIT_EDITMSG"]
+                  || "refs" `elem` parts
+              )
+              (void (writeBChanNonBlocking chan GitStateChanged))
+        | otherwise -> void (writeBChanNonBlocking chan (FileChangedOnDisk absolute))
 
 -- Loading and rebuilding -----------------------------------------------------
 
@@ -873,19 +933,63 @@ loadAll cfg hls mode root = do
 -- A worker's IOException counts as "file not loadable", like loadOne's
 -- own error handling.
 forMaybeBounded :: (a -> IO (Maybe b)) -> [a] -> IO [Maybe b]
-forMaybeBounded f xs = do
-  slots <- newQSem 8
+forMaybeBounded f =
+  let
+    swallow x = do
+      got <- try (f x)
+      pure $ case got of
+        Left e -> let _ = (e :: IOException) in Nothing
+        Right r -> r
+  in
+    forBounded 8 swallow
+
+forBounded :: Int -> (a -> IO b) -> [a] -> IO [b]
+forBounded workers f xs = do
+  slots <- newQSem workers
   handles <- forM xs $ \x -> do
     slot <- newEmptyMVar
     _ <- forkIO $ do
       waitQSem slots
       got <- try (f x)
       signalQSem slots
-      putMVar slot $ case got of
-        Left e -> let _ = (e :: IOException) in Nothing
-        Right r -> r
+      putMVar slot got
     pure slot
-  forM handles takeMVar
+  forM handles $ \slot -> do
+    got <- takeMVar slot
+    case got of
+      Left e -> throwIO (e :: IOException)
+      Right r -> pure r
+
+pulseUs :: Int
+pulseUs = 120000
+
+startJob :: Text -> IO a -> (Either Text a -> EventM Name St ()) -> EventM Name St ()
+startJob label work finish = do
+  st <- get
+  let
+    chan = stChan st
+    jobs = stJobs st
+    beat = do
+      threadDelay pulseUs
+      void (writeBChanNonBlocking chan Pulse)
+      running <- readIORef jobs
+      when (running > 0) beat
+  modify (\s -> s {stBusy = stBusy s ++ [label]})
+  first <- liftIO (atomicModifyIORef' jobs (\n -> (n + 1, n == 0)))
+  when first (void (liftIO (forkIO beat)))
+  void . liftIO . forkIO $ do
+    got <- try work
+    atomicModifyIORef' jobs (\n -> (n - 1, ()))
+    writeBChan chan . JobDone label . finish $
+      case got of
+        Right result -> Right result
+        Left e -> Left (T.pack (show (e :: SomeException)))
+
+jobFailed :: Text -> Text -> EventM Name St ()
+jobFailed label err = setMsg ("! " <> label <> ": " <> err)
+
+withSlot :: QSem -> IO a -> IO a
+withSlot slots act = (waitQSem slots >> act) `finally` signalQSem slots
 
 loadOne ::
   Config ->
@@ -916,6 +1020,9 @@ loadOne cfg hls mode root path = do
               -- extension to go on, so the first line comes along
               fvHl = TS.highlighterFor hls path (listToMaybe newLs)
             , fvRunDecls = []
+            , fvRemarks = []
+            , fvPending = 0
+            , fvMtime = Nothing
             }
       (fv, _) <- rebuildFV cfg (T.pack root) fv0
       let
@@ -944,7 +1051,12 @@ loadOne cfg hls mode root path = do
           gotNew <- try (TIO.readFile (root </> path)) :: IO (Either IOException Text)
           case gotNew of
             Left _ -> pure Nothing
-            Right newTxt -> build False base (T.lines newTxt)
+            Right newTxt -> do
+              stamped <-
+                try (getModificationTime (root </> path)) :: IO (Either IOException UTCTime)
+              fmap
+                (fmap (\fv -> fv {fvMtime = either (const Nothing) Just stamped}))
+                (build False base (T.lines newTxt))
 
 diffBudgetUs :: Int
 diffBudgetUs = 400000
@@ -1016,20 +1128,10 @@ rebuildFV cfg repo fv = do
     ws = if cfgIgnoreWs cfg then WhitespaceIgnored else WhitespaceMatters
   let
     newLs = newSideLines fv
-    plain = pure (plainLines newLs)
   toks <-
-    case (fvHighlighted fv, fvHl fv) of
-      (True, Just hl) -> do
-        got <- TS.tsHighlight hl newLs
-        case got of
-          Just scoped -> do
-            let
-              toSeg (scope, t) = (scopeSeg scope, t)
-              segs = map (map toSeg) scoped
-            _ <- evaluate (forceTokLines segs `seq` segs)
-            pure segs
-          Nothing -> plain
-      _ -> plain
+    if fvHighlighted fv
+      then tokensFor fv newLs
+      else pure (plainLines newLs)
   (rows3, degraded) <- diffIO ws (fvBase fv) newLs
   let
     (rows, runs) = assemble sc repo (T.pack (fvPath fv)) rows3 toks
@@ -1046,6 +1148,30 @@ rebuildFV cfg repo fv = do
         }
     , degraded
     )
+
+tokensFor :: FileView -> [Text] -> IO [[Seg]]
+tokensFor fv newLs =
+  case fvHl fv of
+    Nothing -> pure (plainLines newLs)
+    Just hl -> do
+      got <- TS.tsHighlight hl newLs
+      case got of
+        Nothing -> pure (plainLines newLs)
+        Just scoped -> do
+          let
+            segs = map (map (\(scope, t) -> (scopeSeg scope, t))) scoped
+          _ <- evaluate (forceTokLines segs `seq` segs)
+          pure segs
+
+threadTokens :: [RowR] -> [[Seg]] -> [RowR]
+threadTokens rows ts =
+  case rows of
+    [] -> []
+    (row : rest) -> case rNewRow row of
+      Just _ -> case ts of
+        (tl : more) -> row {rToks = tl} : threadTokens rest more
+        [] -> row {rToks = []} : threadTokens rest []
+      Nothing -> row {rToks = []} : threadTokens rest ts
 
 -- Which columns the word diff marks on each of these rows, or nothing on
 -- any of them when the reader has turned the marks off.
@@ -1232,6 +1358,7 @@ app theme =
     , appHandleEvent =
         \ev ->
           handleEvent ev
+            >> recountIfChanged
             >> ensureCurrentHighlighted
             >> reanchorBody
             >> syncComposing
@@ -1889,19 +2016,25 @@ headerBar st =
               , withAttr watchingAttr (txt glyph)
               , withAttr headerAttr (txt (" " <> label))
               ]
+    busySeg = case stBusy st of
+      [] -> txt ""
+      (label : _) ->
+        hBox
+          [ withAttr headerAttr (txt "  ·  ")
+          , withAttr watchingAttr (txt (busyGlyph (stThrob st)))
+          , withAttr headerAttr (txt (" " <> label))
+          ]
   in
     withDefAttr headerAttr . padRight Max $
       case currentFileMay st of
-        Nothing -> hBox [txt (lead <> "all clear"), rebaseSeg, watchSeg]
+        Nothing -> hBox [txt (lead <> "all clear"), rebaseSeg, watchSeg, busySeg]
         Just fv ->
           let
             rs = fvRuns fv
             h = clampH rs (stCurH st)
             shownH = if null rs then 0 else h + 1
-            pendingPairs = pendingRunPairs st
-            pendingAll = length pendingPairs
-            pendingHere =
-              length (filter (\(f, _) -> f == stCurF st) pendingPairs)
+            pendingAll = sum (map fvPending (stFiles st))
+            pendingHere = fvPending fv
             pendingSeg =
               if length (stFiles st) > 1
                 then
@@ -1954,6 +2087,7 @@ headerBar st =
               , doneBadge
               , rebaseSeg
               , watchSeg
+              , busySeg
               ]
 
 -- What the tray shows: one line per file (with a count of its hidden
@@ -1997,19 +2131,106 @@ data Remark = Remark
   , rmText :: !Text
   }
 
-fileRemarks :: St -> FileView -> [Remark]
-fileRemarks st fv =
+remarksFor :: Map.Map Text Verdict -> Map.Map Text [Post] -> FileView -> [Remark]
+remarksFor verdicts threads fv =
   let
     pick row = do
       k <- rRemarkKey row
       -- a removed row keeps its remark too, but by then the hunk it
       -- belongs to is what carries it through the tray
       guard (rMark row == ' ')
-      guard (Map.member k (stVerdicts st) || Map.member k (stThreads st))
+      guard (Map.member k verdicts || Map.member k threads)
       n <- rNewRow row
       pure (Remark n k (rText row))
   in
     mapMaybe pick (fvRows fv)
+
+recountFile :: Map.Map Text Verdict -> Map.Map Text [Post] -> FileView -> FileView
+recountFile verdicts threads fv =
+  fv
+    { fvRemarks = remarksFor verdicts threads fv
+    , fvPending = length (filter (runPending verdicts) (fvRuns fv))
+    }
+
+recountIn :: St -> FileView -> FileView
+recountIn st = recountFile (stVerdicts st) (stThreads st)
+
+fileKeys :: FileView -> Set.Set Text
+fileKeys fv =
+  Set.fromList (concatMap runKeys (fvRuns fv) ++ mapMaybe rRemarkKey (fvRows fv))
+
+changedKeys :: Eq v => Map.Map Text v -> Map.Map Text v -> Set.Set Text
+changedKeys before after =
+  Map.keysSet
+    ( Map.filter
+        id
+        ( Map.mergeWithKey
+            (\_ x y -> Just (x /= y))
+            (Map.map (const True))
+            (Map.map (const True))
+            before
+            after
+        )
+    )
+
+recountIfChanged :: EventM Name St ()
+recountIfChanged = do
+  st <- get
+  let
+    verdictsMoved = stVerdicts st /= stCountedVerdicts st
+    threadsMoved = stThreads st /= stCountedThreads st
+  when (verdictsMoved || threadsMoved) $ do
+    let
+      changed =
+        Set.union
+          (changedKeys (stCountedVerdicts st) (stVerdicts st))
+          (changedKeys (stCountedThreads st) (stThreads st))
+    modify (\s -> s {stCountedVerdicts = stVerdicts st, stCountedThreads = stThreads st})
+    case currentFileMay st of
+      Just fv
+        | changed `Set.isSubsetOf` fileKeys fv ->
+            modify (\s -> updateFile (stCurF s) id s)
+      _ -> recountAll
+
+recountInlineRows :: Int
+recountInlineRows = 300000
+
+recountAll :: EventM Name St ()
+recountAll = do
+  st <- get
+  let
+    verdicts = stVerdicts st
+    threads = stThreads st
+    counted =
+      Map.fromList
+        ( map
+            (\fv -> (fvPath fv, (remarksFor verdicts threads fv, length (filter (runPending verdicts) (fvRuns fv)))))
+            (stFiles st)
+        )
+    epoch = stEpoch st
+    settle :: Either Text (Map.Map FilePath ([Remark], Int)) -> EventM Name St ()
+    settle outcome = do
+      latest <- get
+      when (stEpoch latest == epoch) $
+        case outcome of
+          Left err -> jobFailed "recounting" err
+          Right done ->
+            modify $ \s ->
+              s
+                { stFiles =
+                    map
+                      ( \fv -> case Map.lookup (fvPath fv) done of
+                          Just (rs, n) -> fv {fvRemarks = rs, fvPending = n}
+                          Nothing -> fv
+                      )
+                      (stFiles s)
+                , stCountedVerdicts = verdicts
+                , stCountedThreads = threads
+                }
+    forced = Map.foldr (\(rs, n) acc -> sum (map rmRow rs) + n + acc) (0 :: Int) counted
+  if sum (map fvRowCount (stFiles st)) <= recountInlineRows
+    then modify (\s -> s {stFiles = map (recountIn s) (stFiles s)})
+    else startJob "recounting" (evaluate forced >> pure counted) settle
 
 trayEntries :: St -> [TrayEntry]
 trayEntries = map trayEntryOf . trayRows
@@ -2037,7 +2258,7 @@ trayRows st =
       in
         TrayRowFile fi (length hiddenOnes) fv
           : map (\(hi, r, decl) -> TrayRowHunk fi hi r decl) shown
-          ++ zipWith (TrayRowRemark fi) [0 ..] (fileRemarks st fv)
+          ++ zipWith (TrayRowRemark fi) [0 ..] (fvRemarks fv)
     splitHiddenShown fi numbered =
       ( filter (hiddenHunk fi) numbered
       , filter (not . hiddenHunk fi) numbered
@@ -3181,9 +3402,8 @@ statusBar st =
         (if fvStale fv then "hunks refresh on Esc · " else "") <> verbHint
     meterSeg =
       let
-        runs = allRunsInOrder st
-        total = length runs
-        pending = length (filter (runPending (stVerdicts st) . snd) runs)
+        total = sum (map (length . fvRuns) (stFiles st))
+        pending = sum (map fvPending (stFiles st))
       in
         if total == 0
           then txt ""
@@ -3281,9 +3501,14 @@ handleEvent brickEvent =
       threads <- liftIO (loadThreads (stConn st) (repoText st))
       groups <- liftIO (loadNoteGroups (stConn st) (repoText st))
       modify (\s -> s {stThreads = threads, stNoteGroups = groups})
-    AppEvent (Attending seen) ->
+    AppEvent (Attending seen) -> do
       modify (\s -> s {stAttending = seen, stThrob = stThrob s + 1})
+      pollCurrentFile
     AppEvent Tick -> scrollHunkIntoView
+    AppEvent Pulse -> modify (\s -> s {stThrob = stThrob s + 1})
+    AppEvent (JobDone label finish) -> do
+      modify (\s -> s {stBusy = delete label (stBusy s)})
+      finish
     VtyEvent ev -> do
       st <- get
       -- messages are transient: any keystroke clears the old one, and a
@@ -3746,14 +3971,39 @@ ensureCurrentHighlighted = do
   st <- get
   let
     i = stCurF st
+    withTokensOf toks current =
+      current
+        { fvRows = threadTokens (fvRows current) toks
+        , fvToks = toks
+        , fvHighlighted = True
+        }
   case safeIdx (stFiles st) i of
     Nothing -> pure ()
-    Just fv ->
-      unless (fvHighlighted fv) $ do
-        (colored, _) <-
-          liftIO
-            (rebuildFV (stConfig st) (repoText st) fv {fvHighlighted = True})
-        modify (updateFile i (const colored))
+    Just fv
+      | fvHighlighted fv -> pure ()
+      | fvRowCount fv <= highlightInlineRows -> do
+          toks <- liftIO (tokensFor fv (newSideLines fv))
+          modify (updateFile i (withTokensOf toks))
+      | stHighlighting st == Just (fvPath fv) -> pure ()
+      | otherwise -> do
+          modify (\s -> s {stHighlighting = Just (fvPath fv)})
+          let
+            before = newSideLines fv
+            epoch = stEpoch st
+            label = "highlighting " <> T.pack (takeFileName (fvPath fv))
+          startJob label (withSlot (stWorkSlots st) (tokensFor fv before)) $ \outcome -> do
+            latest <- get
+            when (stEpoch latest == epoch) $ do
+              modify (\s -> s {stHighlighting = Nothing})
+              case (outcome, find ((== fvPath fv) . fvPath . snd) (zip [0 :: Int ..] (stFiles latest))) of
+                (Left err, _) -> jobFailed label err
+                (Right toks, Just (j, current))
+                  | not (fvHighlighted current) && newSideLines current == before ->
+                      modify (updateFile j (withTokensOf toks))
+                _ -> pure ()
+
+highlightInlineRows :: Int
+highlightInlineRows = 4000
 
 currentLineOf :: EdState -> Text
 currentLineOf ed =
@@ -3850,7 +4100,7 @@ pullClipboard = do
 updateFile :: Int -> (FileView -> FileView) -> St -> St
 updateFile i f st =
   let
-    patch (j, fv) = if j == i then f fv else fv
+    patch (j, fv) = if j == i then recountIn st (f fv) else fv
   in
     st {stFiles = map patch (zip [0 ..] (stFiles st))}
 
@@ -4007,9 +4257,10 @@ switchRun :: Int -> EventM Name St ()
 switchRun d = do
   st <- get
   let
-    eligible pair =
-      (not (stOnlyPending st) || pairPending st pair) && pairInFilter st pair
-    pairs = filter eligible (allRunPairs st)
+    eligible (_, r) =
+      (not (stOnlyPending st) || runPending (stVerdicts st) r)
+        && runFilterAllows (stRunFilter st) r
+    pairs = map fst (filter eligible (allRunsInOrder st))
     here =
       ( stCurF st
       , clampH (fvRuns (currentFile st)) (stCurH st)
@@ -4846,57 +5097,131 @@ applyToDisk i = do
 -- A file changed on disk. When the buffer holds no unapplied edits it is
 -- reloaded in place (cursor kept); mid-insert the local edit wins until
 -- Esc, and the change is only announced.
+data Reloaded
+  = ReloadVanished
+  | ReloadUnchanged
+  | ReloadReady FileView Int
+
 reloadFromDisk :: FilePath -> EventM Name St ()
 reloadFromDisk rel = do
   st <- get
-  case find ((== rel) . fvPath . snd) (zip [0 ..] (stFiles st)) of
+  case find ((== rel) . fvPath) (stFiles st) of
     -- an unknown file changing may mean the change set just grew
     Nothing -> refreshGit
-    Just (i, fv) -> do
-      got <- liftIO (try (TIO.readFile (stRoot st </> rel)) :: IO (Either IOException Text))
-      case got of
-        Left _ -> refreshGit
-        Right diskTxt -> do
+    Just fv
+      | Map.member rel (stReloading st) ->
+          modify (\s -> s {stReloading = Map.insert rel True (stReloading s)})
+      | otherwise -> do
+          modify (\s -> s {stReloading = Map.insert rel False (stReloading s)})
           let
-            diskLs = T.lines diskTxt
-          if diskLs == bufferLines (fvEd fv)
-            then pure ()
-            else
-              if edMode (fvEd fv) == Insert
-                then
-                  modify
-                    (\s -> s {stMsg = "\9888 " <> T.pack rel <> " changed on disk; Esc applies your edit over it"})
-                else do
+            oldLs = bufferLines (fvEd fv)
+            (row, col) = cursorRC (fvEd fv)
+            epoch = stEpoch st
+            path = stRoot st </> rel
+            work = withSlot (stWorkSlots st) $ do
+              got <- try (TIO.readFile path) :: IO (Either IOException Text)
+              case got of
+                Left _ -> pure ReloadVanished
+                Right diskTxt -> do
                   let
-                    oldLs = bufferLines (fvEd fv)
-                    (row, col) = cursorRC (fvEd fv)
-                  -- remember which screen row the cursor sat on, so the
-                  -- view doesn't jump when lines shift above it
-                  mvp <- lookupViewport BodyVP
-                  let
-                    oldOut = cursorDisplayRow (fvRows fv) row
-                    screenOff = case mvp of
-                      Just vp -> max 0 (oldOut - _vpTop vp)
-                      Nothing -> 0
-                  newRow <- liftIO (mapRowThroughEdit oldLs diskLs row)
-                  let
-                    newCol =
-                      min col (T.length (fromMaybe "" (safeIdx diskLs newRow)))
-                    fresh = newEdState newRow diskLs
-                    placed =
-                      fresh {edZipper = Z.moveCursor (newRow, newCol) (edZipper fresh)}
-                  rebuildWith i placed
-                  reloaded <- get
-                  screenRows <- terminalRows
-                  let
-                    reloadedFv = stFiles reloaded !! i
-                    newOut = cursorDisplayRow (fvRows reloadedFv) newRow
-                    origin = snd (bodyWindow screenRows reloaded reloadedFv)
-                  modify (updateFile i (\f -> f {fvOrigin = origin}))
-                  setTop
-                    (viewportScroll BodyVP)
-                    (max 0 (newOut - origin - screenOff))
-                  modify (\s -> s {stMsg = "\8635 reloaded " <> T.pack rel})
+                    diskLs = T.lines diskTxt
+                  if diskLs == oldLs
+                    then pure ReloadUnchanged
+                    else do
+                      stamped <- try (getModificationTime path) :: IO (Either IOException UTCTime)
+                      newRow <- mapRowThroughEdit oldLs diskLs row
+                      let
+                        newCol =
+                          min col (T.length (fromMaybe "" (safeIdx diskLs newRow)))
+                        fresh = newEdState newRow diskLs
+                        placed =
+                          fresh {edZipper = Z.moveCursor (newRow, newCol) (edZipper fresh)}
+                      (rebuilt, _) <- rebuildFV (stConfig st) (repoText st) fv {fvEd = placed}
+                      pure
+                        ( ReloadReady
+                            rebuilt {fvMtime = either (const Nothing) Just stamped}
+                            newRow
+                        )
+          startJob ("reloading " <> T.pack rel) work $ \outcome -> do
+            queued <- get
+            when (stEpoch queued == epoch) $ do
+              let
+                again = Map.findWithDefault False rel (stReloading queued)
+              modify (\s -> s {stReloading = Map.delete rel (stReloading s)})
+              latest <- get
+              case (outcome, find ((== rel) . fvPath . snd) (zip [0 ..] (stFiles latest))) of
+                (Left err, _) -> jobFailed "reloading" err
+                (Right ReloadVanished, _) -> refreshGit
+                (Right ReloadUnchanged, _) -> pure ()
+                (Right (ReloadReady _ _), Nothing) -> pure ()
+                (Right (ReloadReady rebuilt newRow), Just (i, current))
+                  | edMode (fvEd current) == Insert ->
+                      modify
+                        (\s -> s {stMsg = "\9888 " <> T.pack rel <> " changed on disk; Esc applies your edit over it"})
+                  | bufferLines (fvEd current) /= oldLs || fvBase current /= fvBase fv ->
+                      reloadFromDisk rel
+                  | otherwise -> do
+                      -- remember which screen row the cursor sat on, so the
+                      -- view doesn't jump when lines shift above it
+                      mvp <- lookupViewport BodyVP
+                      screenRows <- terminalRows
+                      let
+                        (liveRow, liveCol) = cursorRC (fvEd current)
+                        moved = (liveRow, liveCol) /= (row, col)
+                        landing =
+                          if moved
+                            then min liveRow (max 0 (bufferLineCount (fvEd rebuilt) - 1))
+                            else newRow
+                        installed =
+                          if moved
+                            then
+                              rebuilt
+                                { fvEd =
+                                    (fvEd rebuilt)
+                                      { edZipper = Z.moveCursor (landing, liveCol) (edZipper (fvEd rebuilt))
+                                      }
+                                }
+                            else rebuilt
+                        oldOut = cursorDisplayRow (fvRows current) liveRow
+                        screenOff = case mvp of
+                          Just vp -> max 0 (oldOut - _vpTop vp)
+                          Nothing -> 0
+                        oldCur =
+                          if i == stCurF latest then currentRunOf latest i else Nothing
+                      modify (updateFile i (const installed))
+                      when (i == stCurF latest) $
+                        modify (\s -> s {stCurH = matchRun oldCur (fvRuns installed)})
+                      reloaded <- get
+                      let
+                        newOut = cursorDisplayRow (fvRows installed) landing
+                        origin = snd (bodyWindow screenRows reloaded installed)
+                      modify (updateFile i (\f -> f {fvOrigin = origin}))
+                      setTop
+                        (viewportScroll BodyVP)
+                        (max 0 (newOut - origin - screenOff))
+                      modify (\s -> s {stMsg = "\8635 reloaded " <> T.pack rel})
+              when again (reloadFromDisk rel)
+
+pollCurrentFile :: EventM Name St ()
+pollCurrentFile = do
+  st <- get
+  when (stPolling st) $
+    case currentFileMay st of
+      Nothing -> pure ()
+      Just fv -> do
+        got <-
+          liftIO
+            ( try (getModificationTime (stRoot st </> fvPath fv)) ::
+                IO (Either IOException UTCTime)
+            )
+        case (got, fvMtime fv) of
+          (Left _, _) -> pure ()
+          (Right mtime, Nothing) ->
+            modify (updateFile (stCurF st) (\f -> f {fvMtime = Just mtime}))
+          (Right mtime, Just seen)
+            | mtime /= seen && not (Map.member (fvPath fv) (stReloading st)) ->
+                reloadFromDisk (fvPath fv)
+            | otherwise -> pure ()
 
 cursorDisplayRow :: [RowR] -> Int -> Int
 cursorDisplayRow rows row =
@@ -4936,121 +5261,180 @@ mapRowThroughEdit oldLs newLs target = do
 -- and builds fire git events in bursts — but a burst's last event must
 -- not be lost (it describes the settled state), so a throttled call
 -- queues exactly one delayed re-check.
+data Refreshed
+  = Dropped
+  | Unchanged FilePath
+  | Replaced FileView
+
 refreshGit :: EventM Name St ()
 refreshGit = do
   st <- get
   now <- liftIO getMonotonicTime
-  if now - stLastGit st <= 0.5
-    then unless (stGitQueued st) $ do
-      modify (\s -> s {stGitQueued = True})
-      void . liftIO . forkIO $ do
-        threadDelay 700000
-        void (writeBChanNonBlocking (stChan st) GitStateChanged)
-    else do
-      modify (\s -> s {stLastGit = now, stGitQueued = False})
-      rebaseNow <- liftIO (rebaseStatus (stRoot st))
-      branchNow <- liftIO (currentBranch (stRoot st))
-      headNow <- liftIO (headCommit (stRoot st))
-      modify
-        (\s -> s {stRebase = rebaseNow, stBranch = branchNow, stHead = headNow})
-      stEff <- get
-      let
-        mode = effectiveMode stEff
-      ignores <- liftIO (loadIgnores (stRoot stEff))
-      names <-
-        liftIO
-          ( fmap
-              (filter (not . ignoredPath ignores))
-              (reviewFiles mode (cfgUntracked (stConfig stEff)) (stRoot stEff))
-          )
-      let
-        existing =
-          Map.fromList (map (\fv -> (fvPath fv, fv)) (stFiles stEff))
-      let
-        reload name = loadOne (stConfig stEff) (stHls stEff) mode (stRoot stEff) name
-        refreshOne name =
-          case Map.lookup name existing of
-            Nothing -> reload name
-            Just fv -> do
-              -- a file that has come or gone since it was loaded is a
-              -- different kind of view than the one in hand, so it is
-              -- read afresh rather than patched
-              present <- doesFileExist (stRoot stEff </> name)
-              if present == fvDeleted fv
-                then reload name
-                else do
-                  base <- baseLines mode (stRoot stEff) name
-                  if base == fvBase fv
-                    then pure (Just fv)
-                    else do
-                      (rebuilt, _) <-
-                        rebuildFV (stConfig stEff) (repoText stEff) fv {fvBase = base}
-                      pure (Just rebuilt)
-      refreshed <- liftIO (forMaybeBounded refreshOne names)
-      let
-        inChangeSet = catMaybes refreshed
-      -- hand-opened files stay in the session even when the change set
-      -- doesn't claim them; once git stops seeing a difference (say the
-      -- file was committed), the base honestly rebases to the buffer so
-      -- stale hunks don't linger
-      extras <-
-        liftIO
-          . forM
-            (filter (`notElem` names) (Set.toList (stOpened stEff)))
-          $ \path ->
-            case Map.lookup path existing of
-              Nothing -> pure Nothing
-              Just fv -> do
-                base <- baseLines mode (stRoot stEff) path
-                let
-                  buf = bufferLines (fvEd fv)
-                if base == buf && fvBase fv /= buf
-                  then do
-                    (rebuilt, _) <-
-                      rebuildFV (stConfig stEff) (repoText stEff) fv {fvBase = buf}
-                    pure (Just rebuilt)
-                  else pure (Just fv)
-      let
-        remaining = inChangeSet ++ catMaybes extras
-      forM_ remaining (liftIO . stWatch stEff . fileDir (stRoot stEff) . fvPath)
-      latest <- get
-      let
-        wasEmpty = null (stFiles latest)
-      if null remaining
-        -- the persistent session idles rather than exits: the watcher
-        -- stays live and new work wakes the screen on its own
-        then
-          put
-            latest
-              { stFiles = []
-              , stCurF = 0
-              , stCurH = 0
-              , -- only on the way in: a later refresh that finds the
-                -- session still idle must not talk over whatever the
-                -- action that emptied it had to say
-                stMsg =
-                  if wasEmpty
-                    then stMsg latest
-                    else "change set is empty — watching for changes"
-              }
+  if stRefreshing st
+    then modify (\s -> s {stGitQueued = True})
+    else
+      if now - stLastGit st <= 0.5
+        then unless (stGitQueued st) $ do
+          modify (\s -> s {stGitQueued = True})
+          void . liftIO . forkIO $ do
+            threadDelay 700000
+            void (writeBChanNonBlocking (stChan st) GitStateChanged)
         else do
+          modify (\s -> s {stLastGit = now, stGitQueued = False, stRefreshing = True})
           let
-            curPath = case currentFileMay latest of
-              Just fv -> fvPath fv
-              Nothing -> ""
-            oldCur = currentRunOf latest (stCurF latest)
-            newF = fromMaybe 0 (findIndex ((== curPath) . fvPath) remaining)
-          put
-            latest
-              { stFiles = remaining
-              , stCurF = newF
-              , stCurH = matchRun oldCur (fvRuns (remaining !! newF))
-              }
-          when wasEmpty $ do
-            woken <- get
-            case firstUnrespondedOrPending woken of
-              Just (f, h) -> parkAnchor f h
-              Nothing -> parkAnchor 0 0
+            root = stRoot st
+            existing = Map.fromList (map (\fv -> (fvPath fv, fv)) (stFiles st))
+            work = do
+              rebaseNow <- rebaseStatus root
+              branchNow <- currentBranch root
+              headNow <- headCommit root
+              let
+                mode = rebaseEffMode rebaseNow (stMode st)
+                counted = recountIn st
+                reload name =
+                  fmap
+                    (maybe Dropped (Replaced . counted))
+                    (loadOne (stConfig st) (stHls st) mode root name)
+                refreshOne name =
+                  case Map.lookup name existing of
+                    Nothing -> reload name
+                    Just fv -> do
+                      -- a file that has come or gone since it was loaded is a
+                      -- different kind of view than the one in hand, so it is
+                      -- read afresh rather than patched
+                      present <- doesFileExist (root </> name)
+                      if present == fvDeleted fv
+                        then reload name
+                        else do
+                          base <- baseLines mode root name
+                          if base == fvBase fv
+                            then pure (Unchanged name)
+                            else do
+                              (rebuilt, _) <-
+                                rebuildFV (stConfig st) (repoText st) fv {fvBase = base}
+                              pure (Replaced (counted rebuilt))
+                guarded name = do
+                  got <- try (refreshOne name)
+                  pure $ case got of
+                    Left e -> let _ = (e :: IOException) in Dropped
+                    Right r -> r
+              ignores <- loadIgnores root
+              names <-
+                fmap
+                  (filter (not . ignoredPath ignores))
+                  (reviewFiles mode (cfgUntracked (stConfig st)) root)
+              refreshed <- forBounded 8 guarded names
+              -- hand-opened files stay in the session even when the change set
+              -- doesn't claim them; once git stops seeing a difference (say the
+              -- file was committed), the base honestly rebases to the buffer so
+              -- stale hunks don't linger
+              extras <-
+                forM (filter (`notElem` names) (Set.toList (stOpened st))) $ \path ->
+                  case Map.lookup path existing of
+                    Nothing -> pure Dropped
+                    Just fv -> do
+                      base <- baseLines mode root path
+                      let
+                        buf = bufferLines (fvEd fv)
+                      if base == buf && fvBase fv /= buf
+                        then do
+                          (rebuilt, _) <-
+                            rebuildFV (stConfig st) (repoText st) fv {fvBase = buf}
+                          pure (Replaced (counted rebuilt))
+                        else pure (Unchanged path)
+              pure (rebaseNow, branchNow, headNow, refreshed ++ extras)
+            epoch = stEpoch st
+          startJob "refreshing" work $ \outcome -> do
+            before <- get
+            when (stEpoch before == epoch) $ do
+              modify (\s -> s {stRefreshing = False})
+              case outcome of
+                Left err -> jobFailed "refreshing" err
+                Right (rebaseNow, branchNow, headNow, results) -> do
+                  let
+                    gitMoved =
+                      headNow /= stHead before
+                        || branchNow /= stBranch before
+                        || rebaseNow /= stRebase before
+                  modify $ \s ->
+                    s
+                      { stRebase = rebaseNow
+                      , stBranch = branchNow
+                      , stHead = headNow
+                      }
+                  latest <- get
+                  let
+                    current = Map.fromList (map (\fv -> (fvPath fv, fv)) (stFiles latest))
+                    mergeLive fv =
+                      case Map.lookup (fvPath fv) current of
+                        Nothing -> fv
+                        Just live
+                          | bufferLines (fvEd live) == bufferLines (fvEd fv) ->
+                              fv {fvEd = fvEd live, fvOrigin = fvOrigin live}
+                          | otherwise -> live {fvBase = fvBase fv, fvStale = True}
+                    resolve r = case r of
+                      Dropped -> Nothing
+                      Unchanged path -> Map.lookup path current
+                      Replaced fv -> Just (recountIn latest (mergeLive fv))
+                    remaining = mapMaybe resolve results
+                  forM_ remaining (liftIO . stWatch latest . fileDir (stRoot latest) . fvPath)
+                  when gitMoved (liftIO (watchTracked (stWatch latest) (stRoot latest)))
+                  applyChangeSet remaining
+              after <- get
+              when (stGitQueued after) $ do
+                modify (\s -> s {stGitQueued = False})
+                refreshGit
+
+applyChangeSet :: [FileView] -> EventM Name St ()
+applyChangeSet remaining = do
+  latest <- get
+  let
+    wasEmpty = null (stFiles latest)
+    firstLoad = not (stLoadedOnce latest)
+    pendingCount =
+      length (filter (runPending (stVerdicts latest)) (concatMap fvRuns remaining))
+    totalCount = length (concatMap fvRuns remaining)
+  if null remaining
+    -- the persistent session idles rather than exits: the watcher
+    -- stays live and new work wakes the screen on its own
+    then
+      put
+        latest
+          { stFiles = []
+          , stCurF = 0
+          , stCurH = 0
+          , stLoadedOnce = True
+          , -- only on the way in: a later refresh that finds the
+            -- session still idle must not talk over whatever the
+            -- action that emptied it had to say
+            stMsg =
+              if (wasEmpty && not firstLoad) || (firstLoad && stPolling latest)
+                then stMsg latest
+                else "change set is empty — watching for changes"
+          }
+    else do
+      let
+        curPath = case currentFileMay latest of
+          Just fv -> fvPath fv
+          Nothing -> ""
+        oldCur = currentRunOf latest (stCurF latest)
+        newF = fromMaybe 0 (findIndex ((== curPath) . fvPath) remaining)
+      put
+        latest
+          { stFiles = remaining
+          , stCurF = newF
+          , stCurH = matchRun oldCur (fvRuns (remaining !! newF))
+          , stLoadedOnce = True
+          , stMsg =
+              if firstLoad && not (stPolling latest)
+                then tshow pendingCount <> " of " <> tshow totalCount <> " hunks pending"
+                else stMsg latest
+          }
+      when wasEmpty $ do
+        woken <- get
+        case firstUnrespondedOrPending woken of
+          Just (f, h) -> parkAnchor f h
+          Nothing -> parkAnchor 0 0
 
 -- The : command line ----------------------------------------------------------
 
@@ -5420,7 +5804,7 @@ rebuildAllFiles = do
           (stFiles st)
       )
   let
-    files = catMaybes rebuilt
+    files = map (recountIn st) (catMaybes rebuilt)
   unless (null files) $
     modify $ \s ->
       s
@@ -6265,74 +6649,109 @@ switchRepo target = do
   st <- get
   if target == stRoot st
     then setMsg ("already in " <> T.pack (takeFileName target))
-    else do
-      let
-        remembered = Map.lookup target (stPlaces st)
-        mode = maybe (VsRef "HEAD") rpMode remembered
-        conn = stConn st
-        saved = case currentPlace st of
-          Just (from, place) -> Map.insert from place (stPlaces st)
-          Nothing -> stPlaces st
-      liftIO (finishPass conn (stPassId st))
-      loaded <- liftIO $ do
-        verdicts <- loadVerdicts conn (T.pack target)
-        threads <- loadThreads conn (T.pack target)
-        groups <- loadNoteGroups conn (T.pack target)
-        rebase <- rebaseStatus target
-        branch <- currentBranch target
-        headAt <- headCommit target
-        files <-
-          loadAll (stConfig st) (stHls st) (rebaseEffMode rebase mode) target
-        passId <- beginPass conn (T.pack target) (modeLabel mode)
-        -- the watch manager is shared, so following a second repository
-        -- costs watch descriptors rather than another inotify instance
-        gitDirs <- gitStateWatchDirs target
-        mapM_ (stWatch st) gitDirs
-        mapM_ (stWatch st . fileDir target . fvPath) files
-        -- and the rest of it in the background, so the first change in a
-        -- directory nothing is changed in yet is noticed here too
-        watchTracked (stWatch st) target
-        pure (verdicts, threads, groups, rebase, branch, headAt, files, passId)
-      let
-        (verdicts, threads, groups, rebase, branch, headAt, files, passId) =
-          loaded
-      modify $ \s ->
-        s
-          { stRoot = target
-          , stFiles = files
-          , stVerdicts = verdicts
-          , stThreads = threads
-          , stNoteGroups = groups
-          , stRebase = rebase
-          , stBranch = branch
-          , stHead = headAt
-          , stPassId = passId
-          , stMode = mode
-          , stPlaces = saved
-          , -- it listed the repository we just left; bringing it back
-            -- here would offer files that are not in front of us
-            stLastSelector = Nothing
-          , stCurF = 0
-          , stCurH = 0
-          , stWritten = Set.empty
-          , stAltFile = Nothing
-          , stAnchor = maybe Nothing rpAnchor remembered
-          , stOpened = maybe Set.empty rpOpened remembered
-          , stOnlyPending = maybe (stOnlyPending s) rpOnlyPending remembered
-          , stRunFilter = maybe (stRunFilter s) rpRunFilter remembered
-          , stGrepNav = Nothing
-          , stCmdFiles = []
-          , stCmdDirs = []
-          , stCmdRefs = []
-          }
-      case remembered of
-        Just place -> restorePlace place
-        Nothing -> do
-          arrived <- get
-          case firstUnrespondedOrPending arrived of
-            Just (f, h) -> parkAnchor f h
-            Nothing -> pure ()
-      setMsg (repoArrivalMsg target rebase files)
+    else
+      if any ("opening " `T.isPrefixOf`) (stBusy st)
+        then setMsg "still opening the last repository"
+        else do
+          let
+            remembered = Map.lookup target (stPlaces st)
+            mode = maybe (VsRef "HEAD") rpMode remembered
+            conn = stConn st
+            saved = case currentPlace st of
+              Just (from, place) -> Map.insert from place (stPlaces st)
+              Nothing -> stPlaces st
+          let
+            work = do
+              verdicts <- loadVerdicts conn (T.pack target)
+              threads <- loadThreads conn (T.pack target)
+              groups <- loadNoteGroups conn (T.pack target)
+              rebase <- rebaseStatus target
+              branch <- currentBranch target
+              headAt <- headCommit target
+              files <-
+                fmap
+                  (map (recountFile verdicts threads))
+                  (loadAll (stConfig st) (stHls st) (rebaseEffMode rebase mode) target)
+              -- the watch manager is shared, so following a second repository
+              -- costs watch descriptors rather than another inotify instance
+              gitDirs <- gitStateWatchDirs target
+              mapM_ (stWatch st) gitDirs
+              mapM_ (stWatch st . fileDir target . fvPath) files
+              -- and the rest of it in the background, so the first change in a
+              -- directory nothing is changed in yet is noticed here too
+              watchTracked (stWatch st) target
+              pure (verdicts, threads, groups, rebase, branch, headAt, files)
+          startJob ("opening " <> T.pack (takeFileName target)) work $ \outcome ->
+            case outcome of
+              Left err -> jobFailed "opening" err
+              Right loaded -> do
+                leaving <- get
+                liftIO (finishPass conn (stPassId leaving))
+                passId <- liftIO (beginPass conn (T.pack target) (modeLabel mode))
+                arriveAt target remembered saved mode passId loaded
+
+arriveAt ::
+  FilePath ->
+  Maybe RepoPlace ->
+  Map.Map FilePath RepoPlace ->
+  ReviewMode ->
+  Int64 ->
+  ( Map.Map Text Verdict
+  , Map.Map Text [Post]
+  , Map.Map Text Text
+  , Maybe RebaseStatus
+  , Maybe Text
+  , Maybe (Text, Text)
+  , [FileView]
+  ) ->
+  EventM Name St ()
+arriveAt target remembered saved mode passId loaded = do
+  let
+    (verdicts, threads, groups, rebase, branch, headAt, files) = loaded
+  modify $ \s ->
+    s
+      { stRoot = target
+      , stEpoch = stEpoch s + 1
+      , stRefreshing = False
+      , stGitQueued = False
+      , stReloading = Map.empty
+      , stHighlighting = Nothing
+      , stFiles = files
+      , stVerdicts = verdicts
+      , stThreads = threads
+      , stCountedVerdicts = verdicts
+      , stCountedThreads = threads
+      , stNoteGroups = groups
+      , stRebase = rebase
+      , stBranch = branch
+      , stHead = headAt
+      , stPassId = passId
+      , stMode = mode
+      , stPlaces = saved
+      , -- it listed the repository we just left; bringing it back
+        -- here would offer files that are not in front of us
+        stLastSelector = Nothing
+      , stCurF = 0
+      , stCurH = 0
+      , stWritten = Set.empty
+      , stAltFile = Nothing
+      , stAnchor = maybe Nothing rpAnchor remembered
+      , stOpened = maybe Set.empty rpOpened remembered
+      , stOnlyPending = maybe (stOnlyPending s) rpOnlyPending remembered
+      , stRunFilter = maybe (stRunFilter s) rpRunFilter remembered
+      , stGrepNav = Nothing
+      , stCmdFiles = []
+      , stCmdDirs = []
+      , stCmdRefs = []
+      }
+  case remembered of
+    Just place -> restorePlace place
+    Nothing -> do
+      arrived <- get
+      case firstUnrespondedOrPending arrived of
+        Just (f, h) -> parkAnchor f h
+        Nothing -> pure ()
+  setMsg (repoArrivalMsg target rebase files)
 
 -- Land back on the file and hunk we left, when they are still there;
 -- otherwise fall back to wherever a fresh session would have opened.
@@ -7464,7 +7883,7 @@ openInRoot rel = do
           liftIO (stWatch st (fileDir rootP rel))
           modify $ \s ->
             s
-              { stFiles = stFiles s ++ [fv]
+              { stFiles = stFiles s ++ [recountIn s fv]
               , stOpened = Set.insert rel (stOpened s)
               }
           grown <- get
@@ -7507,6 +7926,9 @@ loadOpened cfg hls root path = do
                   -- extension to go on, so the first line comes along
                   fvHl = TS.highlighterFor hls path (listToMaybe newLs)
                 , fvRunDecls = []
+                , fvRemarks = []
+                , fvPending = 0
+                , fvMtime = Nothing
                 }
           (fv, _) <- rebuildFV cfg (T.pack root) fv0
           pure (Just fv)
@@ -7667,9 +8089,11 @@ applyBaseChoice ref
   | otherwise = setBase (VsRef ref)
 
 -- Pick which repository the session is looking at. Each row costs two
--- git calls, which is fine for the handful of checkouts a story
--- directory holds and is worth it: choosing between five repos by name
--- alone tells you nothing about which one needs you.
+-- git calls and a diff, so the picker opens at once with what was last
+-- known about each checkout and the rows fill in as the answers land,
+-- described in the background a few repositories at a time. Worth it:
+-- choosing between five repos by name alone tells you nothing about
+-- which one needs you.
 -- Which checkouts the story holds, asked again. A story directory is a
 -- working set rather than a fixed one — a repository gets cloned into it
 -- partway through a review, or tidied away — and the session was going on
@@ -7696,17 +8120,13 @@ openRepoPicker = do
     [] -> setMsg "no other repositories here"
     [_] -> setMsg "this is the only repository here"
     roots -> do
-      described <- liftIO (mapM (describeRepo st) roots)
       let
-        widths = columnWidths [24, 28, 16] (map snd described)
-        -- the row shows the basename; the ref carries the whole path, so
-        -- a clipped name can never become the thing we switch to
-        row (root, cells) =
-          pickerRow
-            (T.pack root)
-            (columnRow widths cells)
-            (T.pack root <> " " <> T.unwords cells)
-        rows = map row described
+        remembered root =
+          Map.findWithDefault
+            [T.pack (takeFileName root), "", "\8230"]
+            root
+            (stRepoInfo st)
+        rows = repoPickerRows st (map (\root -> (root, remembered root)) roots)
         -- opening on the next one round makes Enter by itself "move on",
         -- while the list is still there to choose from deliberately
         startAt = case findIndex (== stRoot st) roots of
@@ -7723,6 +8143,50 @@ openRepoPicker = do
                     }
                 )
           }
+      startJob "describing repositories" (forBounded 4 (describeRepo st) roots) $
+        \outcome -> case outcome of
+          Left err -> jobFailed "describing repositories" err
+          Right described -> do
+            modify $ \s ->
+              s {stRepoInfo = Map.union (Map.fromList described) (stRepoInfo s)}
+            latest <- get
+            case stPicker latest of
+              Just pk -> case pkMode pk of
+                PickRepo ->
+                  modify $ \s ->
+                    s {stPicker = Just (replaceRepoRows (repoPickerRows latest described) pk)}
+                _ -> pure ()
+              Nothing -> pure ()
+
+repoPickerRows :: St -> [(FilePath, [Text])] -> [FilePath]
+repoPickerRows st described =
+  let
+    markCurrent (root, cells) =
+      case (root == stRoot st, reverse cells) of
+        (True, lastCell : before) -> (root, reverse ((lastCell <> "  \8592 current") : before))
+        _ -> (root, cells)
+    marked = map markCurrent described
+    widths = columnWidths [24, 28, 16] (map snd marked)
+    -- the row shows the basename; the ref carries the whole path, so
+    -- a clipped name can never become the thing we switch to
+    row (root, cells) =
+      pickerRow
+        (T.pack root)
+        (columnRow widths cells)
+        (T.pack root <> " " <> T.unwords cells)
+  in
+    map row marked
+
+replaceRepoRows :: [FilePath] -> Picker -> Picker
+replaceRepoRows rows pk =
+  let
+    chosen = fmap fst (safeIdx (pkTargets pk) (pkSel pk))
+    refreshed = refreshRowPicker pk {pkAll = rows}
+    kept = do
+      ref <- chosen
+      findIndex ((== ref) . fst) (pkTargets refreshed)
+  in
+    refreshed {pkSel = fromMaybe (pkSel pk) kept}
 
 -- How much of a repository is left to read, for the switcher. Knowing a
 -- repository has changes says nothing about whether they have been
@@ -7764,7 +8228,6 @@ describeRepo st root = do
       then pure Nothing
       else fmap Just (repoHunkCount st root)
   let
-    here = if root == stRoot st then "  \8592 current" else ""
     onBranch = case branch of
       Just b -> b
       Nothing -> "detached"
@@ -7780,7 +8243,7 @@ describeRepo st root = do
       Nothing
         | null changed -> "clean"
         | otherwise -> reviewed
-  pure (root, [T.pack (takeFileName root), onBranch, state <> here])
+  pure (root, [T.pack (takeFileName root), onBranch, state])
 
 -- Check out a branch from the same overlay. A sixth explicit mutation
 -- point, and like the others it only ever runs because you asked: the
