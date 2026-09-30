@@ -93,7 +93,8 @@ in:
 sudo sysctl -w fs.inotify.max_user_instances=512   # /etc/sysctl.d/ to keep it
 ```
 
-Everything still works while polling — it just arrives a beat late.
+While polling, git state and the file on screen are followed; an edit to
+another file is picked up when you visit it.
 
 ## The screen
 

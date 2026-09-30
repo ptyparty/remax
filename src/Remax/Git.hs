@@ -17,6 +17,8 @@ module Remax.Git
   , FileScope (..)
   , buildOutputDirs
   , listFiles
+  , listFilesUnder
+  , isIgnored
   , isTracked
   , listRefs
   , childRepos
@@ -187,8 +189,14 @@ buildOutputDirs =
   ]
 
 listFiles :: FileScope -> FilePath -> IO [FilePath]
-listFiles scope root = do
+listFiles scope root = listFilesUnder scope root []
+
+listFilesUnder :: FileScope -> FilePath -> [FilePath] -> IO [FilePath]
+listFilesUnder scope root paths = do
   let
+    within = case paths of
+      [] -> []
+      _ -> "--" : paths
     excluding = case scope of
       VisibleFiles -> ["--exclude-standard"]
       -- Showing the ignored files is for finding the ones somebody might
@@ -201,7 +209,7 @@ listFiles scope root = do
   (code, out, _) <-
     readProcessWithExitCode
       "git"
-      (["-C", root, "ls-files", "--cached", "--others"] ++ excluding)
+      (["-C", root, "ls-files", "--cached", "--others"] ++ excluding ++ within)
       ""
   pure $ case code of
     ExitSuccess -> filter (not . null) (lines out)
@@ -219,6 +227,15 @@ isTracked root path = do
   pure $ case code of
     ExitSuccess -> any (not . null) (lines out)
     ExitFailure _ -> False
+
+isIgnored :: FilePath -> FilePath -> IO Bool
+isIgnored root path = do
+  (code, _, _) <-
+    readProcessWithExitCode
+      "git"
+      ["-C", root, "check-ignore", "-q", "--", path]
+      ""
+  pure (code == ExitSuccess)
 
 -- Short ref names for completion: local branches first, then remotes.
 listRefs :: FilePath -> IO [Text]

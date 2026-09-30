@@ -20,6 +20,7 @@ module Remax.DiffModel
 
 import Brick (AttrName)
 import Data.Algorithm.Diff (Diff, PolyDiff (..), getGroupedDiff)
+import Data.Array (Array, listArray, (!))
 import Data.Char (isSpace)
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
@@ -365,53 +366,56 @@ splitChunk sc chg0 =
     -- tier 3: a blankless slab still over pieceMax cuts at its least-
     -- indented changed line, both sides kept above pieceMin
     indentCut piece =
-      if length piece <= pieceMax sc
-        then [piece]
-        else
-          let
-            isLineComment t =
-              any (`T.isPrefixOf` T.strip t) lineCommentLeaders
-            -- never cut inside a block comment, and never between
-            -- the lines of a comment run — only before its first
-            -- line, so a comment stays glued to the code it heads
-            indentOf (((m, _, t), inside), prevComment) =
-              if m == ' '
-                || T.null (T.strip t)
-                || inside
-                || (isLineComment t && prevComment)
-                then maxBound
-                else T.length (T.takeWhile isSpaceChar t)
-            prevIsComment =
-              False
-                : map
-                  ( \((_, _, t), inside) ->
-                      inside || isLineComment t
-                  )
-                  piece
-            window =
-              take
-                (min (pieceMax sc) (length piece - pieceMin sc) - pieceMin sc)
-                ( drop
-                    (pieceMin sc)
-                    (zip [0 :: Int ..] (map indentOf (zip piece prevIsComment)))
-                )
-            best = case window of
-              [] -> Nothing
-              _ ->
+      let
+        total = length piece
+      in
+        if total <= pieceMax sc
+          then [piece]
+          else
+            let
+              isLineComment t =
+                any (`T.isPrefixOf` T.strip t) lineCommentLeaders
+              -- never cut inside a block comment, and never between
+              -- the lines of a comment run — only before its first
+              -- line, so a comment stays glued to the code it heads
+              indentOf (((m, _, t), inside), prevComment) =
+                if m == ' '
+                  || T.null (T.strip t)
+                  || inside
+                  || (isLineComment t && prevComment)
+                  then maxBound
+                  else T.length (T.takeWhile isSpaceChar t)
+              prevIsComment =
+                False
+                  : map
+                    ( \((_, _, t), inside) ->
+                        inside || isLineComment t
+                    )
+                    piece
+              indents :: Array Int Int
+              indents =
+                listArray (0, total - 1) (map indentOf (zip piece prevIsComment))
+              cutFrom off rows =
                 let
-                  smallest = minimum (map snd window)
+                  remaining = total - off
+                  lo = off + pieceMin sc
+                  hi = off + min (pieceMax sc) (remaining - pieceMin sc) - 1
+                  window = [(indents ! i, i) | i <- [lo .. hi]]
+                  best = case window of
+                    [] -> Nothing
+                    _ ->
+                      let
+                        (smallest, at) = minimum window
+                      in
+                        if smallest == maxBound then Nothing else Just at
                 in
-                  if smallest == maxBound
-                    then Nothing
-                    else lookupFirst smallest window
-            lookupFirst v pairs =
-              case filter (\(_, ind) -> ind == v) pairs of
-                ((i, _) : _) -> Just i
-                [] -> Nothing
-          in
-            case best of
-              Nothing -> [piece]
-              Just i -> take i piece : indentCut (drop i piece)
+                  if remaining <= pieceMax sc
+                    then [rows]
+                    else case best of
+                      Nothing -> [rows]
+                      Just i -> take (i - off) rows : cutFrom i (drop (i - off) rows)
+            in
+              cutFrom 0 piece
   in
     if length chg0 <= splitThreshold sc
       then [chg0]
