@@ -4,12 +4,12 @@ module Main (main) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, finally, try)
-import Control.Monad (forM, forM_, unless, void, when)
+import Control.Monad (filterM, forM, forM_, unless, void, when)
 import Data.Char (isControl, ord)
 import Data.Foldable (toList)
 import Data.List (nub)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -38,6 +38,7 @@ import Remax.Git
   , branchRoot
   , childRepos
   , readFileOr
+  , rebaseStatus
   , refExists
   , repoRoot
   )
@@ -250,7 +251,9 @@ reviewStart = do
     Just _ -> pure Nothing
     Nothing -> fmap Just getCurrentDirectory
   case roots of
-    (first : _) -> pure (first, roots, story)
+    (first : _) -> do
+      paused <- filterM (fmap isJust . rebaseStatus) roots
+      pure (fromMaybe first (listToMaybe paused), roots, story)
     [] -> die "No repository to review."
 
 -- Forget the verdicts recorded for files under the current directory, so
