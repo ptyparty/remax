@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Widgets
+module Remax.UI.Core.Widgets
   ( hairline
   , floatFrame
   , cornerFrame
@@ -54,8 +54,8 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Graphics.Vty as V
 import Remax.Highlight
-import Remax.UI.Attrs
-import Remax.UI.Types
+import Remax.UI.Core.Attrs
+import Remax.UI.Core.Types
 
 -- A quiet full-width rule; the chrome's only horizontal structure now
 -- that the reverse-video slabs are gone.

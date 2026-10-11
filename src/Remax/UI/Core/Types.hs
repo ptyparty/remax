@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Types
+module Remax.UI.Core.Types
   ( WatchMode (..)
   , Name (..)
   , REvent (..)

@@ -28,10 +28,10 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Remax.Config
 import Remax.Modal
-import Remax.UI.Attrs
-import Remax.UI.Menus
-import Remax.UI.Types
-import Remax.UI.Widgets
+import Remax.UI.Action.Menus
+import Remax.UI.Core.Attrs
+import Remax.UI.Core.Types
+import Remax.UI.Core.Widgets
 
 -- Two columns, split where the row counts come out even, so the sheet is
 -- one glance rather than a scroll.

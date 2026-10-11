@@ -43,13 +43,13 @@ import Remax.Config
 import Remax.DiffModel
 import Remax.Modal
 import Remax.Store
-import Remax.UI.Attrs
-import Remax.UI.Ink
-import Remax.UI.Types
-import Remax.UI.Verdict
-import Remax.UI.View
-import Remax.UI.Widgets
-import Remax.UI.WordDiff
+import Remax.UI.Core.Attrs
+import Remax.UI.Core.Ink
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
+import Remax.UI.Core.View
+import Remax.UI.Core.Widgets
+import Remax.UI.Core.WordDiff
 
 idleBody :: St -> Widget Name
 idleBody st =

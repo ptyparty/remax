@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Ink
+module Remax.UI.Core.Ink
   ( PenSet (..)
   , penFor
   , penPlain
@@ -33,9 +33,9 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Graphics.Vty as V
 import Remax.Highlight
-import Remax.UI.Attrs
-import Remax.UI.Types
-import Remax.UI.Widgets
+import Remax.UI.Core.Attrs
+import Remax.UI.Core.Types
+import Remax.UI.Core.Widgets
 
 -- The body is drawn as vty images rather than composed out of brick
 -- widgets. Brick's boxes carry border-map bookkeeping through every

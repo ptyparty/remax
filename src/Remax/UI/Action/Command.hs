@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Command
+module Remax.UI.Action.Command
   ( commandTable
   , cmdCandidates
   , openCmdPrompt
@@ -30,18 +30,18 @@ import Remax.Git
   , listFiles
   , listRefs
   )
-import Remax.UI.Conversation
-import Remax.UI.Editor
-import Remax.UI.Nav
-import Remax.UI.Notes
-import Remax.UI.Open
-import Remax.UI.Picker
-import Remax.UI.Rebase
-import Remax.UI.Repo
-import Remax.UI.Settings
-import Remax.UI.Tree
-import Remax.UI.Types
-import Remax.UI.Verdicts
+import Remax.UI.Action.Conversation
+import Remax.UI.Action.Editor
+import Remax.UI.Action.Notes
+import Remax.UI.Action.Open
+import Remax.UI.Action.Picker
+import Remax.UI.Action.Rebase
+import Remax.UI.Action.Repo
+import Remax.UI.Action.Settings
+import Remax.UI.Action.Tree
+import Remax.UI.Action.Verdicts
+import Remax.UI.Core.Types
+import Remax.UI.Model.Nav
 import System.FilePath
   ( takeDirectory
   , takeFileName

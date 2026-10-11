@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Fuzzy
+module Remax.UI.Action.Fuzzy
   ( Needle
   , needleFor
   , fuzzyScore
@@ -29,9 +29,9 @@ import Data.List
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import Remax.UI.Attrs
-import Remax.UI.Types
-import Remax.UI.Widgets
+import Remax.UI.Core.Attrs
+import Remax.UI.Core.Types
+import Remax.UI.Core.Widgets
 import System.FilePath
   ( isPathSeparator
   )

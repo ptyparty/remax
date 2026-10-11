@@ -28,10 +28,10 @@ import Brick.Types
   )
 import Data.Text (Text)
 import qualified Data.Text as T
-import Remax.UI.Attrs
-import Remax.UI.Fuzzy
-import Remax.UI.Types
-import Remax.UI.Widgets
+import Remax.UI.Action.Fuzzy
+import Remax.UI.Core.Attrs
+import Remax.UI.Core.Types
+import Remax.UI.Core.Widgets
 
 pickerLayer :: Picker -> Widget Name
 pickerLayer pk =

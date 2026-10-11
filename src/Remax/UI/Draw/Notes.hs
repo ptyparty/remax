@@ -36,12 +36,12 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Remax.Modal
 import Remax.Store (Post)
-import Remax.UI.Attrs
-import Remax.UI.Notes
-import Remax.UI.Rebase
-import Remax.UI.Types
-import Remax.UI.View
-import Remax.UI.Widgets
+import Remax.UI.Action.Notes
+import Remax.UI.Action.Rebase
+import Remax.UI.Core.Attrs
+import Remax.UI.Core.Types
+import Remax.UI.Core.View
+import Remax.UI.Core.Widgets
 
 notePopupLayer :: St -> NotePopup -> Widget Name
 notePopupLayer st np =

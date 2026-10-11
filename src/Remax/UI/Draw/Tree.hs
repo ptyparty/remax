@@ -41,14 +41,14 @@ import Remax.Git
   , pathChangeLetter
   )
 import Remax.Tree
-import Remax.UI.Attrs
-import Remax.UI.Files
-import Remax.UI.Fuzzy
-import Remax.UI.Ink
-import Remax.UI.Tree
-import Remax.UI.Types
-import Remax.UI.Verdict
-import Remax.UI.Widgets
+import Remax.UI.Action.Files
+import Remax.UI.Action.Fuzzy
+import Remax.UI.Action.Tree
+import Remax.UI.Core.Attrs
+import Remax.UI.Core.Ink
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
+import Remax.UI.Core.Widgets
 import System.FilePath
   ( takeFileName
   )

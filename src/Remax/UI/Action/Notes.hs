@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Notes
+module Remax.UI.Action.Notes
   ( markThenNote
   , noteCmd
   , unnoteCmd
@@ -42,14 +42,14 @@ import Remax.Config
 import Remax.DiffModel
 import Remax.Modal
 import Remax.Store
-import Remax.UI.Attrs
-import Remax.UI.Conversation
-import Remax.UI.Nav
-import Remax.UI.Rebase
-import Remax.UI.Types
-import Remax.UI.Verdict
-import Remax.UI.Verdicts
-import Remax.UI.View
+import Remax.UI.Action.Conversation
+import Remax.UI.Action.Rebase
+import Remax.UI.Action.Verdicts
+import Remax.UI.Core.Attrs
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
+import Remax.UI.Core.View
+import Remax.UI.Model.Nav
 import Remax.Vi
   ( ViResult (..)
   , handleVi

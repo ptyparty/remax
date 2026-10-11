@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Search
+module Remax.UI.Action.Search
   ( searchWordUnderCursor
   , searchWordBackward
   , openSearchPrompt
@@ -29,9 +29,9 @@ import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
 import Remax.Modal
-import Remax.UI.Nav
-import Remax.UI.Picker
-import Remax.UI.Types
+import Remax.UI.Action.Picker
+import Remax.UI.Core.Types
+import Remax.UI.Model.Nav
 import qualified Remax.Zipper as Z
 
 -- '*': prime the search with the selected text (single-line selections)

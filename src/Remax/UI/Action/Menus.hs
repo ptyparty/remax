@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Menus
+module Remax.UI.Action.Menus
   ( helpGroups
   , spaceMenuEntries
   ) where
@@ -12,14 +12,14 @@ import Brick
 import Data.Text (Text)
 import Remax.Config
 import Remax.Store
-import Remax.UI.Editor
-import Remax.UI.Nav
-import Remax.UI.Notes
-import Remax.UI.Open
-import Remax.UI.Picker
-import Remax.UI.Tree
-import Remax.UI.Types
-import Remax.UI.Verdicts
+import Remax.UI.Action.Editor
+import Remax.UI.Action.Notes
+import Remax.UI.Action.Open
+import Remax.UI.Action.Picker
+import Remax.UI.Action.Tree
+import Remax.UI.Action.Verdicts
+import Remax.UI.Core.Types
+import Remax.UI.Model.Nav
 
 -- The pending-space infobox, helix style: bottom-right, listing what the
 -- menu offers.

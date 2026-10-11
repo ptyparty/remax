@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Files
+module Remax.UI.Action.Files
   ( fileMenuEntries
   , namingLabel
   , runFileAction
@@ -37,9 +37,9 @@ import Remax.Git
   , runGit
   )
 import Remax.Tree
-import Remax.UI.Load
-import Remax.UI.Tree
-import Remax.UI.Types
+import Remax.UI.Action.Tree
+import Remax.UI.Core.Types
+import Remax.UI.Model.Load
 import System.Directory
   ( copyFile
   , createDirectoryIfMissing

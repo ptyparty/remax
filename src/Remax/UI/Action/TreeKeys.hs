@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.TreeKeys
+module Remax.UI.Action.TreeKeys
   ( handleTreeKey
   ) where
 
@@ -26,11 +26,11 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Graphics.Vty as V
 import Remax.Tree
-import Remax.UI.Files
-import Remax.UI.Nav
-import Remax.UI.Open
-import Remax.UI.Tree
-import Remax.UI.Types
+import Remax.UI.Action.Files
+import Remax.UI.Action.Open
+import Remax.UI.Action.Tree
+import Remax.UI.Core.Types
+import Remax.UI.Model.Nav
 
 -- The dialog is modal while an operation is under way: the menu, then a
 -- path to type or a deletion to confirm. Browsing keys only apply when

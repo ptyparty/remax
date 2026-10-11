@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Settings
+module Remax.UI.Action.Settings
   ( settingNames
   , showSettings
   , showSetting
@@ -33,8 +33,8 @@ import Remax.Git
   , refExists
   )
 import Remax.Store
-import Remax.UI.Load
-import Remax.UI.Types
+import Remax.UI.Core.Types
+import Remax.UI.Model.Load
 import Remax.Vi
   ( viIdle
   )

@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Tree
+module Remax.UI.Action.Tree
   ( openTree
   , openFileFinder
   , ancestorPaths
@@ -46,10 +46,10 @@ import Remax.Git
   , pathStats
   )
 import Remax.Tree
-import Remax.UI.Fuzzy
-import Remax.UI.Types
-import Remax.UI.Verdict
-import Remax.UI.View
+import Remax.UI.Action.Fuzzy
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
+import Remax.UI.Core.View
 import System.FilePath
   ( isAbsolute
   , makeRelative

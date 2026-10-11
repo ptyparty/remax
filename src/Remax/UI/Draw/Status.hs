@@ -23,11 +23,11 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import Remax.Config
 import Remax.Modal
-import Remax.UI.Attrs
-import Remax.UI.Ink
-import Remax.UI.Types
-import Remax.UI.View
-import Remax.UI.Widgets
+import Remax.UI.Core.Attrs
+import Remax.UI.Core.Ink
+import Remax.UI.Core.Types
+import Remax.UI.Core.View
+import Remax.UI.Core.Widgets
 import Remax.Vi
   ( viLabel
   )

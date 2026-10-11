@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Editor
+module Remax.UI.Action.Editor
   ( editCurrent
   , launchEditor
   ) where
@@ -25,7 +25,7 @@ import Data.Maybe
   )
 import qualified Data.Text as T
 import Remax.Modal
-import Remax.UI.Types
+import Remax.UI.Core.Types
 import System.Environment (lookupEnv)
 import System.FilePath
   ( takeFileName

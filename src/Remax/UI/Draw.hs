@@ -24,6 +24,8 @@ import Data.Maybe
   ( catMaybes
   )
 import Remax.Config
+import Remax.UI.Core.Types
+import Remax.UI.Core.Widgets
 import Remax.UI.Draw.Body
 import Remax.UI.Draw.Header
 import Remax.UI.Draw.Help
@@ -33,8 +35,6 @@ import Remax.UI.Draw.Prompt
 import Remax.UI.Draw.Status
 import Remax.UI.Draw.Tray
 import Remax.UI.Draw.Tree
-import Remax.UI.Types
-import Remax.UI.Widgets
 
 draw :: St -> [Widget Name]
 draw st =

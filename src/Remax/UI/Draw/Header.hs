@@ -23,10 +23,10 @@ import Remax.Git
   ( RebaseStatus (..)
   , modeLabel
   )
-import Remax.UI.Attrs
-import Remax.UI.Types
-import Remax.UI.Verdict
-import Remax.UI.Widgets
+import Remax.UI.Core.Attrs
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
+import Remax.UI.Core.Widgets
 import System.FilePath
   ( takeFileName
   )

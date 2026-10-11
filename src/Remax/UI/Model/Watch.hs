@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Watch
+module Remax.UI.Model.Watch
   ( withWatcher
   , installWatches
   , watchTracked
@@ -42,7 +42,7 @@ import Remax.Git
   , listFilesUnder
   )
 import Remax.Store (storeDirectory)
-import Remax.UI.Types
+import Remax.UI.Core.Types
 import System.Exit (die)
 import qualified System.FSNotify as FS
 import System.FilePath

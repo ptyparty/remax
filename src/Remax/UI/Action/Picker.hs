@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Picker
+module Remax.UI.Action.Picker
   ( reopenLastSelector
   , openBufferPicker
   , openBasePicker
@@ -42,15 +42,15 @@ import Remax.Git
   , runGit
   )
 import Remax.Modal
-import Remax.UI.Fuzzy
-import Remax.UI.Jobs
-import Remax.UI.Load
-import Remax.UI.Nav
-import Remax.UI.Open
-import Remax.UI.Repo
-import Remax.UI.Settings
-import Remax.UI.Types
-import Remax.UI.Widgets
+import Remax.UI.Action.Fuzzy
+import Remax.UI.Action.Open
+import Remax.UI.Action.Repo
+import Remax.UI.Action.Settings
+import Remax.UI.Core.Jobs
+import Remax.UI.Core.Types
+import Remax.UI.Core.Widgets
+import Remax.UI.Model.Load
+import Remax.UI.Model.Nav
 import qualified Remax.Zipper as Z
 import System.FilePath
   ( takeFileName
