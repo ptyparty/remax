@@ -39,21 +39,21 @@ import Remax.Config
 import Remax.Emacs (handleEmacs)
 import Remax.Modal
 import Remax.Store
-import Remax.UI.Command
-import Remax.UI.Editor
-import Remax.UI.Load
-import Remax.UI.Menus
-import Remax.UI.Nav
-import Remax.UI.Notes
-import Remax.UI.Open
-import Remax.UI.Picker
-import Remax.UI.Search
-import Remax.UI.Tree
-import Remax.UI.TreeKeys
-import Remax.UI.Types
-import Remax.UI.Verdict
-import Remax.UI.Verdicts
-import Remax.UI.View
+import Remax.UI.Action.Command
+import Remax.UI.Action.Editor
+import Remax.UI.Action.Menus
+import Remax.UI.Action.Notes
+import Remax.UI.Action.Open
+import Remax.UI.Action.Picker
+import Remax.UI.Action.Search
+import Remax.UI.Action.Tree
+import Remax.UI.Action.TreeKeys
+import Remax.UI.Action.Verdicts
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
+import Remax.UI.Core.View
+import Remax.UI.Model.Load
+import Remax.UI.Model.Nav
 import Remax.Vi
   ( ViResult (..)
   , handleVi

@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Open
+module Remax.UI.Action.Open
   ( gotoAltFile
   , openFilePath
   , closeCurrent
@@ -40,11 +40,11 @@ import Remax.Git
   )
 import Remax.Modal
 import qualified Remax.TreeSitter as TS
-import Remax.UI.Load
-import Remax.UI.Nav
-import Remax.UI.Repo
-import Remax.UI.Types
-import Remax.UI.Verdict
+import Remax.UI.Action.Repo
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
+import Remax.UI.Model.Load
+import Remax.UI.Model.Nav
 import System.FilePath
   ( isAbsolute
   , joinPath

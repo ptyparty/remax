@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Repo
+module Remax.UI.Action.Repo
   ( switchRepo
   , rescanRepos
   , describeRepo
@@ -39,13 +39,13 @@ import Remax.Git
   , reviewFiles
   )
 import Remax.Store
-import Remax.UI.Jobs
-import Remax.UI.Load
-import Remax.UI.Nav
-import Remax.UI.Rebase
-import Remax.UI.Types
-import Remax.UI.Verdict
-import Remax.UI.Watch
+import Remax.UI.Action.Rebase
+import Remax.UI.Core.Jobs
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
+import Remax.UI.Model.Load
+import Remax.UI.Model.Nav
+import Remax.UI.Model.Watch
 import System.FilePath
   ( takeFileName
   )

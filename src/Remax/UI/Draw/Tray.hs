@@ -30,13 +30,13 @@ import qualified Data.Text as T
 import qualified Graphics.Vty as V
 import Remax.DiffModel
 import Remax.Store
-import Remax.UI.Attrs
-import Remax.UI.Ink
-import Remax.UI.Tray
-import Remax.UI.Types
-import Remax.UI.Verdict
-import Remax.UI.View
-import Remax.UI.Widgets
+import Remax.UI.Core.Attrs
+import Remax.UI.Core.Ink
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
+import Remax.UI.Core.View
+import Remax.UI.Core.Widgets
+import Remax.UI.Model.Tray
 
 -- The tray is drawn as images for the same reason the body is: it holds
 -- a row per hunk in the whole change set, and every one of them was a

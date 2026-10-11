@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Load
+module Remax.UI.Model.Load
   ( loadAll
   , rebuildFV
   , patchLine
@@ -75,13 +75,13 @@ import Remax.Git
 import Remax.Highlight
 import Remax.Modal
 import qualified Remax.TreeSitter as TS
-import Remax.UI.Jobs
-import Remax.UI.Nav
-import Remax.UI.Types
-import Remax.UI.Verdict
-import Remax.UI.View
-import Remax.UI.Watch
-import Remax.UI.WordDiff
+import Remax.UI.Core.Jobs
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
+import Remax.UI.Core.View
+import Remax.UI.Core.WordDiff
+import Remax.UI.Model.Nav
+import Remax.UI.Model.Watch
 import qualified Remax.Zipper as Z
 import System.Directory
   ( doesFileExist

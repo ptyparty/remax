@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Verdicts
+module Remax.UI.Action.Verdicts
   ( togglePendingOnly
   , cycleRunFilter
   , setRunFilter
@@ -55,12 +55,12 @@ import Remax.Git
   )
 import Remax.Modal
 import Remax.Store
-import Remax.UI.Conversation
-import Remax.UI.Load
-import Remax.UI.Nav
-import Remax.UI.Types
-import Remax.UI.Verdict
-import Remax.UI.View
+import Remax.UI.Action.Conversation
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
+import Remax.UI.Core.View
+import Remax.UI.Model.Load
+import Remax.UI.Model.Nav
 import qualified Remax.Zipper as Z
 import System.FilePath
   ( dropTrailingPathSeparator

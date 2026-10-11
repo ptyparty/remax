@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.View
+module Remax.UI.Core.View
   ( newSideLines
   , lastRestingRow
   , restingPoints
@@ -50,8 +50,8 @@ import qualified Graphics.Vty as V
 import Remax.DiffModel
 import Remax.Modal
 import Remax.Store
-import Remax.UI.Types
-import Remax.UI.Verdict
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
 
 -- The new side of the diff, and the buffer every row calculation is
 -- measured against. A deleted file has no working copy at all, but its

@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Attrs
+module Remax.UI.Core.Attrs
   ( headerAttr
   , headerFileAttr
   , headerOkAttr

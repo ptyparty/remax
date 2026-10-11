@@ -67,14 +67,14 @@ import Remax.Git
 import Remax.Store
 import Remax.Theme
 import qualified Remax.TreeSitter as TS
-import Remax.UI.Attrs
+import Remax.UI.Core.Attrs
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
 import Remax.UI.Draw
 import Remax.UI.Events
-import Remax.UI.Load
-import Remax.UI.Nav
-import Remax.UI.Types
-import Remax.UI.Verdict
-import Remax.UI.Watch
+import Remax.UI.Model.Load
+import Remax.UI.Model.Nav
+import Remax.UI.Model.Watch
 import Remax.Vi
   ( viIdle
   )

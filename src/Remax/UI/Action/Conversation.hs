@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Conversation
+module Remax.UI.Action.Conversation
   ( resolveAllAnswered
   , refreshNoteGroups
   , resolveNotesInMemory
@@ -28,8 +28,8 @@ import Data.Maybe
 import qualified Data.Set as Set
 import Data.Text (Text)
 import Remax.Store
-import Remax.UI.Types
-import Remax.UI.Verdict
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
 
 -- Attach a reviewer note to the selection's lines (or the current hunk),
 -- so a ! or ? carries its reason into `remax list`.

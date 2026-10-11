@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.WordDiff
+module Remax.UI.Core.WordDiff
   ( intralineSpans
   , shiftSpans
   ) where

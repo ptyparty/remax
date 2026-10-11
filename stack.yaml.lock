@@ -3,7 +3,21 @@
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/topics/lock_files
 
-packages: []
+packages:
+- completed:
+    hackage: henforcer-1.0.0.1@sha256:69f1c0140122505f3daf2ef2aef4b100ced6579fd741b6f191d3ef4c5e99b8c5,4632
+    pantry-tree:
+      sha256: 9374d76092216baaf986c4538161e5ca4711c944c3915b7f45fbf29ff28ddd98
+      size: 3049
+  original:
+    hackage: henforcer-1.0.0.1
+- completed:
+    hackage: pollock-0.1.0.4@sha256:5f3de2398dc4afcbbea04fd24a6a0d2f77236e606bec36dc2d543bd04b9e117e,4119
+    pantry-tree:
+      sha256: dc57fb04f010e8dd0d9fd015e5030cd42c67c2fa79a7f7e942ab242de2efe98f
+      size: 1182
+  original:
+    hackage: pollock-0.1.0.4
 snapshots:
 - completed:
     sha256: 0d0bb681dd5be9b930c8fc070d717aae757b9aed176ae6047d87624b46406816

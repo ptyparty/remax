@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Tray
+module Remax.UI.Model.Tray
   ( TrayRow (..)
   , trayRows
   , trayWidth
@@ -17,8 +17,8 @@ import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
 import Remax.DiffModel
-import Remax.UI.Types
-import Remax.UI.Verdict
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
 
 -- A tray row together with what it needs to draw itself.
 --

@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Rebase
+module Remax.UI.Action.Rebase
   ( rebaseStopMsg
   , startRebase
   , continueRebase
@@ -37,8 +37,8 @@ import Remax.Git
   , trackedChanges
   )
 import Remax.Modal
-import Remax.UI.Load
-import Remax.UI.Types
+import Remax.UI.Core.Types
+import Remax.UI.Model.Load
 import Remax.Vi
   ( viIdle
   )

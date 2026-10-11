@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Nav
+module Remax.UI.Model.Nav
   ( withEd
   , matchRun
   , currentRunOf
@@ -61,10 +61,10 @@ import Remax.Config
 import Remax.DiffModel
 import Remax.Modal
 import Remax.Store
-import Remax.UI.Tray
-import Remax.UI.Types
-import Remax.UI.Verdict
-import Remax.UI.View
+import Remax.UI.Core.Types
+import Remax.UI.Core.Verdict
+import Remax.UI.Core.View
+import Remax.UI.Model.Tray
 import qualified Remax.Zipper as Z
 
 withEd :: EdState -> FileView -> FileView

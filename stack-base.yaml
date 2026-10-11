@@ -4,3 +4,7 @@ packages:
 flags:
   remax:
     ci: true
+
+extra-deps:
+  - henforcer-1.0.0.1
+  - pollock-0.1.0.4

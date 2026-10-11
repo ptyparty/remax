@@ -15,9 +15,9 @@ import Brick
   , withDefAttr
   )
 import qualified Data.Text as T
-import Remax.UI.Attrs
-import Remax.UI.Command
-import Remax.UI.Types
+import Remax.UI.Action.Command
+import Remax.UI.Core.Attrs
+import Remax.UI.Core.Types
 
 -- The live menu above the status line: bare ':' lists every command
 -- with its description; typing narrows; the cycled candidate is lit.

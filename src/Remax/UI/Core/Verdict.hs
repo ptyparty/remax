@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Verdict
+module Remax.UI.Core.Verdict
   ( allRunsInOrder
   , pairPending
   , pairUnvisited
@@ -47,9 +47,9 @@ import Data.Text (Text)
 import Remax.DiffModel
 import Remax.Highlight
 import Remax.Store
-import Remax.UI.Jobs
-import Remax.UI.Types
-import Remax.UI.Widgets
+import Remax.UI.Core.Jobs
+import Remax.UI.Core.Types
+import Remax.UI.Core.Widgets
 
 -- Every (file, hunk) pair in display order, each carrying its run.
 --

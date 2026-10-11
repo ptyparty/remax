@@ -41,11 +41,15 @@ executables:
       - -threaded
     when:
       - condition: flag(ci)
+        dependencies:
+          - henforcer
         ghc-options:
           - -Werror
           - -Wcompat
           - -Widentities
           - -Wpartial-fields
+          - -fplugin Henforcer
+          - -fplugin-opt "Henforcer:-c./henforcer.toml"
     c-sources:
       - cbits/shim.c
       - vendor/tree-sitter/src/lib.c

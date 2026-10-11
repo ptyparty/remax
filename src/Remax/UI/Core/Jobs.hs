@@ -1,7 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Remax.UI.Jobs
+module Remax.UI.Core.Jobs
   ( forMaybeBounded
   , forBounded
   , startJob
@@ -50,7 +50,7 @@ import Data.IORef
   )
 import Data.Text (Text)
 import qualified Data.Text as T
-import Remax.UI.Types
+import Remax.UI.Core.Types
 
 -- Load files on a few workers at once: each one costs a git spawn for
 -- its base, and a rebase-stop commit can easily touch a hundred files —
