@@ -117,6 +117,45 @@ executable remax
       Remax.Tree
       Remax.TreeSitter
       Remax.UI
+      Remax.UI.Attrs
+      Remax.UI.Command
+      Remax.UI.Conversation
+      Remax.UI.Draw
+      Remax.UI.Draw.Body
+      Remax.UI.Draw.Header
+      Remax.UI.Draw.Help
+      Remax.UI.Draw.Notes
+      Remax.UI.Draw.Picker
+      Remax.UI.Draw.Prompt
+      Remax.UI.Draw.Status
+      Remax.UI.Draw.Tray
+      Remax.UI.Draw.Tree
+      Remax.UI.Editor
+      Remax.UI.Events
+      Remax.UI.Files
+      Remax.UI.Fuzzy
+      Remax.UI.Ink
+      Remax.UI.Jobs
+      Remax.UI.Load
+      Remax.UI.Menus
+      Remax.UI.Nav
+      Remax.UI.Notes
+      Remax.UI.Open
+      Remax.UI.Picker
+      Remax.UI.Rebase
+      Remax.UI.Repo
+      Remax.UI.Search
+      Remax.UI.Settings
+      Remax.UI.Tray
+      Remax.UI.Tree
+      Remax.UI.TreeKeys
+      Remax.UI.Types
+      Remax.UI.Verdict
+      Remax.UI.Verdicts
+      Remax.UI.View
+      Remax.UI.Watch
+      Remax.UI.Widgets
+      Remax.UI.WordDiff
       Remax.Vi
       Remax.Zipper
       Paths_remax
