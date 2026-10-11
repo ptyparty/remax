@@ -20,22 +20,21 @@ module Remax.Tree
   , rowExpandable
   ) where
 
-import qualified Data.Map.Strict as Map
-import Data.Maybe (listToMaybe, mapMaybe)
-import qualified Data.Set as Set
-import Data.Text (Text)
-import qualified Data.Text as T
-import System.FilePath (splitDirectories)
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Set qualified as Set
+import Data.Text qualified as T
+import System.FilePath qualified as FilePath
 
-import Remax.Git (PathStat (..))
+import Remax.Git qualified as Git
 
 -- A directory has kids and no stat; a file has a stat and no kids. The
 -- root is a directory with an empty path.
 data TreeNode = TreeNode
-  { tnName :: Text
+  { tnName :: T.Text
   , tnPath :: FilePath
   , tnKids :: [TreeNode]
-  , tnStat :: Maybe PathStat
+  , tnStat :: Maybe Git.PathStat
   , tnRollup :: Rollup
   }
 
@@ -61,7 +60,7 @@ instance Monoid Rollup where
 -- Build from the union of the repository's files and the paths the diff
 -- mentions: a deleted file is absent from disk but present in the diff,
 -- and listing it is the only way it can be seen at all.
-buildTree :: [FilePath] -> Map.Map FilePath PathStat -> TreeNode
+buildTree :: [FilePath] -> Map.Map FilePath Git.PathStat -> TreeNode
 buildTree paths stats =
   let
     every = Set.toList (Set.fromList (paths ++ Map.keys stats))
@@ -88,7 +87,7 @@ buildTree paths stats =
               [] -> fresh
           in
             node {tnKids = others ++ [insert existing rest]}
-    seeded = foldl (\n p -> insert n (splitDirectories p)) (TreeNode "" "" [] Nothing mempty) every
+    seeded = foldl (\n p -> insert n (FilePath.splitDirectories p)) (TreeNode "" "" [] Nothing mempty) every
   in
     roll (sortTree seeded)
 
@@ -125,13 +124,13 @@ roll node =
       in
         node {tnKids = rolled, tnRollup = foldMap tnRollup rolled}
 
-statRollup :: Maybe PathStat -> Rollup
+statRollup :: Maybe Git.PathStat -> Rollup
 statRollup mStat =
   case mStat of
     Nothing -> mempty
     Just stat ->
       let
-        (a, r) = case psCounts stat of
+        (a, r) = case Git.psCounts stat of
           Just counts -> counts
           Nothing -> (0, 0)
       in
@@ -141,13 +140,13 @@ statRollup mStat =
 -- says which hunk, so a row is addressable without a synthetic key.
 data RowKind
   = RowDir Rollup Bool -- rollup, expanded
-  | RowFile (Maybe PathStat) Bool Bool -- stat, has hunks, expanded
+  | RowFile (Maybe Git.PathStat) Bool Bool -- stat, has hunks, expanded
   | RowHunk Int -- hunk index within the file
   deriving (Eq)
 
 data TreeRow = TreeRow
   { trDepth :: Int
-  , trLabel :: Text
+  , trLabel :: T.Text
   , trPath :: FilePath
   , -- the full path whose match justifies this row: its own for a file,
     -- a matching descendant's for a directory. Only against this does
@@ -201,7 +200,7 @@ matchWitness treeFilter node =
     ShowMatching matches ->
       case tnKids node of
         [] -> if matches (tnPath node) then Just (tnPath node) else Nothing
-        kids -> listToMaybe (mapMaybe (matchWitness treeFilter) kids)
+        kids -> Maybe.listToMaybe (Maybe.mapMaybe (matchWitness treeFilter) kids)
 
 filtering :: TreeFilter -> Bool
 filtering treeFilter =
@@ -281,7 +280,7 @@ treeRows treeFilter expanded hunkCount root =
 -- A directory whose only child is a directory renders as one row:
 -- "src/Remax/" rather than "src/" above "Remax/". Saves a level of
 -- indent on every deep tree without hiding anything.
-chain :: TreeNode -> (Text, TreeNode)
+chain :: TreeNode -> (T.Text, TreeNode)
 chain node =
   case tnKids node of
     [only]

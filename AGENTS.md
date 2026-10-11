@@ -58,11 +58,38 @@ Placement rules:
 - Every module has an explicit export list naming only what other
   modules use. Data types are exported with `(..)`. Everything else is
   private.
-- Imports of sibling `Remax.UI.*` modules are whole-module. External
-  imports use explicit lists.
+- Imports follow the rules under Imports below; sibling `Remax.UI.*`
+  modules are no exception.
 - `Remax.Git`, `Remax.Store`, `Remax.DiffModel`, `Remax.Modal` and the
   other `Remax.*` modules are below all of `Remax.UI.*` and know nothing
   about the session state.
+
+## Imports
+
+Import every module qualified, in the postpositive form the
+`ImportQualifiedPost` default extension allows:
+`import Data.Text qualified as T`. Only `Prelude` may be imported open,
+apart from the `import M as Export` imports that a module re-exports
+with `module Export`. Import operators explicitly and unqualified, e.g.
+`import System.FilePath ((</>))` next to
+`import System.FilePath qualified as FilePath`. Import operator data
+constructors with `pattern`, e.g.
+`import Data.List.NonEmpty (pattern (:|))`, which needs the
+`PatternSynonyms` extension.
+
+When a module that is already imported re-exports a name, use it through
+that module instead of importing the defining module too.
+
+Give each module a single alias and use it everywhere the module is
+imported. `henforcer.toml` records every alias and the gate rejects any
+other spelling, so add a rule when you import a module that has none,
+and add an `unqualified` scheme there when you import a module's
+operators. Pick an alias that a reader cannot mistake for a different
+module, e.g. `TS` for `Remax.TreeSitter` rather than `Tree`, which reads
+as `Remax.Tree`, and `TreeAction` for `Remax.UI.Action.Tree`.
+
+Ensure that each import alias used with a module refers to only one
+imported module. Do not use the same import alias for different modules.
 
 ## Functions
 

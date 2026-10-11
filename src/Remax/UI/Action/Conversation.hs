@@ -8,44 +8,33 @@ module Remax.UI.Action.Conversation
   , closeConversation
   ) where
 
-import Brick
-  ( EventM
-  )
-import Control.Monad
-  ( unless
-  , void
-  )
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.State
-  ( get
-  , modify
-  )
-import qualified Data.Map.Strict as Map
-import Data.Maybe
-  ( listToMaybe
-  , mapMaybe
-  )
-import qualified Data.Set as Set
-import Data.Text (Text)
-import Remax.Store
-import Remax.UI.Core.Types
-import Remax.UI.Core.Verdict
+import Brick qualified as Brick
+import Control.Monad qualified as Monad
+import Control.Monad.IO.Class qualified as MonadIO
+import Control.Monad.State qualified as State
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Set qualified as Set
+import Data.Text qualified as T
+import Remax.Store qualified as Store
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Verdict qualified as Verdict
 
 -- Attach a reviewer note to the selection's lines (or the current hunk),
 -- so a ! or ? carries its reason into `remax list`.
 -- :resolve all — sweep every answered note in the repository: anything
 -- an agent has replied to is considered handled and both sides clear.
-resolveAllAnswered :: EventM Name St ()
+resolveAllAnswered :: Brick.EventM Types.Name Types.St ()
 resolveAllAnswered = do
-  st <- get
-  n <- liftIO (resolveAnswered (stConn st) (repoText st))
-  threads <- liftIO (loadThreads (stConn st) (repoText st))
-  groups <- liftIO (loadNoteGroups (stConn st) (repoText st))
-  modify (\s -> s {stThreads = threads, stNoteGroups = groups})
-  setMsg $
+  st <- State.get
+  n <- MonadIO.liftIO (Store.resolveAnswered (Types.stConn st) (Types.repoText st))
+  threads <- MonadIO.liftIO (Store.loadThreads (Types.stConn st) (Types.repoText st))
+  groups <- MonadIO.liftIO (Store.loadNoteGroups (Types.stConn st) (Types.repoText st))
+  State.modify (\s -> s {Types.stThreads = threads, Types.stNoteGroups = groups})
+  Types.setMsg $
     if n == 0
       then "no answered notes to resolve"
-      else "resolved " <> tshow n <> " answered line(s)"
+      else "resolved " <> Types.tshow n <> " answered line(s)"
 
 -- Acceptance closes the note conversation; the store upsert already
 -- cleared the rows, this keeps the inline display in step.
@@ -53,16 +42,16 @@ resolveAllAnswered = do
 -- assigned by the store when a note is saved, so the session cannot
 -- work them out for itself; it asks again after any write that could
 -- have formed or dissolved a group.
-refreshNoteGroups :: EventM Name St ()
+refreshNoteGroups :: Brick.EventM Types.Name Types.St ()
 refreshNoteGroups = do
-  st <- get
-  groups <- liftIO (loadNoteGroups (stConn st) (repoText st))
-  modify (\s -> s {stNoteGroups = groups})
+  st <- State.get
+  groups <- MonadIO.liftIO (Store.loadNoteGroups (Types.stConn st) (Types.repoText st))
+  State.modify (\s -> s {Types.stNoteGroups = groups})
 
-resolveNotesInMemory :: [Text] -> EventM Name St ()
+resolveNotesInMemory :: [T.Text] -> Brick.EventM Types.Name Types.St ()
 resolveNotesInMemory keys = do
-  modify $ \s ->
-    s {stThreads = foldr Map.delete (stThreads s) keys}
+  State.modify $ \s ->
+    s {Types.stThreads = foldr Map.delete (Types.stThreads s) keys}
   refreshNoteGroups
 
 -- Every key carrying the same conversation as one of these.
@@ -79,18 +68,18 @@ resolveNotesInMemory keys = do
 -- equal conversations while being nothing to do with each other, and
 -- retiring one would take the other with it — which is a worse bug than
 -- the one this is here to fix.
-conversationKeys :: St -> FileView -> [Text] -> [Text]
+conversationKeys :: Types.St -> Types.FileView -> [T.Text] -> [T.Text]
 conversationKeys st fv keys =
   let
-    rows = fvRows fv
+    rows = Types.fvRows fv
     threadAt i = do
-      r <- safeIdx rows i
-      listToMaybe (mapMaybe (`Map.lookup` stThreads st) (rowFeedbackKeys r))
-    keysAt i = maybe [] rowFeedbackKeys (safeIdx rows i)
+      r <- Types.safeIdx rows i
+      Maybe.listToMaybe (Maybe.mapMaybe (`Map.lookup` Types.stThreads st) (Verdict.rowFeedbackKeys r))
+    keysAt i = maybe [] Verdict.rowFeedbackKeys (Types.safeIdx rows i)
     seeds =
       [ i
       | (i, r) <- zip [0 ..] rows
-      , any (`elem` keys) (rowFeedbackKeys r)
+      , any (`elem` keys) (Verdict.rowFeedbackKeys r)
       ]
     -- the run of neighbours carrying the same conversation, which is the
     -- block the note is drawn under
@@ -116,17 +105,17 @@ conversationKeys st fv keys =
 --
 -- Cleared rather than marked reviewed, because reviewed says a change
 -- has been read and a line nobody changed has none.
-closeConversation :: [Text] -> EventM Name St ()
+closeConversation :: [T.Text] -> Brick.EventM Types.Name Types.St ()
 closeConversation keys = do
-  st <- get
+  st <- State.get
   let
-    wider = case currentFileMay st of
+    wider = case Types.currentFileMay st of
       Nothing -> keys
       Just fv -> conversationKeys st fv keys
     beyond = filter (`notElem` keys) wider
-  unless (null beyond) $ do
-    void (liftIO (clearThread (stConn st) (repoText st) beyond))
-    liftIO (deleteKeys (stConn st) (repoText st) beyond)
-    modify $ \s ->
-      s {stVerdicts = foldr Map.delete (stVerdicts s) beyond}
+  Monad.unless (null beyond) $ do
+    Monad.void (MonadIO.liftIO (Store.clearThread (Types.stConn st) (Types.repoText st) beyond))
+    MonadIO.liftIO (Store.deleteKeys (Types.stConn st) (Types.repoText st) beyond)
+    State.modify $ \s ->
+      s {Types.stVerdicts = foldr Map.delete (Types.stVerdicts s) beyond}
   resolveNotesInMemory wider

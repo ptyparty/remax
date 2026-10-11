@@ -9,16 +9,15 @@ module Remax.Emacs
   ( handleEmacs
   ) where
 
-import Data.Char (isAlphaNum, isControl)
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
-import qualified Graphics.Vty as V
+import Data.Char qualified as Char
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Graphics.Vty qualified as V
 
-import Remax.Modal
-import qualified Remax.Zipper as Z
+import Remax.Modal qualified as Modal
+import Remax.Zipper qualified as Z
 
-handleEmacs :: V.Event -> EdState -> Maybe EdState
+handleEmacs :: V.Event -> Modal.EdState -> Maybe Modal.EdState
 handleEmacs ev ed =
   case ev of
     -- movement (an active mark extends the region, like transient-mark)
@@ -39,7 +38,7 @@ handleEmacs ev ed =
     V.EvKey (V.KChar '<') [V.MMeta] -> Just (moveTo (0, 0) ed)
     V.EvKey (V.KChar '>') [V.MMeta] ->
       let
-        ls = bufferLines ed
+        ls = Modal.bufferLines ed
         lastRow = max 0 (length ls - 1)
         lastCol = case reverse ls of
           (l : _) -> T.length l
@@ -69,82 +68,82 @@ handleEmacs ev ed =
     V.EvPaste bytes ->
       Just (destructive (Z.insertMany (TE.decodeUtf8 bytes)) ed)
     V.EvKey (V.KChar c) []
-      | not (isControl c) -> Just (selfInsert c ed)
+      | not (Char.isControl c) -> Just (selfInsert c ed)
     _ -> Nothing
 
 -- Plain zipper movement; the mark (selection anchor) stays put.
-onZipper :: (Z.TextZipper Text -> Z.TextZipper Text) -> EdState -> EdState
-onZipper f ed = breakInsertRun ed {edZipper = f (edZipper ed)}
+onZipper :: (Z.TextZipper T.Text -> Z.TextZipper T.Text) -> Modal.EdState -> Modal.EdState
+onZipper f ed = breakInsertRun ed {Modal.edZipper = f (Modal.edZipper ed)}
 
-moveTo :: (Int, Int) -> EdState -> EdState
+moveTo :: (Int, Int) -> Modal.EdState -> Modal.EdState
 moveTo pos = onZipper (Z.moveCursor pos)
 
-setMark :: EdState -> EdState
+setMark :: Modal.EdState -> Modal.EdState
 setMark ed =
   breakInsertRun
-    ed {edSelAnchor = Just (cursorRC ed), edSelKind = CharSel}
+    ed {Modal.edSelAnchor = Just (Modal.cursorRC ed), Modal.edSelKind = Modal.CharSel}
 
-clearMark :: EdState -> EdState
-clearMark ed = breakInsertRun ed {edSelAnchor = Nothing}
+clearMark :: Modal.EdState -> Modal.EdState
+clearMark ed = breakInsertRun ed {Modal.edSelAnchor = Nothing}
 
 -- Self-inserts share one undo snapshot per typing run; any other
 -- command ends the run. edInsertEntry doubles as the run flag — the
 -- helix insert machinery it belongs to is idle in emacs mode.
-breakInsertRun :: EdState -> EdState
-breakInsertRun ed = ed {edInsertEntry = Nothing}
+breakInsertRun :: Modal.EdState -> Modal.EdState
+breakInsertRun ed = ed {Modal.edInsertEntry = Nothing}
 
-selfInsert :: Char -> EdState -> EdState
+selfInsert :: Char -> Modal.EdState -> Modal.EdState
 selfInsert c ed =
   let
-    armed = case edInsertEntry ed of
+    armed = case Modal.edInsertEntry ed of
       Just _ -> ed
-      Nothing -> (pushUndo ed) {edInsertEntry = Just EntryI}
+      Nothing -> (pushUndo ed) {Modal.edInsertEntry = Just Modal.EntryI}
   in
-    armed {edZipper = Z.insertChar c (edZipper armed)}
+    armed {Modal.edZipper = Z.insertChar c (Modal.edZipper armed)}
 
-selfInsertText :: Text -> EdState -> EdState
+selfInsertText :: T.Text -> Modal.EdState -> Modal.EdState
 selfInsertText t ed =
   let
-    armed = case edInsertEntry ed of
+    armed = case Modal.edInsertEntry ed of
       Just _ -> ed
-      Nothing -> (pushUndo ed) {edInsertEntry = Just EntryI}
+      Nothing -> (pushUndo ed) {Modal.edInsertEntry = Just Modal.EntryI}
   in
-    armed {edZipper = Z.insertMany t (edZipper armed)}
+    armed {Modal.edZipper = Z.insertMany t (Modal.edZipper armed)}
 
-destructive :: (Z.TextZipper Text -> Z.TextZipper Text) -> EdState -> EdState
+destructive :: (Z.TextZipper T.Text -> Z.TextZipper T.Text) -> Modal.EdState -> Modal.EdState
 destructive f ed =
   let
     backed = pushUndo (breakInsertRun ed)
   in
-    backed {edZipper = f (edZipper backed)}
+    backed {Modal.edZipper = f (Modal.edZipper backed)}
 
-pushUndo :: EdState -> EdState
+pushUndo :: Modal.EdState -> Modal.EdState
 pushUndo ed =
   ed
-    { edUndo = take 100 (edZipper ed : edUndo ed)
-    , edRedo = []
-    , edTouched = True
+    { Modal.edUndo = take 100 (Modal.edZipper ed : Modal.edUndo ed)
+    , Modal.edRedo = []
+    , Modal.edTouched = True
     }
 
-undoOnce :: EdState -> EdState
+undoOnce :: Modal.EdState -> Modal.EdState
 undoOnce ed =
-  case edUndo ed of
+  case Modal.edUndo ed of
     [] -> ed
     (z : rest) ->
       breakInsertRun
         ed
-          { edZipper = z
-          , edUndo = rest
-          , edRedo = take 100 (edZipper ed : edRedo ed)
-          , edSelAnchor = Nothing
+          { Modal.edZipper = z
+          , Modal.edUndo = rest
+          , Modal.edRedo = take 100 (Modal.edZipper ed : Modal.edRedo ed)
+          , Modal.edSelAnchor = Nothing
           }
 
 -- C-k: kill to end of line, or the newline itself when already there.
-killToEOL :: EdState -> EdState
+killToEOL :: Modal.EdState -> Modal.EdState
 killToEOL ed =
   let
-    (row, col) = cursorRC ed
-    ls = bufferLines ed
+    (row, col) = Modal.cursorRC ed
+    ls = Modal.bufferLines ed
     line = case drop row ls of
       (l : _) -> l
       [] -> T.empty
@@ -153,30 +152,30 @@ killToEOL ed =
     if col < T.length line
       then
         backed
-          { edZipper = Z.moveCursor (row, col) (Z.textZipper (replaceAt row (T.take col line) ls) Nothing)
-          , edKill = T.drop col line
+          { Modal.edZipper = Z.moveCursor (row, col) (Z.textZipper (replaceAt row (T.take col line) ls) Nothing)
+          , Modal.edKill = T.drop col line
           }
       else
         backed
-          { edZipper = Z.deleteChar (edZipper backed)
-          , edKill = "\n"
+          { Modal.edZipper = Z.deleteChar (Modal.edZipper backed)
+          , Modal.edKill = "\n"
           }
 
-yank :: EdState -> EdState
+yank :: Modal.EdState -> Modal.EdState
 yank ed =
-  if T.null (edKill ed)
+  if T.null (Modal.edKill ed)
     then ed
-    else destructive (Z.insertMany (edKill ed)) ed
+    else destructive (Z.insertMany (Modal.edKill ed)) ed
 
 -- The emacs region: mark to point, point-exclusive. Nothing when no
 -- mark is set (the caller leaves the event unhandled → no-op).
-killRegion :: Bool -> EdState -> Maybe EdState
+killRegion :: Bool -> Modal.EdState -> Maybe Modal.EdState
 killRegion alsoDelete ed = do
-  anchor <- edSelAnchor ed
+  anchor <- Modal.edSelAnchor ed
   let
-    point = cursorRC ed
+    point = Modal.cursorRC ed
     (lo, hi) = if anchor <= point then (anchor, point) else (point, anchor)
-    ls = bufferLines ed
+    ls = Modal.bufferLines ed
     killed = extractRegion ls lo hi
   if alsoDelete
     then
@@ -186,22 +185,22 @@ killRegion alsoDelete ed = do
       in
         Just
           backed
-            { edZipper = Z.moveCursor lo (Z.textZipper remaining Nothing)
-            , edKill = killed
-            , edSelAnchor = Nothing
+            { Modal.edZipper = Z.moveCursor lo (Z.textZipper remaining Nothing)
+            , Modal.edKill = killed
+            , Modal.edSelAnchor = Nothing
             }
     else
       -- M-w is the copy; C-w and C-k cut, and a cut is a removal rather
       -- than a request to reach the system clipboard
       Just
         ( breakInsertRun
-            ed {edKill = killed, edSelAnchor = Nothing, edCopied = True}
+            ed {Modal.edKill = killed, Modal.edSelAnchor = Nothing, Modal.edCopied = True}
         )
 
-extractRegion :: [Text] -> (Int, Int) -> (Int, Int) -> Text
+extractRegion :: [T.Text] -> (Int, Int) -> (Int, Int) -> T.Text
 extractRegion ls (lr, lc) (hr, hc) =
   let
-    row = lineAt ls
+    row = Modal.lineAt ls
   in
     if lr == hr
       then T.take (hc - lc) (T.drop lc (row lr))
@@ -213,24 +212,24 @@ extractRegion ls (lr, lc) (hr, hc) =
               ++ [T.take hc (row hr)]
           )
 
-deleteRegion :: [Text] -> (Int, Int) -> (Int, Int) -> [Text]
+deleteRegion :: [T.Text] -> (Int, Int) -> (Int, Int) -> [T.Text]
 deleteRegion ls (lr, lc) (hr, hc) =
   let
-    merged = T.take lc (lineAt ls lr) <> T.drop hc (lineAt ls hr)
+    merged = T.take lc (Modal.lineAt ls lr) <> T.drop hc (Modal.lineAt ls hr)
   in
     take lr ls ++ (merged : drop (hr + 1) ls)
 
-replaceAt :: Int -> Text -> [Text] -> [Text]
+replaceAt :: Int -> T.Text -> [T.Text] -> [T.Text]
 replaceAt i new ls = take i ls ++ (new : drop (i + 1) ls)
 
 -- forward-word / backward-word, crossing line boundaries.
 wordChar :: Char -> Bool
-wordChar c = isAlphaNum c || c == '_'
+wordChar c = Char.isAlphaNum c || c == '_'
 
-forwardWord :: EdState -> (Int, Int)
+forwardWord :: Modal.EdState -> (Int, Int)
 forwardWord ed =
   let
-    ls = bufferLines ed
+    ls = Modal.bufferLines ed
     step (r, c) =
       let
         line = case drop r ls of
@@ -248,22 +247,22 @@ forwardWord ed =
         | p ch -> skip p next
       _ -> pos
   in
-    skip wordChar (skip (not . wordChar) (cursorRC ed))
+    skip wordChar (skip (not . wordChar) (Modal.cursorRC ed))
 
-backwardWord :: EdState -> (Int, Int)
+backwardWord :: Modal.EdState -> (Int, Int)
 backwardWord ed =
   let
-    ls = bufferLines ed
+    ls = Modal.bufferLines ed
     back (r, c) =
       if c > 0
-        then Just ((r, c - 1), T.index (lineAt ls r) (c - 1))
+        then Just ((r, c - 1), T.index (Modal.lineAt ls r) (c - 1))
         else
           if r > 0
-            then Just ((r - 1, T.length (lineAt ls (r - 1))), '\n')
+            then Just ((r - 1, T.length (Modal.lineAt ls (r - 1))), '\n')
             else Nothing
     skip p pos = case back pos of
       Just (prev, ch)
         | p ch -> skip p prev
       _ -> pos
   in
-    skip wordChar (skip (not . wordChar) (cursorRC ed))
+    skip wordChar (skip (not . wordChar) (Modal.cursorRC ed))

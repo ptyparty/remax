@@ -10,39 +10,24 @@ module Remax.UI.Action.Settings
   , setBaseBranch
   ) where
 
-import Brick
-  ( EventM
-  )
-import Control.Monad
-  ( unless
-  )
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.State
-  ( get
-  , modify
-  )
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Read as TR
-import Remax.Config
-import Remax.DiffModel
-import Remax.Git
-  ( ReviewMode (..)
-  , branchRoot
-  , modeLabel
-  , refExists
-  )
-import Remax.Store
-import Remax.UI.Core.Types
-import Remax.UI.Model.Load
-import Remax.Vi
-  ( viIdle
-  )
+import Brick qualified as Brick
+import Control.Monad qualified as Monad
+import Control.Monad.IO.Class qualified as MonadIO
+import Control.Monad.State qualified as State
+import Data.Text qualified as T
+import Data.Text.Read qualified as TR
+import Remax.Config qualified as Config
+import Remax.DiffModel qualified as DiffModel
+import Remax.Git qualified as Git
+import Remax.Store qualified as Store
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Model.Load qualified as Load
+import Remax.Vi qualified as Vi
 
 -- Settings management: :set with no arguments lists everything, one
 -- argument shows a value, two applies it — live and persisted to the
 -- config file.
-settingNames :: [Text]
+settingNames :: [T.Text]
 settingNames =
   [ "keys"
   , "scrolloff"
@@ -56,112 +41,112 @@ settingNames =
   , "piece-max"
   ]
 
-settingValue :: Config -> Text -> Text
+settingValue :: Config.Config -> T.Text -> T.Text
 settingValue cfg key =
   case key of
-    "keys" -> keyModeToText (cfgKeys cfg)
-    "scrolloff" -> tshow (cfgScrolloff cfg)
-    "note-wrap" -> tshow (cfgNoteWrap cfg)
-    "note-on-flag" -> if cfgNoteOnFlag cfg then "1" else "0"
-    "ignore-whitespace" -> if cfgIgnoreWs cfg then "1" else "0"
-    "word-diff" -> if cfgWordDiff cfg then "1" else "0"
-    "untracked" -> if cfgUntracked cfg then "1" else "0"
-    "split-threshold" -> tshow (splitThreshold (cfgSplit cfg))
-    "piece-min" -> tshow (pieceMin (cfgSplit cfg))
-    "piece-max" -> tshow (pieceMax (cfgSplit cfg))
+    "keys" -> Config.keyModeToText (Config.cfgKeys cfg)
+    "scrolloff" -> Types.tshow (Config.cfgScrolloff cfg)
+    "note-wrap" -> Types.tshow (Config.cfgNoteWrap cfg)
+    "note-on-flag" -> if Config.cfgNoteOnFlag cfg then "1" else "0"
+    "ignore-whitespace" -> if Config.cfgIgnoreWs cfg then "1" else "0"
+    "word-diff" -> if Config.cfgWordDiff cfg then "1" else "0"
+    "untracked" -> if Config.cfgUntracked cfg then "1" else "0"
+    "split-threshold" -> Types.tshow (DiffModel.splitThreshold (Config.cfgSplit cfg))
+    "piece-min" -> Types.tshow (DiffModel.pieceMin (Config.cfgSplit cfg))
+    "piece-max" -> Types.tshow (DiffModel.pieceMax (Config.cfgSplit cfg))
     _ -> "?"
 
-showSettings :: EventM Name St ()
+showSettings :: Brick.EventM Types.Name Types.St ()
 showSettings = do
-  st <- get
+  st <- State.get
   let
-    one k = k <> "=" <> settingValue (stConfig st) k
-  setMsg (T.intercalate "  " (map one settingNames))
+    one k = k <> "=" <> settingValue (Types.stConfig st) k
+  Types.setMsg (T.intercalate "  " (map one settingNames))
 
-showSetting :: Text -> EventM Name St ()
+showSetting :: T.Text -> Brick.EventM Types.Name Types.St ()
 showSetting key = do
-  st <- get
+  st <- State.get
   if key `elem` settingNames
-    then setMsg (key <> " = " <> settingValue (stConfig st) key)
-    else setMsg ("unknown setting: " <> key)
+    then Types.setMsg (key <> " = " <> settingValue (Types.stConfig st) key)
+    else Types.setMsg ("unknown setting: " <> key)
 
-applySet :: Text -> Text -> EventM Name St ()
+applySet :: T.Text -> T.Text -> Brick.EventM Types.Name Types.St ()
 applySet key val = do
-  st <- get
+  st <- State.get
   let
-    cfg = stConfig st
+    cfg = Types.stConfig st
     asInt = case TR.signed TR.decimal val of
       Right (n, rest) | T.null rest -> Just (n :: Int)
       _ -> Nothing
-    finish :: Config -> EventM Name St () -> EventM Name St ()
+    finish :: Config.Config -> Brick.EventM Types.Name Types.St () -> Brick.EventM Types.Name Types.St ()
     finish newCfg after = do
-      modify (\s -> s {stConfig = newCfg})
-      liftIO (persistSetting key val)
+      State.modify (\s -> s {Types.stConfig = newCfg})
+      MonadIO.liftIO (Config.persistSetting key val)
       after
-      setMsg (":set " <> key <> " = " <> val)
+      Types.setMsg (":set " <> key <> " = " <> val)
     withInt build after = case asInt of
       Just n -> finish (build n) after
-      Nothing -> setMsg (key <> " wants a number")
-    splitWith f = f (cfgSplit cfg)
+      Nothing -> Types.setMsg (key <> " wants a number")
+    splitWith f = f (Config.cfgSplit cfg)
   case key of
     "keys"
-      | val `elem` keyModeNames || val == "vim" ->
+      | val `elem` Config.keyModeNames || val == "vim" ->
           -- switching family mid-command would strand a half-typed one
-          finish cfg {cfgKeys = keyModeFromText val} (modify (\s -> s {stVi = viIdle}))
-      | otherwise -> setMsg ("keys = " <> T.intercalate " | " keyModeNames)
-    "scrolloff" -> withInt (\n -> cfg {cfgScrolloff = max 0 n}) (pure ())
-    "note-wrap" -> withInt (\n -> cfg {cfgNoteWrap = max 20 n}) (pure ())
+          finish cfg {Config.cfgKeys = Config.keyModeFromText val} (State.modify (\s -> s {Types.stVi = Vi.viIdle}))
+      | otherwise -> Types.setMsg ("keys = " <> T.intercalate " | " Config.keyModeNames)
+    "scrolloff" -> withInt (\n -> cfg {Config.cfgScrolloff = max 0 n}) (pure ())
+    "note-wrap" -> withInt (\n -> cfg {Config.cfgNoteWrap = max 20 n}) (pure ())
     "note-on-flag" ->
-      withInt (\n -> cfg {cfgNoteOnFlag = n /= 0}) (pure ())
+      withInt (\n -> cfg {Config.cfgNoteOnFlag = n /= 0}) (pure ())
     -- both change what the diff says, so every file is decorated again
     "ignore-whitespace" ->
-      withInt (\n -> cfg {cfgIgnoreWs = n /= 0}) rebuildAllFiles
+      withInt (\n -> cfg {Config.cfgIgnoreWs = n /= 0}) Load.rebuildAllFiles
     "word-diff" ->
-      withInt (\n -> cfg {cfgWordDiff = n /= 0}) (pure ())
+      withInt (\n -> cfg {Config.cfgWordDiff = n /= 0}) (pure ())
     -- this one changes which files are in the review at all, so the
     -- change set is asked for again rather than merely redecorated
     "untracked" ->
-      withInt (\n -> cfg {cfgUntracked = n /= 0}) refreshGit
+      withInt (\n -> cfg {Config.cfgUntracked = n /= 0}) Load.refreshGit
     "split-threshold" ->
       withInt
-        (\n -> cfg {cfgSplit = splitWith (\sc -> sc {splitThreshold = max 1 n})})
-        rebuildAllFiles
+        (\n -> cfg {Config.cfgSplit = splitWith (\sc -> sc {DiffModel.splitThreshold = max 1 n})})
+        Load.rebuildAllFiles
     "piece-min" ->
       withInt
-        (\n -> cfg {cfgSplit = splitWith (\sc -> sc {pieceMin = max 1 n})})
-        rebuildAllFiles
+        (\n -> cfg {Config.cfgSplit = splitWith (\sc -> sc {DiffModel.pieceMin = max 1 n})})
+        Load.rebuildAllFiles
     "piece-max" ->
       withInt
-        (\n -> cfg {cfgSplit = splitWith (\sc -> sc {pieceMax = max 2 n})})
-        rebuildAllFiles
-    _ -> setMsg ("unknown setting: " <> key)
+        (\n -> cfg {Config.cfgSplit = splitWith (\sc -> sc {DiffModel.pieceMax = max 2 n})})
+        Load.rebuildAllFiles
+    _ -> Types.setMsg ("unknown setting: " <> key)
 
 -- Switch what the session reviews against. Each switch closes the pass
 -- and opens a new one, so pass history records what was reviewed vs what.
-setBase :: ReviewMode -> EventM Name St ()
+setBase :: Git.ReviewMode -> Brick.EventM Types.Name Types.St ()
 setBase mode = do
-  st <- get
+  st <- State.get
   ok <- case mode of
-    VsRef ref -> liftIO (refExists (stRoot st) ref)
+    Git.VsRef ref -> MonadIO.liftIO (Git.refExists (Types.stRoot st) ref)
     _ -> pure True
   case (ok, mode) of
-    (False, VsRef ref) -> setMsg ("no such ref: " <> ref)
+    (False, Git.VsRef ref) -> Types.setMsg ("no such ref: " <> ref)
     _ -> do
-      liftIO (finishPass (stConn st) (stPassId st))
-      newPass <- liftIO (beginPass (stConn st) (repoText st) (modeLabel mode))
-      modify (\s -> s {stMode = mode, stPassId = newPass})
-      forceGitRefresh
-      refreshed <- get
-      unless
-        (null (stFiles refreshed))
-        (setMsg ("base: " <> modeLabel mode))
+      MonadIO.liftIO (Store.finishPass (Types.stConn st) (Types.stPassId st))
+      newPass <- MonadIO.liftIO (Store.beginPass (Types.stConn st) (Types.repoText st) (Git.modeLabel mode))
+      State.modify (\s -> s {Types.stMode = mode, Types.stPassId = newPass})
+      Load.forceGitRefresh
+      refreshed <- State.get
+      Monad.unless
+        (null (Types.stFiles refreshed))
+        (Types.setMsg ("base: " <> Git.modeLabel mode))
 
 -- The whole-branch view: base = where this branch forked from the
 -- mainline. Purely a diff base — no rebase involved.
-setBaseBranch :: EventM Name St ()
+setBaseBranch :: Brick.EventM Types.Name Types.St ()
 setBaseBranch = do
-  st <- get
-  got <- liftIO (branchRoot (stRoot st))
+  st <- State.get
+  got <- MonadIO.liftIO (Git.branchRoot (Types.stRoot st))
   case got of
-    Left e -> setMsg e
-    Right sha -> setBase (VsRef (T.take 10 sha))
+    Left e -> Types.setMsg e
+    Right sha -> setBase (Git.VsRef (T.take 10 sha))

@@ -45,51 +45,30 @@ module Remax.UI.Core.Types
   , FileAction (..)
   ) where
 
-import Brick
-  ( EventM
-  )
-import Brick.BChan
-  ( BChan
-  )
-import Control.Concurrent
-  ( QSem
-  )
-import Control.Monad.State
-  ( modify
-  )
-import Data.IORef
-  ( IORef
-  )
-import Data.Int (Int64)
-import qualified Data.Map.Strict as Map
-import qualified Data.Set as Set
-import Data.Text (Text)
-import qualified Data.Text as T
-import Data.Time.Clock (UTCTime)
-import Database.SQLite.Simple (Connection)
-import qualified Graphics.Vty as V
-import Remax.Clipboard
-import Remax.Config
-import Remax.DiffModel
-import Remax.Git
-  ( FileScope (..)
-  , PathStat (..)
-  , RebaseStatus (..)
-  , ReviewMode (..)
-  )
-import Remax.Highlight
-import Remax.Modal
-import Remax.Store
-import Remax.Tree
-import qualified Remax.TreeSitter as TS
-import Remax.Vi
-  ( ViKeys
-  )
-import System.FilePath
-  ( normalise
-  , takeDirectory
-  , (</>)
-  )
+import Brick qualified as Brick
+import Brick.BChan qualified as BChan
+import Control.Concurrent qualified as Concurrent
+import Control.Monad.State qualified as State
+import Data.IORef qualified as IORef
+import Data.Int qualified as DataInt
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
+import Data.Text qualified as T
+import Data.Time.Clock qualified as Clock
+import Database.SQLite.Simple qualified as SQLite
+import Graphics.Vty qualified as V
+import Remax.Clipboard qualified as Clipboard
+import Remax.Config qualified as Config
+import Remax.DiffModel qualified as DiffModel
+import Remax.Git qualified as Git
+import Remax.Highlight qualified as Highlight
+import Remax.Modal qualified as Modal
+import Remax.Store qualified as Store
+import Remax.Tree qualified as Tree
+import Remax.TreeSitter qualified as TS
+import Remax.Vi qualified as Vi
+import System.FilePath ((</>))
+import System.FilePath qualified as FilePath
 
 data Name = BodyVP | TrayVP | TheCursor
   deriving (Eq, Ord, Show)
@@ -107,13 +86,13 @@ data REvent
   | StoreChanged
   | -- repositories an agent is waiting on and working on, and a beat
     -- to animate by
-    Attending ([Text], [Text])
+    Attending ([T.Text], [T.Text])
   | Tick
   | Pulse
-  | JobDone Text (EventM Name St ())
+  | JobDone T.Text (Brick.EventM Name St ())
 
 -- The one-line prompt at the bottom of the screen: / search or : command.
-data Prompt = SearchPrompt Text | CmdPrompt Text
+data Prompt = SearchPrompt T.Text | CmdPrompt T.Text
 
 -- The finder overlay: fuzzy file picking, or project-wide grep. Each
 -- display row is aligned with a jump target (file, and a 1-based line
@@ -122,9 +101,9 @@ data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRepo
 
 data Picker = Picker
   { pkMode :: PickerMode
-  , pkInput :: Text
+  , pkInput :: T.Text
   , pkAll :: [FilePath]
-  , pkMatches :: [Text]
+  , pkMatches :: [T.Text]
   , pkTargets :: [(FilePath, Int)]
   , pkSel :: Int
   }
@@ -144,7 +123,7 @@ data Selector
 -- The note editor overlay: a small modal buffer over the lines it will
 -- annotate (resolved when the popup opened).
 data NotePopup = NotePopup
-  { npEd :: EdState
+  { npEd :: Modal.EdState
   , npPurpose :: PopupPurpose
   }
 
@@ -159,7 +138,7 @@ data NotePopup = NotePopup
 -- is read back on arrival. What is worth keeping is where you were
 -- looking and what you had asked to see.
 data RepoPlace = RepoPlace
-  { rpMode :: ReviewMode
+  { rpMode :: Git.ReviewMode
   , rpFile :: FilePath
   , rpHunk :: Int
   , rpOnlyPending :: Bool
@@ -176,7 +155,7 @@ data RunFilter = FilterAll | FilterCode | FilterComments
 filterCycle :: [RunFilter]
 filterCycle = [FilterAll, FilterCode, FilterComments]
 
-runFilterLabel :: RunFilter -> Text
+runFilterLabel :: RunFilter -> T.Text
 runFilterLabel f =
   case f of
     FilterAll -> "all"
@@ -191,15 +170,15 @@ nextRunFilter f =
     FilterCode -> FilterComments
     FilterComments -> FilterAll
 
-runFilterAllows :: RunFilter -> Run -> Bool
+runFilterAllows :: RunFilter -> DiffModel.Run -> Bool
 runFilterAllows f r =
   case f of
     FilterAll -> True
-    FilterCode -> runKind r == RunCode
-    FilterComments -> runKind r == RunComment
+    FilterCode -> DiffModel.runKind r == DiffModel.RunCode
+    FilterComments -> DiffModel.runKind r == DiffModel.RunComment
 
 data PopupPurpose
-  = NoteFor [Text] NoteOrigin
+  = NoteFor [T.Text] NoteOrigin
   | -- the paths that will be staged along with the message, so the popup
     -- can show them before you commit to them (empty at a rebase stop,
     -- where :continue owns the folding)
@@ -218,17 +197,17 @@ data NoteOrigin
 -- What a mark changed, kept so that escaping out of the note it opened
 -- can put it back exactly.
 data MarkUndo = MarkUndo
-  { muRows :: [(Text, Text, Text, Int)] -- the rows it wrote
-  , muBefore :: Map.Map Text (Maybe Verdict) -- what those keys were
-  , muCounts :: Map.Map Verdict Int -- the session tallies before it
-  , muPunch :: [(FilePath, Int, Verdict)]
+  { muRows :: [(T.Text, T.Text, T.Text, Int)] -- the rows it wrote
+  , muBefore :: Map.Map T.Text (Maybe Store.Verdict) -- what those keys were
+  , muCounts :: Map.Map Store.Verdict Int -- the session tallies before it
+  , muPunch :: [(FilePath, Int, Store.Verdict)]
   }
 
 data FileView = FileView
   { fvPath :: FilePath
-  , fvBase :: [Text]
-  , fvEd :: EdState
-  , fvRows :: [RowR]
+  , fvBase :: [T.Text]
+  , fvEd :: Modal.EdState
+  , fvRows :: [DiffModel.RowR]
   , -- Which columns of each row the word diff marks, one entry per row.
     -- Worked out for whole blocks rather than for the rows on screen:
     -- pairing needs the removals and the additions it chooses between,
@@ -240,46 +219,46 @@ data FileView = FileView
     fvEmph :: [[(Int, Int)]]
   , fvRowCount :: !Int -- length fvRows; wanted twice a frame, so carried
   , fvOrigin :: !Int -- first display row the body draws; see bodyWindow
-  , fvRuns :: [Run]
-  , fvToks :: [[Seg]]
+  , fvRuns :: [DiffModel.Run]
+  , fvToks :: [[Highlight.Seg]]
   , fvStale :: Bool
   , fvDeleted :: Bool -- the change set removed this file; there is no working copy
   , fvHighlighted :: Bool -- real syntax colors computed yet? plain until shown
   , fvHl :: Maybe TS.Highlighter -- vendored tree-sitter grammar, when we have one
-  , fvRunDecls :: [Text] -- per run: the top-level declaration it falls under
+  , fvRunDecls :: [T.Text] -- per run: the top-level declaration it falls under
   , fvRemarks :: [Remark]
   , fvPending :: !Int
-  , fvMtime :: Maybe UTCTime
+  , fvMtime :: Maybe Clock.UTCTime
   }
 
 data St = St
   { stFiles :: [FileView]
   , stCurF :: Int
   , stCurH :: Int
-  , stVerdicts :: Map.Map Text Verdict
-  , stMsg :: Text
+  , stVerdicts :: Map.Map T.Text Store.Verdict
+  , stMsg :: T.Text
   , stRoot :: FilePath
-  , stMode :: ReviewMode
-  , stConn :: Connection
-  , stPassId :: Int64
-  , stCounts :: Map.Map Verdict Int
-  , stPunch :: [(FilePath, Int, Verdict)]
+  , stMode :: Git.ReviewMode
+  , stConn :: SQLite.Connection
+  , stPassId :: DataInt.Int64
+  , stCounts :: Map.Map Store.Verdict Int
+  , stPunch :: [(FilePath, Int, Store.Verdict)]
   , stTray :: Bool
   , stLastGit :: Double
   , stGitQueued :: Bool
-  , stChan :: BChan REvent
+  , stChan :: BChan.BChan REvent
   , stWatch :: FilePath -> IO () -- watch one directory, once
   , stPrompt :: Maybe Prompt -- the / search or : command prompt, while open
-  , stLastSearch :: Text
+  , stLastSearch :: T.Text
   , stBorder :: V.Attr -- concrete attr for raw border fills
   , stHls :: TS.HighlighterTable
   , stOnlyPending :: Bool -- hide/skip hunks that already have verdicts
   , stRunFilter :: RunFilter -- walk everything, only code, or only prose
-  , stFileScope :: FileScope -- does the file dialog list ignored files too
-  , stRebase :: Maybe RebaseStatus -- a paused rebase the session is following
+  , stFileScope :: Git.FileScope -- does the file dialog list ignored files too
+  , stRebase :: Maybe Git.RebaseStatus -- a paused rebase the session is following
   , stWritten :: Set.Set FilePath -- files written since the last commit-shaped action
-  , stLastMarked :: [Text] -- keys of the most recent verdict, for :note
-  , stLastRows :: [(Text, Text, Text, Int)] -- and the rows it wrote, to undo it
+  , stLastMarked :: [T.Text] -- keys of the most recent verdict, for :note
+  , stLastRows :: [(T.Text, T.Text, T.Text, Int)] -- and the rows it wrote, to undo it
   , stOpened :: Set.Set FilePath -- files opened by hand, pinned across refreshes
   , stPicker :: Maybe Picker
   , stLastSelector :: Maybe Selector -- brought back by ␣', as it was
@@ -288,45 +267,45 @@ data St = St
     -- actually drawn; see tray.
     stTraySeen :: (Int, Int)
   , stNotePopup :: Maybe NotePopup
-  , stThreads :: Map.Map Text [Post] -- note conversations by line key, posts in order
+  , stThreads :: Map.Map T.Text [Store.Post] -- note conversations by line key, posts in order
   , -- which named group each noted key belongs to. Two notes worded the
     -- same are two notes, and only the name says so.
-    stNoteGroups :: Map.Map Text Text
+    stNoteGroups :: Map.Map T.Text T.Text
   , stSpace :: Bool -- the space menu prefix is pending
-  , stConfig :: Config
-  , stCmdFiles :: [Text] -- completion caches, filled when : opens
-  , stCmdDirs :: [Text]
-  , stCmdRefs :: [Text]
-  , stPromptCycle :: Maybe (Text, Int) -- Tab cycling: typed base + applied index
+  , stConfig :: Config.Config
+  , stCmdFiles :: [T.Text] -- completion caches, filled when : opens
+  , stCmdDirs :: [T.Text]
+  , stCmdRefs :: [T.Text]
+  , stPromptCycle :: Maybe (T.Text, Int) -- Tab cycling: typed base + applied index
   , stEmacsPrefix :: Maybe Char -- a pending C-c / C-x chord (emacs keymap)
   , stIdleGo :: Bool -- a pending g with no file open to hold it
-  , stComposing :: Maybe Text -- repository we told the store is mid-note
-  , stAttending :: ([Text], [Text]) -- repositories agents wait on / work on
+  , stComposing :: Maybe T.Text -- repository we told the store is mid-note
+  , stAttending :: ([T.Text], [T.Text]) -- repositories agents wait on / work on
   , stThrob :: !Int -- which frame the watching indicator is on
-  , stBusy :: [Text]
-  , stRepoInfo :: Map.Map FilePath [Text]
-  , stCountedVerdicts :: Map.Map Text Verdict
-  , stCountedThreads :: Map.Map Text [Post]
+  , stBusy :: [T.Text]
+  , stRepoInfo :: Map.Map FilePath [T.Text]
+  , stCountedVerdicts :: Map.Map T.Text Store.Verdict
+  , stCountedThreads :: Map.Map T.Text [Store.Post]
   , stHighlighting :: Maybe FilePath
-  , stJobs :: IORef Int
-  , stWorkSlots :: QSem
+  , stJobs :: IORef.IORef Int
+  , stWorkSlots :: Concurrent.QSem
   , stEpoch :: !Int
   , stReloading :: Map.Map FilePath Bool
   , stRefreshing :: Bool
   , stLoadedOnce :: Bool
-  , stVi :: ViKeys -- a half-typed vi command: count, operator, what it awaits
+  , stVi :: Vi.ViKeys -- a half-typed vi command: count, operator, what it awaits
   , stSearchDir :: Int -- which way / (or vi's ?) last searched: 1 or -1
   , stDeferAdvance :: Bool -- hold the post-mark jump until the note popup closes
   , stAltFile :: Maybe (FilePath, Int) -- where Space a bounces back to
   , stAnchor :: Maybe (FilePath, Int) -- the hunk under review; ' returns here
-  , stGrepNav :: Maybe (Text, [(FilePath, Int)], Int) -- grep hits n/N walk
-  , stInfoPopup :: Maybe (Text, Text) -- read-only text popup: title, body
-  , stKill :: Text -- session-wide kill/yank slot, shared across files
-  , stClip :: Clipboard -- how this machine reaches the system clipboard
-  , stClipSent :: Text -- the text remax and the clipboard last agreed on
+  , stGrepNav :: Maybe (T.Text, [(FilePath, Int)], Int) -- grep hits n/N walk
+  , stInfoPopup :: Maybe (T.Text, T.Text) -- read-only text popup: title, body
+  , stKill :: T.Text -- session-wide kill/yank slot, shared across files
+  , stClip :: Clipboard.Clipboard -- how this machine reaches the system clipboard
+  , stClipSent :: T.Text -- the text remax and the clipboard last agreed on
   , stWatchMode :: WatchMode -- the native watcher was refused; polling instead
-  , stBranch :: Maybe Text -- Nothing when HEAD is detached
-  , stHead :: Maybe (Text, Text) -- (short sha, subject) of HEAD
+  , stBranch :: Maybe T.Text -- Nothing when HEAD is detached
+  , stHead :: Maybe (T.Text, T.Text) -- (short sha, subject) of HEAD
   , stTree :: Maybe TreeView -- the project tree overlay, while it is open
   , stHelp :: Bool -- the keybinding cheat sheet is up
   , stRoots :: [FilePath] -- repositories this session can switch between
@@ -334,7 +313,7 @@ data St = St
   , stPlaces :: Map.Map FilePath RepoPlace -- where you were in each
   }
 
-repoText :: St -> Text
+repoText :: St -> T.Text
 repoText = T.pack . stRoot
 
 currentFile :: St -> FileView
@@ -347,23 +326,23 @@ currentFileMay st = safeIdx (stFiles st) (stCurF st)
 -- stopped commit is under review (its parent is the base) — except a
 -- conflict stop, where the commit isn't made yet and the resolution work
 -- in the tree is the story.
-rebaseEffMode :: Maybe RebaseStatus -> ReviewMode -> ReviewMode
+rebaseEffMode :: Maybe Git.RebaseStatus -> Git.ReviewMode -> Git.ReviewMode
 rebaseEffMode mRebase mode =
   case mRebase of
     Just rs
-      | rebaseConflicted rs -> VsRef "HEAD"
-      | otherwise -> VsRef "HEAD^"
+      | Git.rebaseConflicted rs -> Git.VsRef "HEAD"
+      | otherwise -> Git.VsRef "HEAD^"
     Nothing -> mode
 
-effectiveMode :: St -> ReviewMode
+effectiveMode :: St -> Git.ReviewMode
 effectiveMode st = rebaseEffMode (stRebase st) (stMode st)
 
 -- The file watcher ---------------------------------------------------------
 
 fileDir :: FilePath -> FilePath -> FilePath
-fileDir root path = normalise (root </> takeDirectory path)
+fileDir root path = FilePath.normalise (root </> FilePath.takeDirectory path)
 
-clampH :: [Run] -> Int -> Int
+clampH :: [DiffModel.Run] -> Int -> Int
 clampH rs h = max 0 (min h (length rs - 1))
 
 -- The element at an index, if the list reaches that far.
@@ -380,13 +359,13 @@ safeIdx xs i =
       (x : _) -> Just x
       [] -> Nothing
 
-tshow :: Show a => a -> Text
+tshow :: Show a => a -> T.Text
 tshow = T.pack . show
 
 -- The app ----------------------------------------------------------------------
 
-showHelp :: EventM Name St ()
-showHelp = modify (\s -> s {stHelp = True})
+showHelp :: Brick.EventM Name St ()
+showHelp = State.modify (\s -> s {stHelp = True})
 
 -- The persistent session's resting state: nothing to review, but the
 -- watcher is live and new work will wake the screen on its own.
@@ -401,14 +380,14 @@ showHelp = modify (\s -> s {stHelp = True})
 -- emacs reader to press : is telling them to type a colon into their
 -- buffer — and it has its own chord for leaving outright, which is the
 -- one that hand will reach for.
-quitKeys :: KeyMode -> Text
+quitKeys :: Config.KeyMode -> T.Text
 quitKeys mode = case mode of
-  KeysEmacs -> "C-x C-c"
+  Config.KeysEmacs -> "C-x C-c"
   _ -> ":q"
 
-promptKeys :: KeyMode -> Text
+promptKeys :: Config.KeyMode -> T.Text
 promptKeys mode = case mode of
-  KeysEmacs -> "M-x"
+  Config.KeysEmacs -> "M-x"
   _ -> ":"
 
 -- What the tray shows: one line per file (with a count of its hidden
@@ -428,24 +407,24 @@ data TrayEntry
 -- rows knows nothing about.
 data Remark = Remark
   { rmRow :: !Int
-  , rmKey :: !Text
-  , rmText :: !Text
+  , rmKey :: !T.Text
+  , rmText :: !T.Text
   }
 
 data NoteLine = NoteLine
-  { nlAuthor :: Text
+  { nlAuthor :: T.Text
   , nlOpens :: Bool
-  , nlText :: Text
+  , nlText :: T.Text
   }
   deriving (Eq)
 
-searchSigil :: St -> Text
+searchSigil :: St -> T.Text
 searchSigil st = if stSearchDir st < 0 then "?" else "/"
 
 data VerdictScope = VerdictHunk | VerdictLines
 
-setMsg :: Text -> EventM Name St ()
-setMsg t = modify (\s -> s {stMsg = t})
+setMsg :: T.Text -> Brick.EventM Name St ()
+setMsg t = State.modify (\s -> s {stMsg = t})
 
 -- Browsing and shape in one overlay: the repository's files, decorated
 -- per file the way git diff --stat is, and expandable a level further so
@@ -462,11 +441,11 @@ data TreeMode = TreeHierarchy | TreeFlat
 
 data TreeView = TreeView
   { tvMode :: TreeMode
-  , tvRoot :: TreeNode
-  , tvAll :: [(FilePath, Maybe PathStat)] -- every file, for flat mode
+  , tvRoot :: Tree.TreeNode
+  , tvAll :: [(FilePath, Maybe Git.PathStat)] -- every file, for flat mode
   , tvExpanded :: Set.Set FilePath -- directories and files alike
   , tvSel :: Int
-  , tvInput :: Text
+  , tvInput :: T.Text
   , tvOp :: Maybe TreeOp -- the file menu, mid-operation
   }
 
@@ -481,7 +460,7 @@ data TreeView = TreeView
 -- delete cannot.
 data TreeOp
   = OpMenu
-  | OpNaming FileAction Text
+  | OpNaming FileAction T.Text
   | OpConfirming FilePath
 
 -- Each carries the path it works from: the directory a new thing lands

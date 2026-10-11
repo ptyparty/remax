@@ -24,210 +24,189 @@ module Remax.UI.Model.Nav
   , selectCurrentHunk
   ) where
 
-import Brick
-  ( EventM
-  , Viewport (..)
-  , ViewportScroll (..)
-  , getVtyHandle
-  , lookupViewport
-  , viewportScroll
-  )
-import Control.Monad
-  ( when
-  )
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.State
-  ( get
-  , modify
-  )
-import Data.List
-  ( find
-  , findIndex
-  , maximumBy
-  )
-import qualified Data.Map.Strict as Map
-import Data.Maybe
-  ( fromMaybe
-  , listToMaybe
-  , mapMaybe
-  )
-import Data.Ord (comparing)
-import qualified Data.Set as Set
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Graphics.Vty as V
-import Remax.Clipboard
-import Remax.Config
-import Remax.DiffModel
-import Remax.Modal
-import Remax.Store
-import Remax.UI.Core.Types
-import Remax.UI.Core.Verdict
-import Remax.UI.Core.View
-import Remax.UI.Model.Tray
-import qualified Remax.Zipper as Z
+import Brick qualified as Brick
+import Control.Monad qualified as Monad
+import Control.Monad.IO.Class qualified as MonadIO
+import Control.Monad.State qualified as State
+import Data.List qualified as List
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Ord qualified as Ord
+import Data.Set qualified as Set
+import Data.Text qualified as T
+import Graphics.Vty qualified as V
+import Remax.Clipboard qualified as Clipboard
+import Remax.Config qualified as Config
+import Remax.DiffModel qualified as DiffModel
+import Remax.Modal qualified as Modal
+import Remax.Store qualified as Store
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Verdict qualified as Verdict
+import Remax.UI.Core.View qualified as View
+import Remax.UI.Model.Tray qualified as TrayModel
+import Remax.Zipper qualified as Z
 
-withEd :: EdState -> FileView -> FileView
-withEd ed fv = fv {fvEd = ed}
+withEd :: Modal.EdState -> Types.FileView -> Types.FileView
+withEd ed fv = fv {Types.fvEd = ed}
 
 -- Which run in the rebuilt list is "the same hunk" as before: the one
 -- sharing the most content keys, ties and misses settled by anchor
 -- proximity. Content keys make this survive hunks appearing, vanishing,
 -- and reshaping above the current one.
-matchRun :: Maybe Run -> [Run] -> Int
+matchRun :: Maybe DiffModel.Run -> [DiffModel.Run] -> Int
 matchRun mOld runs =
   case (mOld, runs) of
     (_, []) -> 0
     (Nothing, _) -> 0
     (Just old, _) ->
       let
-        keySet = Set.fromList (runKeys old)
+        keySet = Set.fromList (DiffModel.runKeys old)
         score (ix, r) =
-          ( length (filter (`Set.member` keySet) (runKeys r))
-          , negate (abs (runAnchor r - runAnchor old))
+          ( length (filter (`Set.member` keySet) (DiffModel.runKeys r))
+          , negate (abs (DiffModel.runAnchor r - DiffModel.runAnchor old))
           , ix
           )
         scored = map score (zip [0 :: Int ..] runs)
         (bestScore, _, bestIx) =
-          maximumBy (comparing (\(sc, prox, _) -> (sc, prox))) scored
+          List.maximumBy (Ord.comparing (\(sc, prox, _) -> (sc, prox))) scored
         (_, _, nearIx) =
-          maximumBy (comparing (\(_, prox, _) -> prox)) scored
+          List.maximumBy (Ord.comparing (\(_, prox, _) -> prox)) scored
       in
         if bestScore > 0 then bestIx else nearIx
 
-currentRunOf :: St -> Int -> Maybe Run
+currentRunOf :: Types.St -> Int -> Maybe DiffModel.Run
 currentRunOf st i = do
-  fv <- safeIdx (stFiles st) i
+  fv <- Types.safeIdx (Types.stFiles st) i
   let
-    rs = fvRuns fv
-  safeIdx rs (clampH rs (stCurH st))
+    rs = Types.fvRuns fv
+  Types.safeIdx rs (Types.clampH rs (Types.stCurH st))
 
-setEd :: Int -> EdState -> EventM Name St ()
+setEd :: Int -> Modal.EdState -> Brick.EventM Types.Name Types.St ()
 setEd i ed = do
-  modify (\s -> updateFile i (withEd (ed {edCopied = False})) s {stKill = edKill ed})
+  State.modify (\s -> Verdict.updateFile i (withEd (ed {Modal.edCopied = False})) s {Types.stKill = Modal.edKill ed})
   publishCopy ed
 
 -- Every keymap's copy lands in the same slot, so this is the one place
 -- the system clipboard has to be told: whatever was just deliberately
 -- copied goes out. Deletes never set the flag, so pulling a line out of
 -- a file cannot clobber what you copied from somewhere else.
-publishCopy :: EdState -> EventM Name St ()
+publishCopy :: Modal.EdState -> Brick.EventM Types.Name Types.St ()
 publishCopy ed = do
-  st <- get
+  st <- State.get
   let
-    copied = edKill ed
-  when (edCopied ed && not (T.null copied) && copied /= stClipSent st) $ do
-    vty <- getVtyHandle
+    copied = Modal.edKill ed
+  Monad.when (Modal.edCopied ed && not (T.null copied) && copied /= Types.stClipSent st) $ do
+    vty <- Brick.getVtyHandle
     ok <-
-      liftIO
-        (writeClipboard (stClip st) (V.outputByteBuffer (V.outputIface vty)) copied)
-    when ok (modify (\s -> s {stClipSent = copied}))
+      MonadIO.liftIO
+        (Clipboard.writeClipboard (Types.stClip st) (V.outputByteBuffer (V.outputIface vty)) copied)
+    Monad.when ok (State.modify (\s -> s {Types.stClipSent = copied}))
 
 -- The other direction, run just before a paste: if the clipboard holds
 -- something remax did not put there, that is what you meant to paste.
 -- Text arriving from outside carries its own line-wise sense — a copy of
 -- whole lines ends in a newline, which is exactly what makes p put them
 -- on their own lines.
-pullClipboard :: EventM Name St ()
+pullClipboard :: Brick.EventM Types.Name Types.St ()
 pullClipboard = do
-  st <- get
-  arrived <- liftIO (readClipboard (stClip st))
+  st <- State.get
+  arrived <- MonadIO.liftIO (Clipboard.readClipboard (Types.stClip st))
   case arrived of
     Just text
       | not (T.null text)
-      , text /= stClipSent st ->
-          modify (\s -> s {stKill = text, stClipSent = text})
+      , text /= Types.stClipSent st ->
+          State.modify (\s -> s {Types.stKill = text, Types.stClipSent = text})
     _ -> pure ()
 
-park :: Int -> Int -> St -> St
+park :: Int -> Int -> Types.St -> Types.St
 park f h st =
-  case safeIdx (stFiles st) f of
+  case Types.safeIdx (Types.stFiles st) f of
     Nothing -> st
     Just fv
-      | f /= stCurF st ->
-          case currentFileMay st of
+      | f /= Types.stCurF st ->
+          case Types.currentFileMay st of
             Just prev ->
-              parkGo f h (st {stAltFile = Just (fvPath prev, stCurH st)}) fv
+              parkGo f h (st {Types.stAltFile = Just (Types.fvPath prev, Types.stCurH st)}) fv
             Nothing -> parkGo f h st fv
     Just fv -> parkGo f h st fv
 
-parkGo :: Int -> Int -> St -> FileView -> St
+parkGo :: Int -> Int -> Types.St -> Types.FileView -> Types.St
 parkGo f h st fv =
   let
-    rs = fvRuns fv
-    clamped = clampH rs h
-    parked = st {stCurF = f, stCurH = clamped, stMsg = " "}
+    rs = Types.fvRuns fv
+    clamped = Types.clampH rs h
+    parked = st {Types.stCurF = f, Types.stCurH = clamped, Types.stMsg = " "}
     -- land on the first line still needing attention, not merely
     -- the top of the hunk
     target r =
-      fromMaybe (runAnchor r) (firstUnacceptedRow st fv clamped)
+      Maybe.fromMaybe (DiffModel.runAnchor r) (firstUnacceptedRow st fv clamped)
     moveTo r v =
       v
-        { fvEd =
-            (fvEd v)
-              { edZipper = Z.moveCursor (target r, 0) (edZipper (fvEd v))
-              , edSelAnchor = Nothing
+        { Types.fvEd =
+            (Types.fvEd v)
+              { Modal.edZipper = Z.moveCursor (target r, 0) (Modal.edZipper (Types.fvEd v))
+              , Modal.edSelAnchor = Nothing
               }
         }
   in
-    case safeIdx rs clamped of
+    case Types.safeIdx rs clamped of
       Nothing -> parked
-      Just r -> updateFile f (moveTo r) parked
+      Just r -> Verdict.updateFile f (moveTo r) parked
 
 -- The buffer row of the first line in a run whose verdict is not
 -- Reviewed (removed lines borrow the row they rest before).
-firstUnacceptedRow :: St -> FileView -> Int -> Maybe Int
+firstUnacceptedRow :: Types.St -> Types.FileView -> Int -> Maybe Int
 firstUnacceptedRow st fv h =
   let
-    rows = fvRows fv
-    points = restingPoints fv
+    rows = Types.fvRows fv
+    points = View.restingPoints fv
     unaccepted (row, point) = do
-      k <- rKey row
-      if rRunIx row == Just h && Map.lookup k (stVerdicts st) /= Just Reviewed
-        then Just (fromMaybe point (rNewRow row))
+      k <- DiffModel.rKey row
+      if DiffModel.rRunIx row == Just h && Map.lookup k (Types.stVerdicts st) /= Just Store.Reviewed
+        then Just (Maybe.fromMaybe point (DiffModel.rNewRow row))
         else Nothing
   in
-    case mapMaybe unaccepted (zip rows points) of
+    case Maybe.mapMaybe unaccepted (zip rows points) of
       (r : _) -> Just r
       [] -> Nothing
 
 -- park, then ask the viewport to frame the whole hunk.
-parkM :: Int -> Int -> EventM Name St ()
+parkM :: Int -> Int -> Brick.EventM Types.Name Types.St ()
 parkM f h = do
-  modify (park f h)
+  State.modify (park f h)
   scrollHunkIntoView
 
 -- Frame the current hunk: centered when it fits, top-aligned with a
 -- small margin when it is taller than the screen, so as much of it as
 -- possible is on screen rather than just its anchor line at the edge.
-scrollHunkIntoView :: EventM Name St ()
+scrollHunkIntoView :: Brick.EventM Types.Name Types.St ()
 scrollHunkIntoView = do
-  st <- get
-  case currentFileMay st of
+  st <- State.get
+  case Types.currentFileMay st of
     Nothing -> pure ()
     Just fv -> scrollHunkIntoViewOf fv
 
-scrollHunkIntoViewOf :: FileView -> EventM Name St ()
+scrollHunkIntoViewOf :: Types.FileView -> Brick.EventM Types.Name Types.St ()
 scrollHunkIntoViewOf fv = do
-  st <- get
-  mvp <- lookupViewport BodyVP
-  screenRows <- terminalRows
+  st <- State.get
+  mvp <- Brick.lookupViewport Types.BodyVP
+  screenRows <- View.terminalRows
   let
-    rs = fvRuns fv
-    h = clampH rs (stCurH st)
-    inCurrentRun (_, row) = rRunIx row == Just h
-    runRows = map fst (filter inCurrentRun (zip [0 :: Int ..] (fvRows fv)))
+    rs = Types.fvRuns fv
+    h = Types.clampH rs (Types.stCurH st)
+    inCurrentRun (_, row) = DiffModel.rRunIx row == Just h
+    runRows = map fst (filter inCurrentRun (zip [0 :: Int ..] (Types.fvRows fv)))
   case (mvp, runRows) of
     (Just vp, (start : _)) -> do
       let
         len = length runRows
-        vpH = snd (_vpSize vp)
+        vpH = snd (Brick._vpSize vp)
         -- the body draws from its window's first row, so the viewport's
         -- coordinates are relative to that same origin. A jump can land
         -- anywhere, so the window is moved with it and written back here
         -- rather than left for the drift check to discover.
-        origin = snd (bodyWindow screenRows st fv)
-        noteRoom = noteTextWidth (fst (_vpSize vp)) fv
+        origin = snd (View.bodyWindow screenRows st fv)
+        noteRoom = View.noteTextWidth (fst (Brick._vpSize vp)) fv
         startIn = max 0 (start - origin)
         -- best-effort correction for virtual note rows rendered above
         -- the hunk (exact when the render window covers them)
@@ -240,7 +219,7 @@ scrollHunkIntoViewOf fv = do
                       startIn
                       ( drop
                           origin
-                          (shownNoteLines noteRoom st (fvRows fv))
+                          (View.shownNoteLines noteRoom st (Types.fvRows fv))
                       )
                   )
               )
@@ -248,8 +227,8 @@ scrollHunkIntoViewOf fv = do
           if len + 4 >= vpH
             then max 0 (renderStart - 2)
             else max 0 (renderStart - ((vpH - len) `div` 2))
-      modify (updateFile (stCurF st) (\f -> f {fvOrigin = origin}))
-      setTop (viewportScroll BodyVP) top
+      State.modify (Verdict.updateFile (Types.stCurF st) (\f -> f {Types.fvOrigin = origin}))
+      Brick.setTop (Brick.viewportScroll Types.BodyVP) top
     _ -> pure ()
   -- follow in the tray too — an explicit scroll on hunk jumps only, so
   -- manual tray scrolling is never fought over
@@ -258,40 +237,40 @@ scrollHunkIntoViewOf fv = do
 -- Center the tray on the current hunk's entry. Also needed whenever the
 -- entry list reshapes under the viewport (the pending filter toggling),
 -- or the scroll position strands past the shrunken content.
-scrollTrayToCurrent :: EventM Name St ()
+scrollTrayToCurrent :: Brick.EventM Types.Name Types.St ()
 scrollTrayToCurrent = do
-  st <- get
-  mtvp <- lookupViewport TrayVP
+  st <- State.get
+  mtvp <- Brick.lookupViewport Types.TrayVP
   case mtvp of
     Just tvp ->
-      setTop
-        (viewportScroll TrayVP)
-        (max 0 (trayCurrentRow st - (snd (_vpSize tvp) `div` 2)))
+      Brick.setTop
+        (Brick.viewportScroll Types.TrayVP)
+        (max 0 (TrayModel.trayCurrentRow st - (snd (Brick._vpSize tvp) `div` 2)))
     Nothing -> pure ()
 
 -- Walk hunks in (file, hunk) order, wrapping; with pending-only mode on,
 -- hunks that already have verdicts are skipped entirely, and the
 -- code/comment filter skips whichever kind you are not reading.
-switchRun :: Int -> EventM Name St ()
+switchRun :: Int -> Brick.EventM Types.Name Types.St ()
 switchRun d = do
-  st <- get
+  st <- State.get
   let
     eligible (_, r) =
-      (not (stOnlyPending st) || runPending (stVerdicts st) r)
-        && runFilterAllows (stRunFilter st) r
-    pairs = map fst (filter eligible (allRunsInOrder st))
+      (not (Types.stOnlyPending st) || Verdict.runPending (Types.stVerdicts st) r)
+        && Types.runFilterAllows (Types.stRunFilter st) r
+    pairs = map fst (filter eligible (Verdict.allRunsInOrder st))
     here =
-      ( stCurF st
-      , clampH (fvRuns (currentFile st)) (stCurH st)
+      ( Types.stCurF st
+      , Types.clampH (Types.fvRuns (Types.currentFile st)) (Types.stCurH st)
       )
     -- name whichever filter emptied the list, so an empty walk is never
     -- mistaken for a finished review
-    emptyMsg = case stRunFilter st of
-      FilterCode -> "no code hunks left"
-      FilterComments -> "no comment hunks left"
-      FilterAll -> "no pending hunks left"
+    emptyMsg = case Types.stRunFilter st of
+      Types.FilterCode -> "no code hunks left"
+      Types.FilterComments -> "no comment hunks left"
+      Types.FilterAll -> "no pending hunks left"
   case pairs of
-    [] -> modify (\s -> s {stMsg = emptyMsg})
+    [] -> State.modify (\s -> s {Types.stMsg = emptyMsg})
     _ -> do
       let
         after = filter (> here) pairs
@@ -310,168 +289,168 @@ switchRun d = do
 -- position) triples. A removed line has no buffer row of its own; it
 -- counts when the row it now sits before falls inside the span, and
 -- borrows that row's position.
-selectedChanges :: Bool -> FileView -> Int -> Int -> [(Text, Text, Int)]
+selectedChanges :: Bool -> Types.FileView -> Int -> Int -> [(T.Text, T.Text, Int)]
 selectedChanges withRemarks fv lo hi =
   let
-    rows = fvRows fv
-    points = restingPoints fv
-    inSpan row point = case rNewRow row of
+    rows = Types.fvRows fv
+    points = View.restingPoints fv
+    inSpan row point = case DiffModel.rNewRow row of
       Just nr -> nr >= lo && nr <= hi
       Nothing -> point >= lo && point <= hi
     pick (row, point) = do
       k <-
-        if rMark row == ' '
-          then if withRemarks then rRemarkKey row else Nothing
-          else rKey row
+        if DiffModel.rMark row == ' '
+          then if withRemarks then DiffModel.rRemarkKey row else Nothing
+          else DiffModel.rKey row
       if inSpan row point
-        then Just (k, T.cons (rMark row) (rText row), fromMaybe point (rNewRow row) + 1)
+        then Just (k, T.cons (DiffModel.rMark row) (DiffModel.rText row), Maybe.fromMaybe point (DiffModel.rNewRow row) + 1)
         else Nothing
   in
-    mapMaybe pick (zip rows points)
+    Maybe.mapMaybe pick (zip rows points)
 
 -- Which hunks a line span actually touches, by the same reckoning
 -- selectedChanges uses — a removed line counts against the buffer row it
 -- now rests before, so a deletion is selectable at all.
-selectedRuns :: FileView -> Int -> Int -> Set.Set Int
+selectedRuns :: Types.FileView -> Int -> Int -> Set.Set Int
 selectedRuns fv lo hi =
   let
-    rows = fvRows fv
-    points = restingPoints fv
-    inSpan row point = case rNewRow row of
+    rows = Types.fvRows fv
+    points = View.restingPoints fv
+    inSpan row point = case DiffModel.rNewRow row of
       Just nr -> nr >= lo && nr <= hi
       Nothing -> point >= lo && point <= hi
-    pick (row, point) = if inSpan row point then rRunIx row else Nothing
+    pick (row, point) = if inSpan row point then DiffModel.rRunIx row else Nothing
   in
-    Set.fromList (mapMaybe pick (zip rows points))
+    Set.fromList (Maybe.mapMaybe pick (zip rows points))
 
 -- Every changed line of one run, same shape as selectedChanges.
-runChanges :: FileView -> Int -> [(Text, Text, Int)]
+runChanges :: Types.FileView -> Int -> [(T.Text, T.Text, Int)]
 runChanges fv h =
   let
-    rows = fvRows fv
-    points = restingPoints fv
+    rows = Types.fvRows fv
+    points = View.restingPoints fv
     pick (row, point) = do
-      k <- rKey row
-      if rRunIx row == Just h
-        then Just (k, T.cons (rMark row) (rText row), fromMaybe point (rNewRow row) + 1)
+      k <- DiffModel.rKey row
+      if DiffModel.rRunIx row == Just h
+        then Just (k, T.cons (DiffModel.rMark row) (DiffModel.rText row), Maybe.fromMaybe point (DiffModel.rNewRow row) + 1)
         else Nothing
   in
-    mapMaybe pick (zip rows points)
+    Maybe.mapMaybe pick (zip rows points)
 
-hunkUnderCursor :: St -> Maybe Int
+hunkUnderCursor :: Types.St -> Maybe Int
 hunkUnderCursor st = do
-  fv <- currentFileMay st
+  fv <- Types.currentFileMay st
   let
-    (cur, _) = cursorRC (fvEd fv)
-    resting = rowRestPoints fv
+    (cur, _) = Modal.cursorRC (Types.fvEd fv)
+    resting = View.rowRestPoints fv
     directHit (row, _) =
-      if rNewRow row == Just cur then rRunIx row else Nothing
+      if DiffModel.rNewRow row == Just cur then DiffModel.rRunIx row else Nothing
     restingHit (row, point) =
-      if rNewRow row == Nothing && point == cur then rRunIx row else Nothing
+      if DiffModel.rNewRow row == Nothing && point == cur then DiffModel.rRunIx row else Nothing
     -- Several delete-only hunks can rest at one line — an all-removed
     -- file rests every one of them at line 0 — and then the cursor
     -- cannot say which is meant. The hunk under review is the honest
     -- answer: it is the one ] and [ moved to and the one the bar marks.
-    restingOn = mapMaybe restingHit resting
-    onReview = clampH (fvRuns fv) (stCurH st)
-  case mapMaybe directHit resting of
+    restingOn = Maybe.mapMaybe restingHit resting
+    onReview = Types.clampH (Types.fvRuns fv) (Types.stCurH st)
+  case Maybe.mapMaybe directHit resting of
     (h : _) -> Just h
     [] ->
-      case find (== onReview) restingOn of
+      case List.find (== onReview) restingOn of
         Just h -> Just h
-        Nothing -> listToMaybe restingOn
+        Nothing -> Maybe.listToMaybe restingOn
 
 -- Review-flow navigation parks AND drops the review anchor there, so '
 -- can always come back; investigation moves (pickers, grep, ga, open)
 -- park without touching it.
-parkAnchor :: Int -> Int -> EventM Name St ()
+parkAnchor :: Int -> Int -> Brick.EventM Types.Name Types.St ()
 parkAnchor f h = do
   parkM f h
-  st <- get
-  case currentFileMay st of
+  st <- State.get
+  case Types.currentFileMay st of
     Just fv ->
-      modify $ \s ->
-        s {stAnchor = Just (fvPath fv, clampH (fvRuns fv) (stCurH st))}
+      State.modify $ \s ->
+        s {Types.stAnchor = Just (Types.fvPath fv, Types.clampH (Types.fvRuns fv) (Types.stCurH st))}
     Nothing -> pure ()
 
 -- ': jump back to the hunk under review, wherever the investigation
 -- wandered — across files included. With no anchor yet, it reframes
 -- the current hunk as before.
-jumpToAnchor :: EventM Name St ()
+jumpToAnchor :: Brick.EventM Types.Name Types.St ()
 jumpToAnchor = do
-  st <- get
-  case stAnchor st of
+  st <- State.get
+  case Types.stAnchor st of
     Just (path, h) ->
-      case findIndex ((== path) . fvPath) (stFiles st) of
+      case List.findIndex ((== path) . Types.fvPath) (Types.stFiles st) of
         Just f -> parkM f h
-        Nothing -> setMsg ("anchored file left the session: " <> T.pack path)
-    Nothing -> parkM (stCurF st) (stCurH st)
+        Nothing -> Types.setMsg ("anchored file left the session: " <> T.pack path)
+    Nothing -> parkM (Types.stCurF st) (Types.stCurH st)
 
 -- :N — park the cursor on line N of the current file, 1-based.
 -- Z.moveCursor clamps, so :0 lands on the first line and a number past
 -- the end lands on the last. This is an investigation move: the '
 -- anchor and the hunk under review both stay where they are.
-gotoLine :: Int -> EventM Name St ()
+gotoLine :: Int -> Brick.EventM Types.Name Types.St ()
 gotoLine n = do
-  st <- get
-  case currentFileMay st of
-    Nothing -> setMsg "no file on screen"
+  st <- State.get
+  case Types.currentFileMay st of
+    Nothing -> Types.setMsg "no file on screen"
     Just fv ->
       let
-        ed = fvEd fv
+        ed = Types.fvEd fv
         move = Z.moveCursor (n - 1, 0)
       in
-        setEd (stCurF st) $
-          if cfgKeys (stConfig st) == KeysEmacs
+        setEd (Types.stCurF st) $
+          if Config.cfgKeys (Types.stConfig st) == Config.KeysEmacs
             -- emacs: point moves, the mark stays, so the region grows
-            then ed {edZipper = move (edZipper ed), edInsertEntry = Nothing}
-            else plainMove move ed
+            then ed {Modal.edZipper = move (Modal.edZipper ed), Modal.edInsertEntry = Nothing}
+            else Modal.plainMove move ed
 
 -- Space h: make the hunk the cursor is standing in the current one —
 -- the current hunk being what a selection-less X, ! or ? acts on, and
 -- what ' comes home to. The deliberate counterpart of ': that one goes
 -- back to where you were reviewing, this one says review here instead.
-setCurrentHunkHere :: EventM Name St ()
+setCurrentHunkHere :: Brick.EventM Types.Name Types.St ()
 setCurrentHunkHere = do
-  st <- get
+  st <- State.get
   case hunkUnderCursor st of
-    Nothing -> setMsg "cursor isn't in a hunk"
+    Nothing -> Types.setMsg "cursor isn't in a hunk"
     Just h -> do
-      modify (\s -> s {stCurH = h, stMsg = " "})
-      moved <- get
-      case currentFileMay moved of
-        Just fv -> modify (\s -> s {stAnchor = Just (fvPath fv, h)})
+      State.modify (\s -> s {Types.stCurH = h, Types.stMsg = " "})
+      moved <- State.get
+      case Types.currentFileMay moved of
+        Just fv -> State.modify (\s -> s {Types.stAnchor = Just (Types.fvPath fv, h)})
         Nothing -> pure ()
 
-selectCurrentHunk :: EventM Name St ()
+selectCurrentHunk :: Brick.EventM Types.Name Types.St ()
 selectCurrentHunk = do
-  st <- get
+  st <- State.get
   let
-    fv = currentFile st
+    fv = Types.currentFile st
     inCurrentRun row =
-      rRunIx row == Just (clampH (fvRuns fv) (stCurH st))
-    hunkRows = mapMaybe rNewRow (filter inCurrentRun (fvRows fv))
+      DiffModel.rRunIx row == Just (Types.clampH (Types.fvRuns fv) (Types.stCurH st))
+    hunkRows = Maybe.mapMaybe DiffModel.rNewRow (filter inCurrentRun (Types.fvRows fv))
     -- a delete-only hunk has no buffer rows of its own; its span is the
     -- anchor line the deletion sits at
     pickSpan =
-      case (hunkRows, currentRunOf st (stCurF st)) of
+      case (hunkRows, currentRunOf st (Types.stCurF st)) of
         ((first : rest), _) ->
           case reverse (first : rest) of
             (lastRow : _) -> Just (first, lastRow)
             [] -> Nothing
-        ([], Just r) -> Just (runAnchor r, runAnchor r)
+        ([], Just r) -> Just (DiffModel.runAnchor r, DiffModel.runAnchor r)
         _ -> Nothing
-  if hunkUnderCursor st /= Just (clampH (fvRuns fv) (stCurH st))
-    then setMsg "cursor isn't in the current hunk — Space h makes this one current"
+  if hunkUnderCursor st /= Just (Types.clampH (Types.fvRuns fv) (Types.stCurH st))
+    then Types.setMsg "cursor isn't in the current hunk — Space h makes this one current"
     else case pickSpan of
       Nothing -> pure ()
       Just (first, lastRow) -> do
         let
-          ed = fvEd fv
+          ed = Types.fvEd fv
           selected =
             ed
-              { edZipper = Z.moveCursor (lastRow, 0) (edZipper ed)
-              , edSelAnchor = Just (first, 0)
-              , edSelKind = LineSel
+              { Modal.edZipper = Z.moveCursor (lastRow, 0) (Modal.edZipper ed)
+              , Modal.edSelAnchor = Just (first, 0)
+              , Modal.edSelKind = Modal.LineSel
               }
-        setEd (stCurF st) selected
+        setEd (Types.stCurF st) selected

@@ -26,32 +26,19 @@ module Remax.UI.Core.View
   , cursorDisplayRow
   ) where
 
-import Brick
-  ( EventM
-  , getVtyHandle
-  )
-import Control.Monad.IO.Class (liftIO)
-import Data.Char
-  ( isSpace
-  )
-import Data.List
-  ( find
-  , findIndex
-  )
-import qualified Data.Map.Strict as Map
-import Data.Maybe
-  ( fromMaybe
-  , listToMaybe
-  , mapMaybe
-  )
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Graphics.Vty as V
-import Remax.DiffModel
-import Remax.Modal
-import Remax.Store
-import Remax.UI.Core.Types
-import Remax.UI.Core.Verdict
+import Brick qualified as Brick
+import Control.Monad.IO.Class qualified as MonadIO
+import Data.Char qualified as Char
+import Data.List qualified as List
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Text qualified as T
+import Graphics.Vty qualified as V
+import Remax.DiffModel qualified as DiffModel
+import Remax.Modal qualified as Modal
+import Remax.Store qualified as Store
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Verdict qualified as Verdict
 
 -- The new side of the diff, and the buffer every row calculation is
 -- measured against. A deleted file has no working copy at all, but its
@@ -60,24 +47,24 @@ import Remax.UI.Core.Verdict
 -- would push every removed row's resting point one line past the end of
 -- the buffer, where no cursor can ever reach it — so a deletion that
 -- nothing has typed into answers with no lines whatsoever.
-newSideLines :: FileView -> [Text]
+newSideLines :: Types.FileView -> [T.Text]
 newSideLines fv =
   let
-    ls = bufferLines (fvEd fv)
+    ls = Modal.bufferLines (Types.fvEd fv)
   in
-    case (fvDeleted fv, ls) of
+    case (Types.fvDeleted fv, ls) of
       (True, [""]) -> []
       _ -> ls
 
 -- length (newSideLines fv), without rebuilding the buffer to count it.
 -- The one case that has to look at content is a single-line buffer,
 -- where looking is free.
-newSideLineCount :: FileView -> Int
+newSideLineCount :: Types.FileView -> Int
 newSideLineCount fv =
   let
-    n = bufferLineCount (fvEd fv)
+    n = Modal.bufferLineCount (Types.fvEd fv)
   in
-    if fvDeleted fv && n == 1 && bufferLines (fvEd fv) == [""]
+    if Types.fvDeleted fv && n == 1 && Modal.bufferLines (Types.fvEd fv) == [""]
       then 0
       else n
 
@@ -94,19 +81,19 @@ newSideLineCount fv =
 -- They rest on the last line instead, which is the line a reader puts
 -- the cursor on to mean them, and is what a removal in the middle of a
 -- file has always done with the line below it.
-lastRestingRow :: FileView -> Int
+lastRestingRow :: Types.FileView -> Int
 lastRestingRow fv = max 0 (newSideLineCount fv - 1)
 
 -- The buffer row each display row answers to, in display order: its own
 -- row, or for a removed line the row it rests before.
-restingPoints :: FileView -> [Int]
+restingPoints :: Types.FileView -> [Int]
 restingPoints fv =
   drop
     1
     ( scanr
-        (\row acc -> fromMaybe acc (rNewRow row))
+        (\row acc -> Maybe.fromMaybe acc (DiffModel.rNewRow row))
         (lastRestingRow fv)
-        (fvRows fv)
+        (Types.fvRows fv)
     )
 
 -- The top-level declaration a buffer row falls under: the nearest line
@@ -114,14 +101,14 @@ restingPoints fv =
 -- comment or closing bracket — the boundary heuristic hunk splitting
 -- already trusts. A tree-sitter walk could be exact; this is right
 -- nearly always and costs one upward scan at rebuild time.
-declAt :: [Text] -> Int -> Maybe Text
-declAt ls row = find isDeclLine (reverse (take (row + 1) ls))
+declAt :: [T.Text] -> Int -> Maybe T.Text
+declAt ls row = List.find isDeclLine (reverse (take (row + 1) ls))
 
-isDeclLine :: Text -> Bool
+isDeclLine :: T.Text -> Bool
 isDeclLine l =
   case T.uncons l of
     Just (c, _) ->
-      not (isSpace c)
+      not (Char.isSpace c)
         && not
           ( any
               (`T.isPrefixOf` l)
@@ -137,7 +124,7 @@ isDeclLine l =
 -- finishes at all. Anchors arrive in file order — buildRuns walks the
 -- rows forward and every anchor is a buffer row at or after the last —
 -- which is what lets one pass answer them all.
-declsForAnchors :: [Text] -> [Int] -> [Text]
+declsForAnchors :: [T.Text] -> [Int] -> [T.Text]
 declsForAnchors ls anchors =
   let
     go _ _ [] _ = []
@@ -153,7 +140,7 @@ declsForAnchors ls anchors =
 
 -- Just the name from a declaration line: its first word, or two when
 -- the first is a defining keyword (data Foo, def foo, class Bar ...).
-declName :: Text -> Text
+declName :: T.Text -> T.Text
 declName decl =
   case T.words decl of
     (w1 : w2 : _)
@@ -196,10 +183,10 @@ windowRowsFor screenRows = max 100 (2 * screenRows)
 -- and the handlers that move the window have to size it the same way or
 -- the body slides under the cursor, and a resize must not be able to
 -- reach one of them before the other.
-terminalRows :: EventM Name St Int
+terminalRows :: Brick.EventM Types.Name Types.St Int
 terminalRows = do
-  vty <- getVtyHandle
-  (_, rows) <- liftIO (V.displayBounds (V.outputIface vty))
+  vty <- Brick.getVtyHandle
+  (_, rows) <- MonadIO.liftIO (V.displayBounds (V.outputIface vty))
   pure rows
 
 -- How many display rows the body draws at once, and how close the cursor
@@ -237,24 +224,24 @@ windowSlackFor screenRows = windowRowsFor screenRows `div` 2
 -- line. So a stored origin is kept as long as the cursor stays clear of
 -- the window's edges, and only when it does not is the window moved to
 -- sit around the cursor again.
-bodyWindow :: Int -> St -> FileView -> (Int, Int)
+bodyWindow :: Int -> Types.St -> Types.FileView -> (Int, Int)
 bodyWindow screenRows st fv =
   let
     windowRows = windowRowsFor screenRows
     windowSpan = windowSpanFor screenRows
     windowSlack = windowSlackFor screenRows
-    rows = fvRows fv
-    curH = clampH (fvRuns fv) (stCurH st)
-    curRow = fst (cursorRC (fvEd fv))
+    rows = Types.fvRows fv
+    curH = Types.clampH (Types.fvRuns fv) (Types.stCurH st)
+    curRow = fst (Modal.cursorRC (Types.fvEd fv))
     -- Normally the cursor's row, but an all-removed file owns no buffer
     -- rows at all, so nothing carries the cursor and the view would be
     -- nailed to the top: there the hunk under review is what the reader
     -- is looking at, and ] and [ are how they move.
     cursorOut =
-      case findIndex (\r -> rNewRow r == Just curRow) rows of
+      case List.findIndex (\r -> DiffModel.rNewRow r == Just curRow) rows of
         Just out -> out
-        Nothing -> fromMaybe 0 (findIndex (\r -> rRunIx r == Just curH) rows)
-    held = fvOrigin fv
+        Nothing -> Maybe.fromMaybe 0 (List.findIndex (\r -> DiffModel.rRunIx r == Just curH) rows)
+    held = Types.fvOrigin fv
     inside =
       cursorOut >= held + windowSlack
         && cursorOut <= held + windowSpan - windowSlack
@@ -274,17 +261,17 @@ bodyWindow screenRows st fv =
 -- carries. The render and the scroll correction both have to reckon a
 -- note's height the same way or their idea of what is above the cursor
 -- drifts apart, so both ask here.
-gutterWidth :: FileView -> Int
-gutterWidth fv = length (show (max 1 (bufferLineCount (fvEd fv))))
+gutterWidth :: Types.FileView -> Int
+gutterWidth fv = length (show (max 1 (Modal.bufferLineCount (Types.fvEd fv))))
 
-noteTextWidth :: Int -> FileView -> Int
+noteTextWidth :: Int -> Types.FileView -> Int
 noteTextWidth paneWidth fv = max 12 (paneWidth - (gutterWidth fv + 4))
 
-shownNoteLines :: Int -> St -> [RowR] -> [[NoteLine]]
+shownNoteLines :: Int -> Types.St -> [DiffModel.RowR] -> [[Types.NoteLine]]
 shownNoteLines width st rows =
   let
     annOf r =
-      listToMaybe (mapMaybe (`Map.lookup` stThreads st) (rowFeedbackKeys r))
+      Maybe.listToMaybe (Maybe.mapMaybe (`Map.lookup` Types.stThreads st) (Verdict.rowFeedbackKeys r))
     anns = map annOf rows
     nexts = drop 1 anns ++ [Nothing]
     -- A note is prose and the pane is narrow, so it is folded to fit
@@ -298,18 +285,18 @@ shownNoteLines width st rows =
     -- continuations simply have more room than they use.
     postLines post =
       let
-        author = postAuthor post
+        author = Store.postAuthor post
         lead = if author == "reviewer" then 4 else 2 + T.length author + 3
         room = max 12 (width - lead)
-        fold ln = case greedyWrap room (T.words ln) of
+        fold ln = case Modal.greedyWrap room (T.words ln) of
           [] -> [""]
           wss -> map T.unwords wss
-        flowed = concatMap fold (T.lines (postBody post))
+        flowed = concatMap fold (T.lines (Store.postBody post))
       in
         case flowed of
           [] -> []
           (first : rest) ->
-            NoteLine author True first : map (NoteLine author False) rest
+            Types.NoteLine author True first : map (Types.NoteLine author False) rest
     pick (ma, mnext) = case ma of
       Just posts
         | mnext /= Just posts -> concatMap postLines posts
@@ -329,19 +316,19 @@ hScrollFor paneWidth numW curCol =
   in
     max 0 (curCol - (contentWidth - margin))
 
-currentLineOf :: EdState -> Text
+currentLineOf :: Modal.EdState -> T.Text
 currentLineOf ed =
-  fromMaybe "" (safeIdx (bufferLines ed) (fst (cursorRC ed)))
+  Maybe.fromMaybe "" (Types.safeIdx (Modal.bufferLines ed) (fst (Modal.cursorRC ed)))
 
 -- The buffer rows a selection covers, if one is active. A collapsed
 -- char selection (just the cursor cell) does not count as "selected
 -- lines" for verdicts.
-activeSelectionRows :: EdState -> Maybe (Int, Int)
+activeSelectionRows :: Modal.EdState -> Maybe (Int, Int)
 activeSelectionRows ed =
-  case selectionRows ed of
+  case Modal.selectionRows ed of
     Just rowSpan -> Just rowSpan
     Nothing ->
-      case charSelection ed of
+      case Modal.charSelection ed of
         Just (loPos, hiPos)
           | loPos /= hiPos -> Just (fst loPos, fst hiPos)
         _ -> Nothing
@@ -358,29 +345,29 @@ activeSelectionRows ed =
 -- A hunk that only removes occupies no buffer line whatsoever, so
 -- anything that reasons about rows by buffer position has to consult
 -- this or it will simply not see such a hunk.
-rowRestPoints :: FileView -> [(RowR, Int)]
-rowRestPoints fv = zip (fvRows fv) (restingPoints fv)
+rowRestPoints :: Types.FileView -> [(DiffModel.RowR, Int)]
+rowRestPoints fv = zip (Types.fvRows fv) (restingPoints fv)
 
 -- The buffer line a row answers to, whether it owns one or rests before
 -- one.
-rowAt :: (RowR, Int) -> Int
-rowAt (row, point) = fromMaybe point (rNewRow row)
+rowAt :: (DiffModel.RowR, Int) -> Int
+rowAt (row, point) = Maybe.fromMaybe point (DiffModel.rNewRow row)
 
 -- The line span a line-scoped verdict acts on: the selection when one is
 -- active, the cursor's line otherwise.
-verdictLineSpan :: EdState -> (Int, Int)
+verdictLineSpan :: Modal.EdState -> (Int, Int)
 verdictLineSpan ed =
   case activeSelectionRows ed of
     Just rowSpan -> rowSpan
     Nothing ->
       let
-        row = fst (cursorRC ed)
+        row = fst (Modal.cursorRC ed)
       in
         (row, row)
 
-collapseSelection :: EdState -> EdState
-collapseSelection ed = ed {edSelAnchor = Nothing, edExtend = False}
+collapseSelection :: Modal.EdState -> Modal.EdState
+collapseSelection ed = ed {Modal.edSelAnchor = Nothing, Modal.edExtend = False}
 
-cursorDisplayRow :: [RowR] -> Int -> Int
+cursorDisplayRow :: [DiffModel.RowR] -> Int -> Int
 cursorDisplayRow rows row =
-  fromMaybe 0 (findIndex (\r -> rNewRow r == Just row) rows)
+  Maybe.fromMaybe 0 (List.findIndex (\r -> DiffModel.rNewRow r == Just row) rows)

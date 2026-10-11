@@ -18,38 +18,22 @@ module Remax.UI.Core.Verdict
   , updateFile
   ) where
 
-import Brick
-  ( EventM
-  , attrName
-  )
+import Brick qualified as Brick
 import Control.Applicative ((<|>))
-import Control.Exception
-  ( evaluate
-  )
-import Control.Monad
-  ( guard
-  , when
-  )
-import Control.Monad.State
-  ( get
-  , modify
-  )
-import Data.List
-  ( find
-  )
-import qualified Data.Map.Strict as Map
-import Data.Maybe
-  ( catMaybes
-  , mapMaybe
-  )
-import qualified Data.Set as Set
-import Data.Text (Text)
-import Remax.DiffModel
-import Remax.Highlight
-import Remax.Store
-import Remax.UI.Core.Jobs
-import Remax.UI.Core.Types
-import Remax.UI.Core.Widgets
+import Control.Exception qualified as Exception
+import Control.Monad qualified as Monad
+import Control.Monad.State qualified as State
+import Data.List qualified as List
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Set qualified as Set
+import Data.Text qualified as T
+import Remax.DiffModel qualified as DiffModel
+import Remax.Highlight qualified as Highlight
+import Remax.Store qualified as Store
+import Remax.UI.Core.Jobs qualified as Jobs
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Widgets qualified as Widgets
 
 -- Every (file, hunk) pair in display order, each carrying its run.
 --
@@ -61,110 +45,110 @@ import Remax.UI.Core.Widgets
 -- whole seconds between a keystroke and the screen, which is not merely
 -- slow: there is no leaving a session that cannot process the three
 -- keys of :q, and helix's keymap binds no other way out.
-allRunsInOrder :: St -> [((Int, Int), Run)]
+allRunsInOrder :: Types.St -> [((Int, Int), DiffModel.Run)]
 allRunsInOrder st =
   let
-    fileRuns (fi, fv) = zipWith (\hi r -> ((fi, hi), r)) [0 ..] (fvRuns fv)
+    fileRuns (fi, fv) = zipWith (\hi r -> ((fi, hi), r)) [0 ..] (Types.fvRuns fv)
   in
-    concatMap fileRuns (zip [0 ..] (stFiles st))
+    concatMap fileRuns (zip [0 ..] (Types.stFiles st))
 
-runAt :: St -> (Int, Int) -> Maybe Run
+runAt :: Types.St -> (Int, Int) -> Maybe DiffModel.Run
 runAt st (f, h) = do
-  fv <- safeIdx (stFiles st) f
-  safeIdx (fvRuns fv) h
+  fv <- Types.safeIdx (Types.stFiles st) f
+  Types.safeIdx (Types.fvRuns fv) h
 
-pairPending :: St -> (Int, Int) -> Bool
+pairPending :: Types.St -> (Int, Int) -> Bool
 pairPending st pair =
   case runAt st pair of
-    Just r -> runPending (stVerdicts st) r
+    Just r -> runPending (Types.stVerdicts st) r
     Nothing -> False
 
-pairUnvisited :: St -> (Int, Int) -> Bool
+pairUnvisited :: Types.St -> (Int, Int) -> Bool
 pairUnvisited st pair =
   case runAt st pair of
-    Just r -> runUnvisited (stVerdicts st) r
+    Just r -> runUnvisited (Types.stVerdicts st) r
     Nothing -> False
 
 -- Every hunk the filter admits, in display order.
-filteredRunPairs :: St -> [(Int, Int)]
+filteredRunPairs :: Types.St -> [(Int, Int)]
 filteredRunPairs st =
-  map fst (filter (runFilterAllows (stRunFilter st) . snd) (allRunsInOrder st))
+  map fst (filter (Types.runFilterAllows (Types.stRunFilter st) . snd) (allRunsInOrder st))
 
 -- Where a session begins: the first hunk nothing has been said about
 -- yet; only when every hunk has some response does the first still-
 -- pending (flagged/questioned) one win.
-firstUnrespondedOrPending :: St -> Maybe (Int, Int)
+firstUnrespondedOrPending :: Types.St -> Maybe (Int, Int)
 firstUnrespondedOrPending st =
-  fmap fst (find (runUnvisited (stVerdicts st) . snd) (filteredRunsInOrder st))
+  fmap fst (List.find (runUnvisited (Types.stVerdicts st) . snd) (filteredRunsInOrder st))
     <|> firstPending st
 
-firstPending :: St -> Maybe (Int, Int)
+firstPending :: Types.St -> Maybe (Int, Int)
 firstPending st =
-  fmap fst (find (runPending (stVerdicts st) . snd) (filteredRunsInOrder st))
+  fmap fst (List.find (runPending (Types.stVerdicts st) . snd) (filteredRunsInOrder st))
 
-filteredRunsInOrder :: St -> [((Int, Int), Run)]
+filteredRunsInOrder :: Types.St -> [((Int, Int), DiffModel.Run)]
 filteredRunsInOrder st =
-  filter (runFilterAllows (stRunFilter st) . snd) (allRunsInOrder st)
+  filter (Types.runFilterAllows (Types.stRunFilter st) . snd) (allRunsInOrder st)
 
 -- Unvisited: some line has no verdict at all — the hunk still needs a
 -- first look, which is what auto-advance cares about.
-runUnvisited :: Map.Map Text Verdict -> Run -> Bool
-runUnvisited m r = any (`Map.notMember` m) (runKeys r)
+runUnvisited :: Map.Map T.Text Store.Verdict -> DiffModel.Run -> Bool
+runUnvisited m r = any (`Map.notMember` m) (DiffModel.runKeys r)
 
 -- Pending: anything not fully accepted as reviewed. Flagged and
 -- questioned lines keep their hunk pending — they still need attention —
 -- which is what the counts, the p filter, and navigation care about.
-runPending :: Map.Map Text Verdict -> Run -> Bool
+runPending :: Map.Map T.Text Store.Verdict -> DiffModel.Run -> Bool
 runPending m r =
   let
-    accepted k = Map.lookup k m == Just Reviewed
+    accepted k = Map.lookup k m == Just Store.Reviewed
   in
-    not (all accepted (runKeys r))
+    not (all accepted (DiffModel.runKeys r))
 
-runMark :: Map.Map Text Verdict -> Run -> Char
+runMark :: Map.Map T.Text Store.Verdict -> DiffModel.Run -> Char
 runMark m r =
   let
-    verdicts = map (`Map.lookup` m) (runKeys r)
+    verdicts = map (`Map.lookup` m) (DiffModel.runKeys r)
   in
     if runUnvisited m r
       then '\183' -- ·
       else
-        if any (== Just Flagged) verdicts
+        if any (== Just Store.Flagged) verdicts
           then '!'
           else
-            if any (== Just Questioned) verdicts
+            if any (== Just Store.Questioned) verdicts
               then '?'
               else '\10003' -- ✓
 
-remarksFor :: Map.Map Text Verdict -> Map.Map Text [Post] -> FileView -> [Remark]
+remarksFor :: Map.Map T.Text Store.Verdict -> Map.Map T.Text [Store.Post] -> Types.FileView -> [Types.Remark]
 remarksFor verdicts threads fv =
   let
     pick row = do
-      k <- rRemarkKey row
+      k <- DiffModel.rRemarkKey row
       -- a removed row keeps its remark too, but by then the hunk it
       -- belongs to is what carries it through the tray
-      guard (rMark row == ' ')
-      guard (Map.member k verdicts || Map.member k threads)
-      n <- rNewRow row
-      pure (Remark n k (rText row))
+      Monad.guard (DiffModel.rMark row == ' ')
+      Monad.guard (Map.member k verdicts || Map.member k threads)
+      n <- DiffModel.rNewRow row
+      pure (Types.Remark n k (DiffModel.rText row))
   in
-    mapMaybe pick (fvRows fv)
+    Maybe.mapMaybe pick (Types.fvRows fv)
 
-recountFile :: Map.Map Text Verdict -> Map.Map Text [Post] -> FileView -> FileView
+recountFile :: Map.Map T.Text Store.Verdict -> Map.Map T.Text [Store.Post] -> Types.FileView -> Types.FileView
 recountFile verdicts threads fv =
   fv
-    { fvRemarks = remarksFor verdicts threads fv
-    , fvPending = length (filter (runPending verdicts) (fvRuns fv))
+    { Types.fvRemarks = remarksFor verdicts threads fv
+    , Types.fvPending = length (filter (runPending verdicts) (Types.fvRuns fv))
     }
 
-recountIn :: St -> FileView -> FileView
-recountIn st = recountFile (stVerdicts st) (stThreads st)
+recountIn :: Types.St -> Types.FileView -> Types.FileView
+recountIn st = recountFile (Types.stVerdicts st) (Types.stThreads st)
 
-fileKeys :: FileView -> Set.Set Text
+fileKeys :: Types.FileView -> Set.Set T.Text
 fileKeys fv =
-  Set.fromList (concatMap runKeys (fvRuns fv) ++ mapMaybe rRemarkKey (fvRows fv))
+  Set.fromList (concatMap DiffModel.runKeys (Types.fvRuns fv) ++ Maybe.mapMaybe DiffModel.rRemarkKey (Types.fvRows fv))
 
-changedKeys :: Eq v => Map.Map Text v -> Map.Map Text v -> Set.Set Text
+changedKeys :: Eq v => Map.Map T.Text v -> Map.Map T.Text v -> Set.Set T.Text
 changedKeys before after =
   Map.keysSet
     ( Map.filter
@@ -178,84 +162,84 @@ changedKeys before after =
         )
     )
 
-recountIfChanged :: EventM Name St ()
+recountIfChanged :: Brick.EventM Types.Name Types.St ()
 recountIfChanged = do
-  st <- get
+  st <- State.get
   let
-    verdictsMoved = stVerdicts st /= stCountedVerdicts st
-    threadsMoved = stThreads st /= stCountedThreads st
-  when (verdictsMoved || threadsMoved) $ do
+    verdictsMoved = Types.stVerdicts st /= Types.stCountedVerdicts st
+    threadsMoved = Types.stThreads st /= Types.stCountedThreads st
+  Monad.when (verdictsMoved || threadsMoved) $ do
     let
       changed =
         Set.union
-          (changedKeys (stCountedVerdicts st) (stVerdicts st))
-          (changedKeys (stCountedThreads st) (stThreads st))
-    modify (\s -> s {stCountedVerdicts = stVerdicts st, stCountedThreads = stThreads st})
-    case currentFileMay st of
+          (changedKeys (Types.stCountedVerdicts st) (Types.stVerdicts st))
+          (changedKeys (Types.stCountedThreads st) (Types.stThreads st))
+    State.modify (\s -> s {Types.stCountedVerdicts = Types.stVerdicts st, Types.stCountedThreads = Types.stThreads st})
+    case Types.currentFileMay st of
       Just fv
         | changed `Set.isSubsetOf` fileKeys fv ->
-            modify (\s -> updateFile (stCurF s) id s)
+            State.modify (\s -> updateFile (Types.stCurF s) id s)
       _ -> recountAll
 
 recountInlineRows :: Int
 recountInlineRows = 300000
 
-recountAll :: EventM Name St ()
+recountAll :: Brick.EventM Types.Name Types.St ()
 recountAll = do
-  st <- get
+  st <- State.get
   let
-    verdicts = stVerdicts st
-    threads = stThreads st
+    verdicts = Types.stVerdicts st
+    threads = Types.stThreads st
     counted =
       Map.fromList
         ( map
-            (\fv -> (fvPath fv, (remarksFor verdicts threads fv, length (filter (runPending verdicts) (fvRuns fv)))))
-            (stFiles st)
+            (\fv -> (Types.fvPath fv, (remarksFor verdicts threads fv, length (filter (runPending verdicts) (Types.fvRuns fv)))))
+            (Types.stFiles st)
         )
-    epoch = stEpoch st
-    settle :: Either Text (Map.Map FilePath ([Remark], Int)) -> EventM Name St ()
+    epoch = Types.stEpoch st
+    settle :: Either T.Text (Map.Map FilePath ([Types.Remark], Int)) -> Brick.EventM Types.Name Types.St ()
     settle outcome = do
-      latest <- get
-      when (stEpoch latest == epoch) $
+      latest <- State.get
+      Monad.when (Types.stEpoch latest == epoch) $
         case outcome of
-          Left err -> jobFailed "recounting" err
+          Left err -> Jobs.jobFailed "recounting" err
           Right done ->
-            modify $ \s ->
+            State.modify $ \s ->
               s
-                { stFiles =
+                { Types.stFiles =
                     map
-                      ( \fv -> case Map.lookup (fvPath fv) done of
-                          Just (rs, n) -> fv {fvRemarks = rs, fvPending = n}
+                      ( \fv -> case Map.lookup (Types.fvPath fv) done of
+                          Just (rs, n) -> fv {Types.fvRemarks = rs, Types.fvPending = n}
                           Nothing -> fv
                       )
-                      (stFiles s)
-                , stCountedVerdicts = verdicts
-                , stCountedThreads = threads
+                      (Types.stFiles s)
+                , Types.stCountedVerdicts = verdicts
+                , Types.stCountedThreads = threads
                 }
-    forced = Map.foldr (\(rs, n) acc -> sum (map rmRow rs) + n + acc) (0 :: Int) counted
-  if sum (map fvRowCount (stFiles st)) <= recountInlineRows
-    then modify (\s -> s {stFiles = map (recountIn s) (stFiles s)})
-    else startJob "recounting" (evaluate forced >> pure counted) settle
+    forced = Map.foldr (\(rs, n) acc -> sum (map Types.rmRow rs) + n + acc) (0 :: Int) counted
+  if sum (map Types.fvRowCount (Types.stFiles st)) <= recountInlineRows
+    then State.modify (\s -> s {Types.stFiles = map (recountIn s) (Types.stFiles s)})
+    else Jobs.startJob "recounting" (Exception.evaluate forced >> pure counted) settle
 
 -- Where a row's feedback lives. A changed row carries what was said
 -- about the change; a line nobody has changed carries a remark, keyed
 -- against the base; and a removed row can answer to either, because a
 -- remark made while it was unchanged follows it here when somebody
 -- changes it.
-rowFeedbackKeys :: RowR -> [Text]
-rowFeedbackKeys r = catMaybes [rKey r, rRemarkKey r]
+rowFeedbackKeys :: DiffModel.RowR -> [T.Text]
+rowFeedbackKeys r = Maybe.catMaybes [DiffModel.rKey r, DiffModel.rRemarkKey r]
 
-effRuns :: RowR -> [Seg]
+effRuns :: DiffModel.RowR -> [Highlight.Seg]
 effRuns r =
-  case nonEmptySegs (rToks r) of
-    [] -> [(attrName "plain", rText r)]
+  case Widgets.nonEmptySegs (DiffModel.rToks r) of
+    [] -> [(Brick.attrName "plain", DiffModel.rText r)]
     filled -> filled
 
 -- Drawing the body ---------------------------------------------------------------
 
-updateFile :: Int -> (FileView -> FileView) -> St -> St
+updateFile :: Int -> (Types.FileView -> Types.FileView) -> Types.St -> Types.St
 updateFile i f st =
   let
     patch (j, fv) = if j == i then recountIn st (f fv) else fv
   in
-    st {stFiles = map patch (zip [0 ..] (stFiles st))}
+    st {Types.stFiles = map patch (zip [0 ..] (Types.stFiles st))}

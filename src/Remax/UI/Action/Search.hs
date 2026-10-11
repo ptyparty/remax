@@ -9,63 +9,51 @@ module Remax.UI.Action.Search
   , searchStep
   ) where
 
-import Brick
-  ( EventM
-  )
+import Brick qualified as Brick
 import Control.Applicative ((<|>))
-import Control.Monad
-  ( unless
-  )
-import Control.Monad.State
-  ( get
-  , modify
-  )
-import Data.Char
-  ( isAlphaNum
-  )
-import Data.Maybe
-  ( fromMaybe
-  )
-import Data.Text (Text)
-import qualified Data.Text as T
-import Remax.Modal
-import Remax.UI.Action.Picker
-import Remax.UI.Core.Types
-import Remax.UI.Model.Nav
-import qualified Remax.Zipper as Z
+import Control.Monad qualified as Monad
+import Control.Monad.State qualified as State
+import Data.Char qualified as Char
+import Data.Maybe qualified as Maybe
+import Data.Text qualified as T
+import Remax.Modal qualified as Modal
+import Remax.UI.Action.Picker qualified as PickerAction
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Model.Nav qualified as Nav
+import Remax.Zipper qualified as Z
 
 -- '*': prime the search with the selected text (single-line selections)
 -- or the identifier under the cursor, then jump to its next occurrence.
-searchWordUnderCursor :: EventM Name St ()
+searchWordUnderCursor :: Brick.EventM Types.Name Types.St ()
 searchWordUnderCursor = searchWordDir 1
 
 -- vi's '#': the same needle, walked the other way.
-searchWordBackward :: EventM Name St ()
+searchWordBackward :: Brick.EventM Types.Name Types.St ()
 searchWordBackward = searchWordDir (-1)
 
-searchWordDir :: Int -> EventM Name St ()
+searchWordDir :: Int -> Brick.EventM Types.Name Types.St ()
 searchWordDir dir = do
-  st <- get
+  st <- State.get
   let
-    ed = fvEd (currentFile st)
-    ls = bufferLines ed
-    rowText r = fromMaybe "" (safeIdx ls r)
+    ed = Types.fvEd (Types.currentFile st)
+    ls = Modal.bufferLines ed
+    rowText r = Maybe.fromMaybe "" (Types.safeIdx ls r)
     -- only a deliberate v-extend selection overrides the cursor word;
     -- the incidental selections that w/e-style motions leave behind drag
     -- neighboring punctuation along and are not what * means
     selectionNeedle = do
-      ((lr, lc), (hr, hc)) <- charSelection ed
-      if not (edExtend ed) || (lr, lc) == (hr, hc) || lr /= hr
+      ((lr, lc), (hr, hc)) <- Modal.charSelection ed
+      if not (Modal.edExtend ed) || (lr, lc) == (hr, hc) || lr /= hr
         then Nothing
         else
           let
             l = rowText lr
           in
             Just (T.take (hc + 1 - lc) (T.drop lc l))
-    isIdent ch = isAlphaNum ch || ch == '_' || ch == '\''
+    isIdent ch = Char.isAlphaNum ch || ch == '_' || ch == '\''
     wordNeedle =
       let
-        (row, col) = cursorRC ed
+        (row, col) = Modal.cursorRC ed
         l = rowText row
         -- on punctuation, scan forward to the next word on the line
         -- (vim's * does the same) rather than giving up
@@ -85,64 +73,64 @@ searchWordDir dir = do
             in
               Just (T.take len (T.drop start l))
   case selectionNeedle <|> wordNeedle of
-    Nothing -> modify (\s -> s {stMsg = "no word under cursor"})
+    Nothing -> State.modify (\s -> s {Types.stMsg = "no word under cursor"})
     Just needle -> do
-      modify
-        (\s -> s {stLastSearch = needle, stGrepNav = Nothing, stSearchDir = dir})
+      State.modify
+        (\s -> s {Types.stLastSearch = needle, Types.stGrepNav = Nothing, Types.stSearchDir = dir})
       searchStep dir needle
 
 -- `/` searches forward and vi's `?` backward; the prompt wears whichever
 -- sigil opened it, and n/N repeat along that grain rather than always
 -- downward. In the keymaps with no `?`, the direction is always forward
 -- and this is exactly the old behavior.
-openSearchPrompt :: Int -> EventM Name St ()
+openSearchPrompt :: Int -> Brick.EventM Types.Name Types.St ()
 openSearchPrompt dir =
-  modify (\s -> s {stPrompt = Just (SearchPrompt ""), stSearchDir = dir})
+  State.modify (\s -> s {Types.stPrompt = Just (Types.SearchPrompt ""), Types.stSearchDir = dir})
 
 -- n keeps the search's own direction, N reverses it.
-searchRepeat :: Int -> EventM Name St ()
+searchRepeat :: Int -> Brick.EventM Types.Name Types.St ()
 searchRepeat sense = do
-  st <- get
-  searchNext (sense * stSearchDir st)
+  st <- State.get
+  searchNext (sense * Types.stSearchDir st)
 
 -- n/N: when the last search came from the grep picker, walk its hit
 -- list across files without re-searching; otherwise repeat the in-file
 -- search as always.
-searchNext :: Int -> EventM Name St ()
+searchNext :: Int -> Brick.EventM Types.Name Types.St ()
 searchNext dir = do
-  st <- get
-  case stGrepNav st of
+  st <- State.get
+  case Types.stGrepNav st of
     Just (q, hits, ix)
       | not (null hits) -> do
           let
             n = length hits
             ix2 = (((ix + dir) `mod` n) + n) `mod` n
-          case safeIdx hits ix2 of
+          case Types.safeIdx hits ix2 of
             Just (path, line) -> do
-              modify (\s -> s {stGrepNav = Just (q, hits, ix2)})
-              openGrepHit path line q
-              setMsg ("grep hit " <> tshow (ix2 + 1) <> "/" <> tshow n)
+              State.modify (\s -> s {Types.stGrepNav = Just (q, hits, ix2)})
+              PickerAction.openGrepHit path line q
+              Types.setMsg ("grep hit " <> Types.tshow (ix2 + 1) <> "/" <> Types.tshow n)
             Nothing -> pure ()
     _ ->
-      unless
-        (T.null (stLastSearch st))
-        (searchStep dir (stLastSearch st))
+      Monad.unless
+        (T.null (Types.stLastSearch st))
+        (searchStep dir (Types.stLastSearch st))
 
 -- Literal search over the current file's buffer, helix-shaped: the match
 -- becomes the selection, n/N walk matches, wrapping at either end.
-searchStep :: Int -> Text -> EventM Name St ()
+searchStep :: Int -> T.Text -> Brick.EventM Types.Name Types.St ()
 searchStep dir needle = do
-  st <- get
+  st <- State.get
   let
-    i = stCurF st
-    fv = stFiles st !! i
-    ed = fvEd fv
-    pos = cursorRC ed
+    i = Types.stCurF st
+    fv = Types.stFiles st !! i
+    ed = Types.fvEd fv
+    pos = Modal.cursorRC ed
     matchesInLine (r, l) =
       map (\(pre, _) -> (r, T.length pre)) (T.breakOnAll needle l)
-    matches = concatMap matchesInLine (zip [0 ..] (bufferLines ed))
+    matches = concatMap matchesInLine (zip [0 ..] (Modal.bufferLines ed))
   case matches of
-    [] -> modify (\s -> s {stMsg = "no match: " <> needle})
+    [] -> State.modify (\s -> s {Types.stMsg = "no match: " <> needle})
     _ -> do
       let
         after = filter (> pos) matches
@@ -157,9 +145,9 @@ searchStep dir needle = do
               [] -> pos
         moved =
           ed
-            { edZipper = Z.moveCursor (mr, mc + T.length needle - 1) (edZipper ed)
-            , edSelAnchor = Just (mr, mc)
-            , edSelKind = CharSel
+            { Modal.edZipper = Z.moveCursor (mr, mc + T.length needle - 1) (Modal.edZipper ed)
+            , Modal.edSelAnchor = Just (mr, mc)
+            , Modal.edSelKind = Modal.CharSel
             }
-      setEd i moved
-      modify (\s -> s {stMsg = " "})
+      Nav.setEd i moved
+      State.modify (\s -> s {Types.stMsg = " "})

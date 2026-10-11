@@ -5,34 +5,26 @@ module Remax.UI.Draw.Prompt
   ( promptMenu
   ) where
 
-import Brick
-  ( Padding (Max)
-  , Widget
-  , padRight
-  , txt
-  , vBox
-  , withAttr
-  , withDefAttr
-  )
-import qualified Data.Text as T
-import Remax.UI.Action.Command
-import Remax.UI.Core.Attrs
-import Remax.UI.Core.Types
+import Brick qualified as Brick
+import Data.Text qualified as T
+import Remax.UI.Action.Command qualified as Command
+import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Types qualified as Types
 
 -- The live menu above the status line: bare ':' lists every command
 -- with its description; typing narrows; the cycled candidate is lit.
-promptMenu :: St -> Maybe (Widget Name)
+promptMenu :: Types.St -> Maybe (Brick.Widget Types.Name)
 promptMenu st =
-  case stPrompt st of
-    Just (CmdPrompt input) ->
+  case Types.stPrompt st of
+    Just (Types.CmdPrompt input) ->
       let
-        base = case stPromptCycle st of
+        base = case Types.stPromptCycle st of
           Just (b, _) -> b
           Nothing -> input
-        cands = cmdCandidates st base
-        selIx = fmap snd (stPromptCycle st)
+        cands = Command.cmdCandidates st base
+        selIx = fmap snd (Types.stPromptCycle st)
         isCmdStage = not (" " `T.isInfixOf` base)
-        descOf n = case filter (\(c, _, _) -> c == n) commandTable of
+        descOf n = case filter (\(c, _, _) -> c == n) Command.commandTable of
           ((_, _, d) : _) -> d
           [] -> ""
         row (i, n) =
@@ -45,28 +37,28 @@ promptMenu st =
                     <> "  "
                     <> descOf n
                 else " " <> n
-            w = padRight Max (txt label)
+            w = Brick.padRight Brick.Max (Brick.txt label)
           in
-            if Just i == selIx then withDefAttr selAttr w else w
+            if Just i == selIx then Brick.withDefAttr Attrs.selAttr w else w
         shown = take 16 (zip [0 ..] cands)
         more = length cands - length shown
         moreRow =
           if more > 0
-            then [withAttr hintAttr (txt ("   \8230 " <> tshow more <> " more"))]
+            then [Brick.withAttr Attrs.hintAttr (Brick.txt ("   \8230 " <> Types.tshow more <> " more"))]
             else []
       in
-        case (cands, lineAddress base) of
+        case (cands, Command.lineAddress base) of
           -- a bare number is a line address: no completions to offer,
           -- but say what it will do, like every other command does
           ([], Just n) ->
             Just
-              ( txt
+              ( Brick.txt
                   ( " :"
                       <> T.justifyLeft 10 ' ' base
                       <> "  go to line "
-                      <> tshow (max 1 n)
+                      <> Types.tshow (max 1 n)
                   )
               )
           ([], _) -> Nothing
-          _ -> Just (vBox (map row shown ++ moreRow))
+          _ -> Just (Brick.vBox (map row shown ++ moreRow))
     _ -> Nothing

@@ -10,43 +10,28 @@ module Remax.UI.Action.Command
   , runCommand
   ) where
 
-import Brick
-  ( EventM
-  , halt
-  )
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.State
-  ( get
-  , modify
-  )
-import qualified Data.Set as Set
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Read as TR
-import Remax.Config
-import Remax.Git
-  ( FileScope (..)
-  , ReviewMode (..)
-  , listFiles
-  , listRefs
-  )
-import Remax.UI.Action.Conversation
-import Remax.UI.Action.Editor
-import Remax.UI.Action.Notes
-import Remax.UI.Action.Open
-import Remax.UI.Action.Picker
-import Remax.UI.Action.Rebase
-import Remax.UI.Action.Repo
-import Remax.UI.Action.Settings
-import Remax.UI.Action.Tree
-import Remax.UI.Action.Verdicts
-import Remax.UI.Core.Types
-import Remax.UI.Model.Nav
-import System.FilePath
-  ( takeDirectory
-  , takeFileName
-  , (</>)
-  )
+import Brick qualified as Brick
+import Control.Monad.IO.Class qualified as MonadIO
+import Control.Monad.State qualified as State
+import Data.Set qualified as Set
+import Data.Text qualified as T
+import Data.Text.Read qualified as TR
+import Remax.Config qualified as Config
+import Remax.Git qualified as Git
+import Remax.UI.Action.Conversation qualified as Conversation
+import Remax.UI.Action.Editor qualified as Editor
+import Remax.UI.Action.Notes qualified as NoteAction
+import Remax.UI.Action.Open qualified as Open
+import Remax.UI.Action.Picker qualified as PickerAction
+import Remax.UI.Action.Rebase qualified as Rebase
+import Remax.UI.Action.Repo qualified as Repo
+import Remax.UI.Action.Settings qualified as Settings
+import Remax.UI.Action.Tree qualified as TreeAction
+import Remax.UI.Action.Verdicts qualified as VerdictAction
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Model.Nav qualified as Nav
+import System.FilePath ((</>))
+import System.FilePath qualified as FilePath
 
 -- What each command is called, what it takes, and what to tell a human
 -- browsing the menu.
@@ -60,7 +45,7 @@ data ArgKind
   | ArgSet
   | ArgFilter
 
-commandTable :: [(Text, ArgKind, Text)]
+commandTable :: [(T.Text, ArgKind, T.Text)]
 commandTable =
   [ ("base", ArgRef, "diff against REF; bare :base picks from history")
   , ("branch", NoArg, "whole-branch view (merge-base base)")
@@ -90,7 +75,7 @@ commandTable =
   , ("q", NoArg, "quit")
   ]
 
-argKindOf :: Text -> Maybe ArgKind
+argKindOf :: T.Text -> Maybe ArgKind
 argKindOf name =
   case filter (\(n, _, _) -> n == name) commandTable of
     ((_, kind, _) : _) -> Just kind
@@ -98,7 +83,7 @@ argKindOf name =
 
 -- Candidates for the word being typed: command names before the first
 -- space, that command's argument domain after it.
-cmdCandidates :: St -> Text -> [Text]
+cmdCandidates :: Types.St -> T.Text -> [T.Text]
 cmdCandidates st input =
   let
     (done, word) = T.breakOnEnd " " input
@@ -106,48 +91,48 @@ cmdCandidates st input =
   in
     case T.words done of
       [] -> prefixed (map (\(n, _, _) -> n) commandTable)
-      ["set"] -> prefixed settingNames
-      ["set", "keys"] -> prefixed keyModeNames
+      ["set"] -> prefixed Settings.settingNames
+      ["set", "keys"] -> prefixed Config.keyModeNames
       ["set", "note-on-flag"] -> prefixed ["0", "1"]
       ["resolve"] -> prefixed ["all"]
       [cmd] -> case argKindOf cmd of
-        Just ArgRef -> prefixed ("branch" : stCmdRefs st)
+        Just ArgRef -> prefixed ("branch" : Types.stCmdRefs st)
         Just ArgMode -> prefixed ["head", "unstaged", "untracked"]
-        Just ArgPath -> prefixed (stCmdFiles st)
-        Just ArgDir -> prefixed (stCmdDirs st ++ stCmdFiles st)
-        Just ArgFilter -> prefixed (map runFilterLabel filterCycle)
+        Just ArgPath -> prefixed (Types.stCmdFiles st)
+        Just ArgDir -> prefixed (Types.stCmdDirs st ++ Types.stCmdFiles st)
+        Just ArgFilter -> prefixed (map Types.runFilterLabel Types.filterCycle)
         _ -> []
       _ -> []
 
-openCmdPrompt :: EventM Name St ()
+openCmdPrompt :: Brick.EventM Types.Name Types.St ()
 openCmdPrompt = do
-  st <- get
-  files <- liftIO (listFiles VisibleFiles (stRoot st))
-  refs <- liftIO (listRefs (stRoot st))
+  st <- State.get
+  files <- MonadIO.liftIO (Git.listFiles Git.VisibleFiles (Types.stRoot st))
+  refs <- MonadIO.liftIO (Git.listRefs (Types.stRoot st))
   let
     dirs =
       Set.toList
-        (Set.fromList (concatMap (parentDirs . takeDirectory) files))
+        (Set.fromList (concatMap (parentDirs . FilePath.takeDirectory) files))
     parentDirs d =
       if d == "." || d == "/" || null d
         then []
-        else d : parentDirs (takeDirectory d)
-  modify $ \s ->
+        else d : parentDirs (FilePath.takeDirectory d)
+  State.modify $ \s ->
     s
-      { stPrompt = Just (CmdPrompt "")
-      , stCmdFiles = map T.pack files
-      , stCmdDirs = map T.pack dirs
-      , stCmdRefs = refs
-      , stPromptCycle = Nothing
+      { Types.stPrompt = Just (Types.CmdPrompt "")
+      , Types.stCmdFiles = map T.pack files
+      , Types.stCmdDirs = map T.pack dirs
+      , Types.stCmdRefs = refs
+      , Types.stPromptCycle = Nothing
       }
 
 -- Complete the current word to a candidate; repeated Tab cycles. The
 -- originally typed text stays the filter, so cycling never narrows.
-promptComplete :: Int -> Text -> EventM Name St ()
+promptComplete :: Int -> T.Text -> Brick.EventM Types.Name Types.St ()
 promptComplete step input = do
-  st <- get
+  st <- State.get
   let
-    (base, prevIx) = case stPromptCycle st of
+    (base, prevIx) = case Types.stPromptCycle st of
       Just (b, i) -> (b, i + step)
       Nothing -> (input, if step > 0 then 0 else -1)
     cands = cmdCandidates st base
@@ -169,85 +154,85 @@ promptComplete step input = do
         -- stage: the next Tab completes the argument, not the verb
         nextCycle =
           if T.null suffix then Just (base, ix) else Nothing
-      modify $ \s ->
+      State.modify $ \s ->
         s
-          { stPrompt = Just (CmdPrompt completed)
-          , stPromptCycle = nextCycle
+          { Types.stPrompt = Just (Types.CmdPrompt completed)
+          , Types.stPromptCycle = nextCycle
           }
 
 -- A bare number on the command line is a line address, ex-style.
 -- Read as an Integer and saturated, so an absurdly wide number still
 -- means "the end of the file" rather than wrapping around to the top.
-lineAddress :: Text -> Maybe Int
+lineAddress :: T.Text -> Maybe Int
 lineAddress t = case TR.decimal t of
   Right (n, rest)
     | T.null rest ->
         Just (fromInteger (min n (fromIntegral (maxBound :: Int))))
   _ -> Nothing
 
-runCommand :: Text -> EventM Name St ()
+runCommand :: T.Text -> Brick.EventM Types.Name Types.St ()
 runCommand input =
   case T.words input of
     [] -> pure ()
-    ["q"] -> halt
-    ["base"] -> openBasePicker
-    ["checkout"] -> openBranchPicker
-    ["checkout", branch] -> applyCheckout branch
-    ["base", "branch"] -> setBaseBranch
-    ["branch"] -> setBaseBranch
-    ["base", ref] -> setBase (VsRef ref)
-    ["mode", "head"] -> setBase (VsRef "HEAD")
-    ["mode", "unstaged"] -> setBase VsIndex
-    ["mode", "untracked"] -> setBase Untracked
+    ["q"] -> Brick.halt
+    ["base"] -> PickerAction.openBasePicker
+    ["checkout"] -> PickerAction.openBranchPicker
+    ["checkout", branch] -> PickerAction.applyCheckout branch
+    ["base", "branch"] -> Settings.setBaseBranch
+    ["branch"] -> Settings.setBaseBranch
+    ["base", ref] -> Settings.setBase (Git.VsRef ref)
+    ["mode", "head"] -> Settings.setBase (Git.VsRef "HEAD")
+    ["mode", "unstaged"] -> Settings.setBase Git.VsIndex
+    ["mode", "untracked"] -> Settings.setBase Git.Untracked
     ["mode", other] ->
-      setMsg ("unknown mode " <> other <> " — head | unstaged | untracked")
-    ["rebase"] -> startRebase Nothing
-    ["rebase", ref] -> startRebase (Just ref)
-    ["continue"] -> continueRebase
-    ["abort"] -> setMsg "abort the rebase and lose its progress? :abort! confirms"
-    ["abort!"] -> abortRebase
-    ["amend"] -> amendHead
-    ["note"] -> openNotePopup NoteAsked
-    ("note" : rest) -> noteCmd (T.unwords rest)
-    ["unnote"] -> unnoteCmd
-    ["revert"] -> revertTarget
-    ["filter"] -> cycleRunFilter
+      Types.setMsg ("unknown mode " <> other <> " — head | unstaged | untracked")
+    ["rebase"] -> Rebase.startRebase Nothing
+    ["rebase", ref] -> Rebase.startRebase (Just ref)
+    ["continue"] -> Rebase.continueRebase
+    ["abort"] -> Types.setMsg "abort the rebase and lose its progress? :abort! confirms"
+    ["abort!"] -> Rebase.abortRebase
+    ["amend"] -> Rebase.amendHead
+    ["note"] -> NoteAction.openNotePopup Types.NoteAsked
+    ("note" : rest) -> NoteAction.noteCmd (T.unwords rest)
+    ["unnote"] -> NoteAction.unnoteCmd
+    ["revert"] -> VerdictAction.revertTarget
+    ["filter"] -> VerdictAction.cycleRunFilter
     ["filter", which] -> setFilterNamed which
-    ["resolve"] -> unnoteCmd
-    ["resolve", "all"] -> resolveAllAnswered
-    ["accept", path] -> acceptPath path
-    ["set"] -> showSettings
-    ["set", key] -> showSetting key
-    ["set", key, val] -> applySet key val
-    ["open", path] -> openFilePath path
-    ["close"] -> closeCurrent
-    ["files"] -> openFileFinder
-    ["tree"] -> openTree
-    ["help"] -> showHelp
-    ["repo"] -> openRepoPicker
+    ["resolve"] -> NoteAction.unnoteCmd
+    ["resolve", "all"] -> Conversation.resolveAllAnswered
+    ["accept", path] -> VerdictAction.acceptPath path
+    ["set"] -> Settings.showSettings
+    ["set", key] -> Settings.showSetting key
+    ["set", key, val] -> Settings.applySet key val
+    ["open", path] -> Open.openFilePath path
+    ["close"] -> Open.closeCurrent
+    ["files"] -> TreeAction.openFileFinder
+    ["tree"] -> TreeAction.openTree
+    ["help"] -> Types.showHelp
+    ["repo"] -> PickerAction.openRepoPicker
     ["repo", name] -> switchRepoNamed name
-    ["commit"] -> showCommitPopup
-    ("grep" : rest) -> openGrepPicker (T.unwords rest)
-    ["edit"] -> editCurrent
+    ["commit"] -> VerdictAction.showCommitPopup
+    ("grep" : rest) -> PickerAction.openGrepPicker (T.unwords rest)
+    ["edit"] -> Editor.editCurrent
     ["edit", path] -> editPath path
-    [tok] | Just n <- lineAddress tok -> gotoLine n
-    _ -> setMsg ("unknown command: " <> input)
+    [tok] | Just n <- lineAddress tok -> Nav.gotoLine n
+    _ -> Types.setMsg ("unknown command: " <> input)
 
-setFilterNamed :: Text -> EventM Name St ()
+setFilterNamed :: T.Text -> Brick.EventM Types.Name Types.St ()
 setFilterNamed which =
-  case filter ((== which) . runFilterLabel) filterCycle of
-    (chosen : _) -> setRunFilter chosen
-    [] -> setMsg ("filter = " <> T.intercalate " | " (map runFilterLabel filterCycle))
+  case filter ((== which) . Types.runFilterLabel) Types.filterCycle of
+    (chosen : _) -> VerdictAction.setRunFilter chosen
+    [] -> Types.setMsg ("filter = " <> T.intercalate " | " (map Types.runFilterLabel Types.filterCycle))
 
-switchRepoNamed :: Text -> EventM Name St ()
+switchRepoNamed :: T.Text -> Brick.EventM Types.Name Types.St ()
 switchRepoNamed name = do
-  rescanRepos
-  st <- get
-  case filter ((== T.unpack name) . takeFileName) (stRoots st) of
-    (root : _) -> switchRepo root
-    [] -> setMsg ("no repository called " <> name <> " here")
+  Repo.rescanRepos
+  st <- State.get
+  case filter ((== T.unpack name) . FilePath.takeFileName) (Types.stRoots st) of
+    (root : _) -> Repo.switchRepo root
+    [] -> Types.setMsg ("no repository called " <> name <> " here")
 
-editPath :: Text -> EventM Name St ()
+editPath :: T.Text -> Brick.EventM Types.Name Types.St ()
 editPath path = do
-  st <- get
-  launchEditor (stRoot st </> T.unpack path) 1
+  st <- State.get
+  Editor.launchEditor (Types.stRoot st </> T.unpack path) 1

@@ -60,14 +60,13 @@ module Remax.Modal
   , redo
   ) where
 
-import Data.Char (isAlphaNum, isLower, isSpace, isUpper, toLower, toUpper)
-import Data.List (find)
-import Data.Maybe (mapMaybe)
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
-import qualified Graphics.Vty as V
-import qualified Remax.Zipper as Z
+import Data.Char qualified as Char
+import Data.List qualified as List
+import Data.Maybe qualified as Maybe
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Graphics.Vty qualified as V
+import Remax.Zipper qualified as Z
 
 data Mode = Normal | Insert
   deriving (Eq, Show)
@@ -114,16 +113,16 @@ data InsertEntry
   deriving (Eq, Show)
 
 data EdState = EdState
-  { edZipper :: Z.TextZipper Text
+  { edZipper :: Z.TextZipper T.Text
   , edMode :: Mode
   , edSelAnchor :: Maybe (Int, Int) -- selection anchor; head is the cursor
   , edSelKind :: SelKind
   , edExtend :: Bool -- v: motions extend instead of replacing
   , edPending :: Pending
-  , edKill :: Text -- the kill slot (emacs C-k/C-w/M-w; future helix yank)
+  , edKill :: T.Text -- the kill slot (emacs C-k/C-w/M-w; future helix yank)
   , edCopied :: Bool -- the slot was just filled by a deliberate copy
-  , edUndo :: [Z.TextZipper Text]
-  , edRedo :: [Z.TextZipper Text] -- what undo stepped back over; edits clear it
+  , edUndo :: [Z.TextZipper T.Text]
+  , edRedo :: [Z.TextZipper T.Text] -- what undo stepped back over; edits clear it
   , edTouched :: Bool -- something was actually changed at least once
   , edInsertEntry :: Maybe InsertEntry -- how the open insert session began
   , edRecording :: [V.Event] -- keys of the open insert session, reversed
@@ -133,7 +132,7 @@ data EdState = EdState
 hasPending :: EdState -> Bool
 hasPending st = edPending st /= NoPending
 
-pendingLabel :: EdState -> Maybe Text
+pendingLabel :: EdState -> Maybe T.Text
 pendingLabel st = case edPending st of
   NoPending -> Nothing
   PendingG -> Just "g"
@@ -150,7 +149,7 @@ pendingLabel st = case edPending st of
   PendingFind TillBack -> Just "T"
   PendingReplace -> Just "r"
 
-newEdState :: Int -> [Text] -> EdState
+newEdState :: Int -> [T.Text] -> EdState
 newEdState row ls =
   EdState
     { edZipper =
@@ -171,7 +170,7 @@ newEdState row ls =
     , edLastInsert = Nothing
     }
 
-bufferLines :: EdState -> [Text]
+bufferLines :: EdState -> [T.Text]
 bufferLines = Z.getText . edZipper
 
 -- length (bufferLines st), without rebuilding the list to count it.
@@ -180,7 +179,7 @@ bufferLineCount = Z.lineCount . edZipper
 
 -- The cursor's line and everything above it, nearest first: what a
 -- search upward from the cursor wants, without building the buffer.
-bufferUpward :: EdState -> [Text]
+bufferUpward :: EdState -> [T.Text]
 bufferUpward = Z.linesUpward . edZipper
 
 cursorRC :: EdState -> (Int, Int)
@@ -212,10 +211,10 @@ charSelection st =
 undoDepth :: Int
 undoDepth = 100
 
-snapshot :: EdState -> [Z.TextZipper Text]
+snapshot :: EdState -> [Z.TextZipper T.Text]
 snapshot st = take undoDepth (edZipper st : edUndo st)
 
-withUndo :: (Z.TextZipper Text -> Z.TextZipper Text) -> EdState -> EdState
+withUndo :: (Z.TextZipper T.Text -> Z.TextZipper T.Text) -> EdState -> EdState
 withUndo f st =
   st
     { edZipper = f (edZipper st)
@@ -396,7 +395,7 @@ handleG ev st =
   let
     firstNonBlank z =
       let
-        col = T.length (T.takeWhile isSpace (Z.currentLine z))
+        col = T.length (T.takeWhile Char.isSpace (Z.currentLine z))
         row = fst (Z.cursorPosition z)
       in
         Z.moveCursor (row, col) z
@@ -515,30 +514,30 @@ data CharClass = ClsSpace | ClsWord | ClsPunct
 -- and runs of punctuation, `W` only between runs of non-blank.
 charClass :: WordClass -> Char -> CharClass
 charClass cls c
-  | isSpace c = ClsSpace
+  | Char.isSpace c = ClsSpace
   | otherwise =
       case cls of
         BigWord -> ClsWord
-        SmallWord -> if isAlphaNum c || c == '_' then ClsWord else ClsPunct
+        SmallWord -> if Char.isAlphaNum c || c == '_' then ClsWord else ClsPunct
 
 -- Matching pairs ---------------------------------------------------------------
 
 -- Shared by both keymaps: vi reaches these through % and its text
 -- objects, helix through the m menu.
 
-nextPos :: [Text] -> (Int, Int) -> Maybe (Int, Int)
+nextPos :: [T.Text] -> (Int, Int) -> Maybe (Int, Int)
 nextPos ls (r, c) =
   if c + 1 < T.length (lineAt ls r)
     then Just (r, c + 1)
     else if r + 1 < length ls then Just (r + 1, 0) else Nothing
 
-prevPos :: [Text] -> (Int, Int) -> Maybe (Int, Int)
+prevPos :: [T.Text] -> (Int, Int) -> Maybe (Int, Int)
 prevPos ls (r, c) =
   if c > 0
     then Just (r, c - 1)
     else if r > 0 then Just (r - 1, max 0 (T.length (lineAt ls (r - 1)) - 1)) else Nothing
 matchEnclosing ::
-  Char -> Char -> [Text] -> (Int, Int) -> Maybe ((Int, Int), (Int, Int))
+  Char -> Char -> [T.Text] -> (Int, Int) -> Maybe ((Int, Int), (Int, Int))
 matchEnclosing open close ls pos =
   let
     charOf (r, c) =
@@ -607,7 +606,7 @@ matchingBracket ed =
           ((o, cl) : _) -> Just (o, cl, i)
           [] -> Nothing
   in
-    case mapMaybe atCol [col .. T.length line - 1] of
+    case Maybe.mapMaybe atCol [col .. T.length line - 1] of
       [] -> Nothing
       ((o, cl, i) : _) ->
         case matchEnclosing o cl ls (row, i) of
@@ -615,11 +614,11 @@ matchingBracket ed =
             if openPos == (row, i) then Just closePos else Just openPos
           Nothing -> Nothing
 
-lineAt :: [Text] -> Int -> Text
+lineAt :: [T.Text] -> Int -> T.Text
 lineAt ls r =
   if r >= 0 && r < length ls then ls !! r else ""
 
-findForward :: [Text] -> (Int, Int) -> Char -> Maybe (Int, Int)
+findForward :: [T.Text] -> (Int, Int) -> Char -> Maybe (Int, Int)
 findForward ls (cr, cc) c =
   case T.findIndex (== c) (T.drop (cc + 1) (lineAt ls cr)) of
     Just i -> Just (cr, cc + 1 + i)
@@ -627,11 +626,11 @@ findForward ls (cr, cc) c =
       let
         hitIn r = fmap (\i -> (r, i)) (T.findIndex (== c) (lineAt ls r))
       in
-        case mapMaybe hitIn [cr + 1 .. length ls - 1] of
+        case Maybe.mapMaybe hitIn [cr + 1 .. length ls - 1] of
           (hit : _) -> Just hit
           [] -> Nothing
 
-findBackward :: [Text] -> (Int, Int) -> Char -> Maybe (Int, Int)
+findBackward :: [T.Text] -> (Int, Int) -> Char -> Maybe (Int, Int)
 findBackward ls (cr, cc) c =
   case lastIndexOf c (T.take cc (lineAt ls cr)) of
     Just i -> Just (cr, i)
@@ -639,22 +638,22 @@ findBackward ls (cr, cc) c =
       let
         hitIn r = fmap (\i -> (r, i)) (lastIndexOf c (lineAt ls r))
       in
-        case mapMaybe hitIn [cr - 1, cr - 2 .. 0] of
+        case Maybe.mapMaybe hitIn [cr - 1, cr - 2 .. 0] of
           (hit : _) -> Just hit
           [] -> Nothing
 
-lastIndexOf :: Char -> Text -> Maybe Int
+lastIndexOf :: Char -> T.Text -> Maybe Int
 lastIndexOf c t =
   fmap (\i -> T.length t - 1 - i) (T.findIndex (== c) (T.reverse t))
 
 -- One position earlier / later in document order, for till motions.
-stepBack :: [Text] -> (Int, Int) -> (Int, Int)
+stepBack :: [T.Text] -> (Int, Int) -> (Int, Int)
 stepBack ls (r, c)
   | c > 0 = (r, c - 1)
   | r > 0 = (r - 1, max 0 (T.length (lineAt ls (r - 1)) - 1))
   | otherwise = (r, c)
 
-stepFwd :: [Text] -> (Int, Int) -> (Int, Int)
+stepFwd :: [T.Text] -> (Int, Int) -> (Int, Int)
 stepFwd ls (r, c)
   | c + 1 < T.length (lineAt ls r) = (r, c + 1)
   | r + 1 < length ls = (r + 1, 0)
@@ -665,14 +664,14 @@ collapse st =
   st {edSelAnchor = Nothing, edExtend = False, edSelKind = CharSel}
 
 -- hjkl and arrows: collapse and move, unless v-extend is on.
-plainMove :: (Z.TextZipper Text -> Z.TextZipper Text) -> EdState -> EdState
+plainMove :: (Z.TextZipper T.Text -> Z.TextZipper T.Text) -> EdState -> EdState
 plainMove f st
   | edExtend st = st {edZipper = f (edZipper st)}
   | otherwise = (collapse st) {edZipper = f (edZipper st)}
 
 -- Word motions: the traversed span becomes the selection (anchor at the
 -- old cursor), matching helix's selection-first model.
-selectMove :: (Z.TextZipper Text -> Z.TextZipper Text) -> EdState -> EdState
+selectMove :: (Z.TextZipper T.Text -> Z.TextZipper T.Text) -> EdState -> EdState
 selectMove f st =
   let
     oldPos = cursorRC st
@@ -736,7 +735,7 @@ beginInsert entry st =
     }
 
 enterInsert ::
-  InsertEntry -> (Z.TextZipper Text -> Z.TextZipper Text) -> EdState -> EdState
+  InsertEntry -> (Z.TextZipper T.Text -> Z.TextZipper T.Text) -> EdState -> EdState
 enterInsert entry place st =
   beginInsert entry (collapse st) {edZipper = place (edZipper st)}
 
@@ -815,7 +814,7 @@ deleteCharRange (lr, lc) (hr, hc) st =
 
 -- Swap rows [a..b] for the given replacement, landing the cursor at the
 -- start of the replaced region.
-replaceRows :: Int -> Int -> [Text] -> EdState -> EdState
+replaceRows :: Int -> Int -> [T.Text] -> EdState -> EdState
 replaceRows a b repl st =
   let
     ls = bufferLines st
@@ -925,17 +924,17 @@ indentLines dir st =
 reflowWidth :: Int
 reflowWidth = 80
 
-commentLeaders :: [Text]
+commentLeaders :: [T.Text]
 commentLeaders = ["-- |", "///", "--", "//", ";;", "#", ";"]
 
-lineLeader :: Text -> Maybe Text
+lineLeader :: T.Text -> Maybe T.Text
 lineLeader l =
-  find
+  List.find
     (`T.isPrefixOf` T.dropWhile (\c -> c == ' ' || c == '\t') l)
     commentLeaders
 
 -- The indentation-plus-comment-leader prefix a reflowed line should keep.
-linePrefix :: Text -> Text
+linePrefix :: T.Text -> T.Text
 linePrefix l =
   let
     ws = T.takeWhile (\c -> c == ' ' || c == '\t') l
@@ -945,7 +944,7 @@ linePrefix l =
       Nothing -> ws
 
 -- The line's text with indentation and any comment leader stripped.
-lineContent :: Text -> Text
+lineContent :: T.Text -> T.Text
 lineContent l =
   let
     rest = T.dropWhile (\c -> c == ' ' || c == '\t') l
@@ -982,7 +981,7 @@ reflow st =
       }
 
 -- Contiguous non-blank neighbours sharing the cursor line's exact prefix.
-paragraphAround :: [Text] -> Int -> (Int, Int)
+paragraphAround :: [T.Text] -> Int -> (Int, Int)
 paragraphAround ls cr =
   let
     p = linePrefix (lineAt ls cr)
@@ -996,7 +995,7 @@ paragraphAround ls cr =
   in
     if ok cr then (up cr, down cr) else (cr, cr)
 
-greedyWrap :: Int -> [Text] -> [[Text]]
+greedyWrap :: Int -> [T.Text] -> [[T.Text]]
 greedyWrap w =
   let
     grab _ acc [] = (acc, [])
@@ -1018,8 +1017,8 @@ toggleCase :: EdState -> EdState
 toggleCase =
   let
     flipChar c
-      | isUpper c = toLower c
-      | isLower c = toUpper c
+      | Char.isUpper c = Char.toLower c
+      | Char.isLower c = Char.toUpper c
       | otherwise = c
   in
     mapSelChars flipChar
@@ -1127,7 +1126,7 @@ handleInsert ev st =
 -- Word motions. Forward motions land the cursor on the last character of
 -- the crossed span (so `w` selects through the whitespace before the next
 -- word), hopping to an adjacent line's edge when the line runs out.
-wordStartsIn :: Text -> [Int]
+wordStartsIn :: T.Text -> [Int]
 wordStartsIn t =
   let
     isStart i =
@@ -1136,7 +1135,7 @@ wordStartsIn t =
   in
     filter isStart [0 .. T.length t - 1]
 
-wordForwardSel :: Z.TextZipper Text -> Z.TextZipper Text
+wordForwardSel :: Z.TextZipper T.Text -> Z.TextZipper T.Text
 wordForwardSel z =
   let
     t = Z.currentLine z
@@ -1153,7 +1152,7 @@ wordForwardSel z =
           then Z.gotoEOL z
           else Z.moveCursor (row + 1, 0) z
 
-wordEndSel :: Z.TextZipper Text -> Z.TextZipper Text
+wordEndSel :: Z.TextZipper T.Text -> Z.TextZipper T.Text
 wordEndSel z =
   let
     t = Z.currentLine z
@@ -1168,7 +1167,7 @@ wordEndSel z =
       (i : _) -> Z.moveCursor (row, i) z
       [] -> Z.moveCursor (row + 1, 0) z
 
-wordBackSel :: Z.TextZipper Text -> Z.TextZipper Text
+wordBackSel :: Z.TextZipper T.Text -> Z.TextZipper T.Text
 wordBackSel z =
   let
     t = Z.currentLine z
@@ -1180,7 +1179,7 @@ wordBackSel z =
       [] -> if row > 0 then Z.gotoEOL (Z.moveUp z) else z
 
 wordChar :: Char -> Bool
-wordChar = not . isSpace
+wordChar = not . Char.isSpace
 
 -- The m menu ----------------------------------------------------------------------
 
@@ -1190,7 +1189,7 @@ wordChar = not . isSpace
 -- One table: what each key does, and what the reminder on screen says it
 -- does. Two lists would drift, and a menu that lies about itself is
 -- worse than none.
-matchMenu :: [(Char, Text, EdState -> EdState)]
+matchMenu :: [(Char, T.Text, EdState -> EdState)]
 matchMenu =
   [
     ( 'm'
@@ -1318,7 +1317,7 @@ enclosingFor c st =
 quoteChars :: String
 quoteChars = "\"'`"
 
-enclosingQuote :: Char -> [Text] -> (Int, Int) -> Maybe ((Int, Int), (Int, Int))
+enclosingQuote :: Char -> [T.Text] -> (Int, Int) -> Maybe ((Int, Int), (Int, Int))
 enclosingQuote q ls (r, c) =
   let
     line = lineAt ls r
@@ -1334,7 +1333,7 @@ enclosingQuote q ls (r, c) =
       [] -> Nothing
 
 -- Rewrite the buffer and put the cursor down, keeping undo.
-reshapeTo :: [Text] -> (Int, Int) -> EdState -> EdState
+reshapeTo :: [T.Text] -> (Int, Int) -> EdState -> EdState
 reshapeTo ls pos st =
   st
     { edZipper =
@@ -1344,18 +1343,18 @@ reshapeTo ls pos st =
     , edTouched = True
     }
 
-withLine :: Int -> (Text -> Text) -> [Text] -> [Text]
+withLine :: Int -> (T.Text -> T.Text) -> [T.Text] -> [T.Text]
 withLine r f ls = take r ls ++ [f (lineAt ls r)] ++ drop (r + 1) ls
 
-insertAt :: Int -> Int -> Char -> [Text] -> [Text]
+insertAt :: Int -> Int -> Char -> [T.Text] -> [T.Text]
 insertAt r c ch =
   withLine r (\l -> T.take c l <> T.singleton ch <> T.drop c l)
 
-replaceAt :: Int -> Int -> Char -> [Text] -> [Text]
+replaceAt :: Int -> Int -> Char -> [T.Text] -> [T.Text]
 replaceAt r c ch =
   withLine r (\l -> T.take c l <> T.singleton ch <> T.drop (c + 1) l)
 
-dropAt :: Int -> Int -> [Text] -> [Text]
+dropAt :: Int -> Int -> [T.Text] -> [T.Text]
 dropAt r c = withLine r (\l -> T.take c l <> T.drop (c + 1) l)
 
 surroundAdd :: Char -> EdState -> EdState

@@ -5,89 +5,70 @@ module Remax.UI.Draw.Picker
   ( pickerLayer
   ) where
 
-import Brick
-  ( Padding (Max)
-  , Widget
-  , hBox
-  , hLimit
-  , padLeft
-  , padRight
-  , txt
-  , vBox
-  , withAttr
-  , withDefAttr
-  , (<+>)
-  )
-import Brick.Types
-  ( Size (Greedy)
-  , Widget (Widget)
-  , availHeight
-  , availWidth
-  , getContext
-  , render
-  )
-import Data.Text (Text)
-import qualified Data.Text as T
-import Remax.UI.Action.Fuzzy
-import Remax.UI.Core.Attrs
-import Remax.UI.Core.Types
-import Remax.UI.Core.Widgets
+import Brick ((<+>))
+import Brick qualified as Brick
+import Brick.Types qualified as BrickTypes
+import Data.Text qualified as T
+import Remax.UI.Action.Fuzzy qualified as Fuzzy
+import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Widgets qualified as Widgets
 
-pickerLayer :: Picker -> Widget Name
+pickerLayer :: Types.Picker -> BrickTypes.Widget Types.Name
 pickerLayer pk =
-  Widget Greedy Greedy $ do
-    ctx <- getContext
+  BrickTypes.Widget BrickTypes.Greedy BrickTypes.Greedy $ do
+    ctx <- BrickTypes.getContext
     let
-      boxWidth = min 150 (max 50 (availWidth ctx - 16))
-      visibleCount = max 5 (availHeight ctx - 14)
-      start = max 0 (pkSel pk - (visibleCount - 1))
-      shown = take visibleCount (drop start (zip [0 ..] (pkMatches pk)))
+      boxWidth = min 150 (max 50 (BrickTypes.availWidth ctx - 16))
+      visibleCount = max 5 (BrickTypes.availHeight ctx - 14)
+      start = max 0 (Types.pkSel pk - (visibleCount - 1))
+      shown = take visibleCount (drop start (zip [0 ..] (Types.pkMatches pk)))
       inputRow =
-        hBox
-          [ withAttr statusAttr (txt (" " <> pkInput pk <> "\9612"))
-          , padLeft Max (withAttr hintAttr (txt (pickerCounter pk <> " ")))
+        Brick.hBox
+          [ Brick.withAttr Attrs.statusAttr (Brick.txt (" " <> Types.pkInput pk <> "\9612"))
+          , Brick.padLeft Brick.Max (Brick.withAttr Attrs.hintAttr (Brick.txt (pickerCounter pk <> " ")))
           ]
-      emptyRow = withAttr hintAttr (txt "  nothing matches")
+      emptyRow = Brick.withAttr Attrs.hintAttr (Brick.txt "  nothing matches")
       matchRows =
         if null shown
-          then emptyRow : replicate (visibleCount - 1) (txt " ")
-          else map (pickerMatchRow pk boxWidth) shown ++ replicate (visibleCount - length shown) (txt " ")
-    render $
-      floatFrame (pickerTitle (pkMode pk)) (pickerHint (pkMode pk)) $
-        hLimit boxWidth (vBox (inputRow : txt " " : matchRows))
+          then emptyRow : replicate (visibleCount - 1) (Brick.txt " ")
+          else map (pickerMatchRow pk boxWidth) shown ++ replicate (visibleCount - length shown) (Brick.txt " ")
+    BrickTypes.render $
+      Widgets.floatFrame (pickerTitle (Types.pkMode pk)) (pickerHint (Types.pkMode pk)) $
+        Brick.hLimit boxWidth (Brick.vBox (inputRow : Brick.txt " " : matchRows))
 
-pickerMatchRow :: Picker -> Int -> (Int, Text) -> Widget Name
+pickerMatchRow :: Types.Picker -> Int -> (Int, T.Text) -> BrickTypes.Widget Types.Name
 pickerMatchRow pk boxWidth (i, display) =
   let
     shownText = T.take (boxWidth - 4) display
-    content = case pkMode pk of
-      PickGrep -> highlightInfix (pkInput pk) shownText
-      _ -> highlightSubseq (pkInput pk) shownText
-    line = padRight Max (txt " " <+> content)
+    content = case Types.pkMode pk of
+      Types.PickGrep -> Fuzzy.highlightInfix (Types.pkInput pk) shownText
+      _ -> Fuzzy.highlightSubseq (Types.pkInput pk) shownText
+    line = Brick.padRight Brick.Max (Brick.txt " " <+> content)
   in
-    if i == pkSel pk
-      then withDefAttr floatSelAttr (withAttr floatSelBarAttr (txt "\9614") <+> line)
-      else txt " " <+> line
+    if i == Types.pkSel pk
+      then Brick.withDefAttr Attrs.floatSelAttr (Brick.withAttr Attrs.floatSelBarAttr (Brick.txt "\9614") <+> line)
+      else Brick.txt " " <+> line
 
-pickerCounter :: Picker -> Text
+pickerCounter :: Types.Picker -> T.Text
 pickerCounter pk =
-  case pkMode pk of
-    PickGrep -> tshow (length (pkMatches pk)) <> " hits"
-    _ -> tshow (length (pkMatches pk)) <> "/" <> tshow (length (pkAll pk))
+  case Types.pkMode pk of
+    Types.PickGrep -> Types.tshow (length (Types.pkMatches pk)) <> " hits"
+    _ -> Types.tshow (length (Types.pkMatches pk)) <> "/" <> Types.tshow (length (Types.pkAll pk))
 
-pickerTitle :: PickerMode -> Text
+pickerTitle :: Types.PickerMode -> T.Text
 pickerTitle mode =
   case mode of
-    PickFiles -> "files"
-    PickBase -> "base"
-    PickBranch -> "checkout"
-    PickRepo -> "repo"
-    PickGrep -> "grep"
+    Types.PickFiles -> "files"
+    Types.PickBase -> "base"
+    Types.PickBranch -> "checkout"
+    Types.PickRepo -> "repo"
+    Types.PickGrep -> "grep"
 
-pickerHint :: PickerMode -> Text
+pickerHint :: Types.PickerMode -> T.Text
 pickerHint mode =
   case mode of
-    PickBase -> "\8593\8595 move · \9166 review against this · esc closes"
-    PickBranch -> "\8593\8595 move · \9166 checks out · esc closes"
-    PickRepo -> "\8593\8595 move · \9166 switch to this repository · esc closes"
+    Types.PickBase -> "\8593\8595 move · \9166 review against this · esc closes"
+    Types.PickBranch -> "\8593\8595 move · \9166 checks out · esc closes"
+    Types.PickRepo -> "\8593\8595 move · \9166 switch to this repository · esc closes"
     _ -> "\8593\8595 move · \9166 open · esc closes"

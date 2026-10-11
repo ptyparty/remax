@@ -10,135 +10,98 @@ module Remax.UI
   ( runReview
   ) where
 
-import Brick
-  ( App (..)
-  , customMain
-  , getVtyHandle
-  , showFirstCursor
-  )
-import Brick.BChan
-  ( BChan
-  , newBChan
-  , writeBChanNonBlocking
-  )
-import Brick.Util (fg)
-import Control.Concurrent
-  ( QSem
-  , forkIO
-  , newQSem
-  , threadDelay
-  )
-import Control.Monad
-  ( forM_
-  , forever
-  , void
-  , when
-  )
-import Control.Monad.IO.Class (liftIO)
-import Data.IORef
-  ( IORef
-  , newIORef
-  )
-import Data.Int (Int64)
-import Data.List
-  ( isSuffixOf
-  )
-import qualified Data.Map.Strict as Map
-import Data.Maybe
-  ( fromMaybe
-  )
-import qualified Data.Set as Set
-import Data.Text (Text)
-import qualified Data.Text as T
-import Database.SQLite.Simple (Connection)
-import qualified Graphics.Vty as V
-import Graphics.Vty.CrossPlatform (mkVty)
-import Remax.Clipboard
-import Remax.Config
-import Remax.Git
-  ( FileScope (..)
-  , RebaseStatus (..)
-  , ReviewMode (..)
-  , currentBranch
-  , headCommit
-  , modeLabel
-  , rebaseStatus
-  )
-import Remax.Store
-import Remax.Theme
-import qualified Remax.TreeSitter as TS
-import Remax.UI.Core.Attrs
-import Remax.UI.Core.Types
-import Remax.UI.Core.Verdict
-import Remax.UI.Draw
-import Remax.UI.Events
-import Remax.UI.Model.Load
-import Remax.UI.Model.Nav
-import Remax.UI.Model.Watch
-import Remax.Vi
-  ( viIdle
-  )
-import System.Environment (lookupEnv)
+import Brick qualified as Brick
+import Brick.BChan qualified as BChan
+import Brick.Util qualified as BrickUtil
+import Control.Concurrent qualified as Concurrent
+import Control.Monad qualified as Monad
+import Control.Monad.IO.Class qualified as MonadIO
+import Data.IORef qualified as IORef
+import Data.Int qualified as DataInt
+import Data.List qualified as List
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Set qualified as Set
+import Data.Text qualified as T
+import Database.SQLite.Simple qualified as SQLite
+import Graphics.Vty qualified as V
+import Graphics.Vty.CrossPlatform qualified as VtyPlatform
+import Remax.Clipboard qualified as Clipboard
+import Remax.Config qualified as Config
+import Remax.Git qualified as Git
+import Remax.Store qualified as Store
+import Remax.Theme qualified as Theme
+import Remax.TreeSitter qualified as TS
+import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Verdict qualified as Verdict
+import Remax.UI.Draw qualified as Draw
+import Remax.UI.Events qualified as Events
+import Remax.UI.Model.Load qualified as Load
+import Remax.UI.Model.Nav qualified as Nav
+import Remax.UI.Model.Watch qualified as Watch
+import Remax.Vi qualified as Vi
+import System.Environment qualified as Env
 
 data Startup = Startup
-  { suConn :: Connection
-  , suVerdicts :: Map.Map Text Verdict
+  { suConn :: SQLite.Connection
+  , suVerdicts :: Map.Map T.Text Store.Verdict
   , suHighlighters :: TS.HighlighterTable
-  , suThreads :: Map.Map Text [Post]
-  , suNoteGroups :: Map.Map Text Text
-  , suConfig :: Config
-  , suRebase :: Maybe RebaseStatus
-  , suBranch :: Maybe Text
-  , suHead :: Maybe (Text, Text)
-  , suPassId :: Int64
-  , suTheme :: Maybe HelixTheme
-  , suChan :: BChan REvent
-  , suJobs :: IORef Int
-  , suSlots :: QSem
+  , suThreads :: Map.Map T.Text [Store.Post]
+  , suNoteGroups :: Map.Map T.Text T.Text
+  , suConfig :: Config.Config
+  , suRebase :: Maybe Git.RebaseStatus
+  , suBranch :: Maybe T.Text
+  , suHead :: Maybe (T.Text, T.Text)
+  , suPassId :: DataInt.Int64
+  , suTheme :: Maybe Theme.HelixTheme
+  , suChan :: BChan.BChan Types.REvent
+  , suJobs :: IORef.IORef Int
+  , suSlots :: Concurrent.QSem
   }
 
-runReview :: ReviewMode -> FilePath -> [FilePath] -> Maybe FilePath -> IO ()
+runReview :: Git.ReviewMode -> FilePath -> [FilePath] -> Maybe FilePath -> IO ()
 runReview mode root roots story = do
   startup <- loadStartup mode root
   let
     chan = suChan startup
-  final <- withWatcher $ \mgr watchMode -> do
-    dirWatch <- installWatches mgr chan root watchMode
+  final <- Watch.withWatcher $ \mgr watchMode -> do
+    dirWatch <- Watch.installWatches mgr chan root watchMode
     -- probed once: doing it per yank would be a process spawn a keystroke
-    clip <- discoverClipboard
+    clip <- Clipboard.discoverClipboard
     -- and read once on the way in, so whatever was already on the
     -- clipboard counts as seen. Without this the first paste of a
     -- session would treat months-old clipboard contents as newer than
     -- the line you just cut, and `dd p` would not put the line back.
-    alreadyThere <- readClipboard clip
+    alreadyThere <- Clipboard.readClipboard clip
     let
       st0 = initialState startup mode root roots story watchMode dirWatch clip alreadyThere
     startBeats chan
     vty <- buildVty
-    customMain vty buildVty (Just chan) (app (suTheme startup)) (parkAtStart st0)
-  finishPass (suConn startup) (stPassId final)
+    Brick.customMain vty buildVty (Just chan) (app (suTheme startup)) (parkAtStart st0)
+  Store.finishPass (suConn startup) (Types.stPassId final)
   printSummary final
 
-loadStartup :: ReviewMode -> FilePath -> IO Startup
+loadStartup :: Git.ReviewMode -> FilePath -> IO Startup
 loadStartup mode root = do
-  conn <- openStore
+  conn <- Store.openStore
   -- a session killed with a note popup open leaves the marker behind;
   -- starting one is as good a moment as any to say it is not being
   -- written any more
-  setComposing conn (T.pack root) False
-  verdicts <- loadVerdicts conn (T.pack root)
+  Store.setComposing conn (T.pack root) False
+  verdicts <- Store.loadVerdicts conn (T.pack root)
   hls <- TS.initHighlighters
-  threads0 <- loadThreads conn (T.pack root)
-  noteGroups0 <- loadNoteGroups conn (T.pack root)
-  cfg <- loadConfig
-  rebase0 <- rebaseStatus root
-  branch0 <- currentBranch root
-  head0 <- headCommit root
-  passId <- beginPass conn (T.pack root) (modeLabel mode)
-  theme <- loadHelixTheme
-  chan <- newBChan 64
-  jobs <- newIORef (0 :: Int)
-  slots <- newQSem 2
+  threads0 <- Store.loadThreads conn (T.pack root)
+  noteGroups0 <- Store.loadNoteGroups conn (T.pack root)
+  cfg <- Config.loadConfig
+  rebase0 <- Git.rebaseStatus root
+  branch0 <- Git.currentBranch root
+  head0 <- Git.headCommit root
+  passId <- Store.beginPass conn (T.pack root) (Git.modeLabel mode)
+  theme <- Theme.loadHelixTheme
+  chan <- BChan.newBChan 64
+  jobs <- IORef.newIORef (0 :: Int)
+  slots <- Concurrent.newQSem 2
   pure
     Startup
       { suConn = conn
@@ -159,112 +122,112 @@ loadStartup mode root = do
 
 initialState ::
   Startup ->
-  ReviewMode ->
+  Git.ReviewMode ->
   FilePath ->
   [FilePath] ->
   Maybe FilePath ->
-  WatchMode ->
-  DirWatch ->
-  Clipboard ->
-  Maybe Text ->
-  St
+  Types.WatchMode ->
+  Watch.DirWatch ->
+  Clipboard.Clipboard ->
+  Maybe T.Text ->
+  Types.St
 initialState startup mode root roots story watchMode dirWatch clip alreadyThere =
-  St
-    { stFiles = []
-    , stCurF = 0
-    , stCurH = 0
-    , stVerdicts = suVerdicts startup
-    , stMsg = if watchMode == PollingWatch then watchPollWarning else "loading\8230"
-    , stRoot = root
-    , stMode = mode
-    , stConn = suConn startup
-    , stPassId = suPassId startup
-    , stCounts = Map.empty
-    , stPunch = []
-    , stTray = True
-    , stLastGit = 0
-    , stGitQueued = False
-    , stChan = suChan startup
-    , stWatch = dirWatchFollow dirWatch
-    , stPrompt = Nothing
-    , stLastSearch = ""
-    , stBorder = fgOnly (scopeAttr (suTheme startup) "ui.linenr" (fg V.brightBlack))
-    , stHls = suHighlighters startup
-    , stOnlyPending = True
-    , stRunFilter = FilterAll
-    , stFileScope = VisibleFiles
-    , stRebase = suRebase startup
-    , stWritten = Set.empty
-    , stLastMarked = []
-    , stLastRows = []
-    , stOpened = Set.empty
-    , stPicker = Nothing
-    , stLastSelector = Nothing
-    , stTraySeen = (0, 0)
-    , stNotePopup = Nothing
-    , stThreads = suThreads startup
-    , stNoteGroups = suNoteGroups startup
-    , stSpace = False
-    , stConfig = suConfig startup
-    , stCmdFiles = []
-    , stCmdDirs = []
-    , stCmdRefs = []
-    , stPromptCycle = Nothing
-    , stEmacsPrefix = Nothing
-    , stIdleGo = False
-    , stComposing = Nothing
-    , stAttending = ([], [])
-    , stThrob = 0
-    , stBusy = []
-    , stRepoInfo = Map.empty
-    , stCountedVerdicts = suVerdicts startup
-    , stCountedThreads = suThreads startup
-    , stHighlighting = Nothing
-    , stJobs = suJobs startup
-    , stWorkSlots = suSlots startup
-    , stEpoch = 0
-    , stReloading = Map.empty
-    , stRefreshing = False
-    , stLoadedOnce = False
-    , stVi = viIdle
-    , stSearchDir = 1
-    , stDeferAdvance = False
-    , stAltFile = Nothing
-    , stAnchor = Nothing
-    , stGrepNav = Nothing
-    , stInfoPopup = Nothing
-    , stKill = T.empty
-    , stClip = clip
-    , stClipSent = fromMaybe T.empty alreadyThere
-    , stWatchMode = watchMode
-    , stBranch = suBranch startup
-    , stHead = suHead startup
-    , stTree = Nothing
-    , stHelp = False
-    , stRoots = roots
-    , stStory = story
-    , stPlaces = Map.empty
+  Types.St
+    { Types.stFiles = []
+    , Types.stCurF = 0
+    , Types.stCurH = 0
+    , Types.stVerdicts = suVerdicts startup
+    , Types.stMsg = if watchMode == Types.PollingWatch then Watch.watchPollWarning else "loading\8230"
+    , Types.stRoot = root
+    , Types.stMode = mode
+    , Types.stConn = suConn startup
+    , Types.stPassId = suPassId startup
+    , Types.stCounts = Map.empty
+    , Types.stPunch = []
+    , Types.stTray = True
+    , Types.stLastGit = 0
+    , Types.stGitQueued = False
+    , Types.stChan = suChan startup
+    , Types.stWatch = Watch.dirWatchFollow dirWatch
+    , Types.stPrompt = Nothing
+    , Types.stLastSearch = ""
+    , Types.stBorder = Attrs.fgOnly (Theme.scopeAttr (suTheme startup) "ui.linenr" (BrickUtil.fg V.brightBlack))
+    , Types.stHls = suHighlighters startup
+    , Types.stOnlyPending = True
+    , Types.stRunFilter = Types.FilterAll
+    , Types.stFileScope = Git.VisibleFiles
+    , Types.stRebase = suRebase startup
+    , Types.stWritten = Set.empty
+    , Types.stLastMarked = []
+    , Types.stLastRows = []
+    , Types.stOpened = Set.empty
+    , Types.stPicker = Nothing
+    , Types.stLastSelector = Nothing
+    , Types.stTraySeen = (0, 0)
+    , Types.stNotePopup = Nothing
+    , Types.stThreads = suThreads startup
+    , Types.stNoteGroups = suNoteGroups startup
+    , Types.stSpace = False
+    , Types.stConfig = suConfig startup
+    , Types.stCmdFiles = []
+    , Types.stCmdDirs = []
+    , Types.stCmdRefs = []
+    , Types.stPromptCycle = Nothing
+    , Types.stEmacsPrefix = Nothing
+    , Types.stIdleGo = False
+    , Types.stComposing = Nothing
+    , Types.stAttending = ([], [])
+    , Types.stThrob = 0
+    , Types.stBusy = []
+    , Types.stRepoInfo = Map.empty
+    , Types.stCountedVerdicts = suVerdicts startup
+    , Types.stCountedThreads = suThreads startup
+    , Types.stHighlighting = Nothing
+    , Types.stJobs = suJobs startup
+    , Types.stWorkSlots = suSlots startup
+    , Types.stEpoch = 0
+    , Types.stReloading = Map.empty
+    , Types.stRefreshing = False
+    , Types.stLoadedOnce = False
+    , Types.stVi = Vi.viIdle
+    , Types.stSearchDir = 1
+    , Types.stDeferAdvance = False
+    , Types.stAltFile = Nothing
+    , Types.stAnchor = Nothing
+    , Types.stGrepNav = Nothing
+    , Types.stInfoPopup = Nothing
+    , Types.stKill = T.empty
+    , Types.stClip = clip
+    , Types.stClipSent = Maybe.fromMaybe T.empty alreadyThere
+    , Types.stWatchMode = watchMode
+    , Types.stBranch = suBranch startup
+    , Types.stHead = suHead startup
+    , Types.stTree = Nothing
+    , Types.stHelp = False
+    , Types.stRoots = roots
+    , Types.stStory = story
+    , Types.stPlaces = Map.empty
     }
 
-parkAtStart :: St -> St
+parkAtStart :: Types.St -> Types.St
 parkAtStart st0 =
-  case firstUnrespondedOrPending st0 of
+  case Verdict.firstUnrespondedOrPending st0 of
     Just (f, h) ->
       let
-        parked = (park f h st0) {stMsg = stMsg st0}
+        parked = (Nav.park f h st0) {Types.stMsg = Types.stMsg st0}
       in
         parked
-          { stAnchor =
-              fmap (\fv -> (fvPath fv, stCurH parked)) (currentFileMay parked)
+          { Types.stAnchor =
+              fmap (\fv -> (Types.fvPath fv, Types.stCurH parked)) (Types.currentFileMay parked)
           }
     Nothing -> st0
 
-startBeats :: BChan REvent -> IO ()
+startBeats :: BChan.BChan Types.REvent -> IO ()
 startBeats chan = do
   -- the first frame paints with plain tokens; this tick colorizes
   -- the file on screen immediately after, off the startup path
-  void (writeBChanNonBlocking chan Tick)
-  void (writeBChanNonBlocking chan GitStateChanged)
+  Monad.void (BChan.writeBChanNonBlocking chan Types.Tick)
+  Monad.void (BChan.writeBChanNonBlocking chan Types.GitStateChanged)
   -- Who is waiting on this review, asked for on a beat.
   --
   -- The beat is the animation's as well as the question's, so it runs
@@ -272,10 +235,10 @@ startBeats chan = do
   -- empty directory read every second and a half is not worth a
   -- watcher, and a session with no agent on it should not be waking up
   -- to redraw something that is not on screen.
-  void . forkIO . forever $ do
-    seen@(waiting, working) <- presenceNow
-    void (writeBChanNonBlocking chan (Attending seen))
-    threadDelay
+  Monad.void . Concurrent.forkIO . Monad.forever $ do
+    seen@(waiting, working) <- Store.presenceNow
+    Monad.void (BChan.writeBChanNonBlocking chan (Types.Attending seen))
+    Concurrent.threadDelay
       (if null waiting && null working then 1500000 else 420000)
 
 -- terminfo often claims only 256 colors even when the terminal
@@ -289,7 +252,7 @@ buildVty = do
       if full
         then V.defaultConfig {V.configPreferredColorMode = Just V.FullColor}
         else V.defaultConfig
-  mkVty vtyCfg
+  VtyPlatform.mkVty vtyCfg
 
 -- Whether to ask vty for 24-bit color.
 --
@@ -304,8 +267,8 @@ buildVty = do
 -- 24-bit, and a "-direct" terminfo entry says so by definition.
 wantsFullColor :: IO Bool
 wantsFullColor = do
-  colorterm <- lookupEnv "COLORTERM"
-  term <- lookupEnv "TERM"
+  colorterm <- Env.lookupEnv "COLORTERM"
+  term <- Env.lookupEnv "TERM"
   let
     saysColorterm = case colorterm of
       Just v -> v `elem` ["truecolor", "24bit"]
@@ -314,7 +277,7 @@ wantsFullColor = do
       Nothing -> False
       Just t ->
         t `elem` trueColorTerms
-          || "-direct" `isSuffixOf` t
+          || "-direct" `List.isSuffixOf` t
   pure (saysColorterm || saysTerm)
 
 trueColorTerms :: [String]
@@ -329,43 +292,43 @@ trueColorTerms =
   , "rio"
   ]
 
-printSummary :: St -> IO ()
+printSummary :: Types.St -> IO ()
 printSummary st = do
   let
-    count v = Map.findWithDefault 0 v (stCounts st)
+    count v = Map.findWithDefault 0 v (Types.stCounts st)
   putStrLn
     ( "This pass: "
-        ++ show (count Reviewed)
+        ++ show (count Store.Reviewed)
         ++ " reviewed, "
-        ++ show (count Flagged)
+        ++ show (count Store.Flagged)
         ++ " flagged, "
-        ++ show (count Questioned)
+        ++ show (count Store.Questioned)
         ++ " questioned."
     )
-  forM_ (reverse (stPunch st)) $ \(path, line, v) ->
-    putStrLn ("  " ++ T.unpack (verdictText v) ++ ": " ++ path ++ ":" ++ show line)
+  Monad.forM_ (reverse (Types.stPunch st)) $ \(path, line, v) ->
+    putStrLn ("  " ++ T.unpack (Store.verdictText v) ++ ": " ++ path ++ ":" ++ show line)
 
-app :: Maybe HelixTheme -> App St REvent Name
+app :: Maybe Theme.HelixTheme -> Brick.App Types.St Types.REvent Types.Name
 app theme =
-  App
-    { appDraw = draw
-    , appChooseCursor = showFirstCursor
-    , appHandleEvent =
+  Brick.App
+    { Brick.appDraw = Draw.draw
+    , Brick.appChooseCursor = Brick.showFirstCursor
+    , Brick.appHandleEvent =
         \ev ->
-          handleEvent ev
-            >> recountIfChanged
-            >> ensureCurrentHighlighted
-            >> reanchorBody
-            >> syncComposing
-            >> rememberSelector
-            >> noteTrayView
-    , appStartEvent = do
-        vty <- getVtyHandle
+          Events.handleEvent ev
+            >> Verdict.recountIfChanged
+            >> Load.ensureCurrentHighlighted
+            >> Events.reanchorBody
+            >> Events.syncComposing
+            >> Events.rememberSelector
+            >> Events.noteTrayView
+    , Brick.appStartEvent = do
+        vty <- Brick.getVtyHandle
         let
           out = V.outputIface vty
-        when (V.supportsMode out V.BracketedPaste) $
-          liftIO (V.setMode out V.BracketedPaste True)
-    , appAttrMap = const (mkAttrMap theme)
+        Monad.when (V.supportsMode out V.BracketedPaste) $
+          MonadIO.liftIO (V.setMode out V.BracketedPaste True)
+    , Brick.appAttrMap = const (Attrs.mkAttrMap theme)
     }
 
 -- Drawing ------------------------------------------------------------------------

@@ -9,48 +9,16 @@ module Remax.UI.Core.Jobs
   , withSlot
   ) where
 
-import Brick
-  ( EventM
-  )
-import Brick.BChan
-  ( writeBChan
-  , writeBChanNonBlocking
-  )
-import Control.Concurrent
-  ( QSem
-  , forkIO
-  , newEmptyMVar
-  , newQSem
-  , putMVar
-  , signalQSem
-  , takeMVar
-  , threadDelay
-  , waitQSem
-  )
-import Control.Exception
-  ( IOException
-  , SomeException
-  , finally
-  , throwIO
-  , try
-  )
-import Control.Monad
-  ( forM
-  , void
-  , when
-  )
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.State
-  ( get
-  , modify
-  )
-import Data.IORef
-  ( atomicModifyIORef'
-  , readIORef
-  )
-import Data.Text (Text)
-import qualified Data.Text as T
-import Remax.UI.Core.Types
+import Brick qualified as Brick
+import Brick.BChan qualified as BChan
+import Control.Concurrent qualified as Concurrent
+import Control.Exception qualified as Exception
+import Control.Monad qualified as Monad
+import Control.Monad.IO.Class qualified as MonadIO
+import Control.Monad.State qualified as State
+import Data.IORef qualified as IORef
+import Data.Text qualified as T
+import Remax.UI.Core.Types qualified as Types
 
 -- Load files on a few workers at once: each one costs a git spawn for
 -- its base, and a rebase-stop commit can easily touch a hundred files —
@@ -61,57 +29,57 @@ forMaybeBounded :: (a -> IO (Maybe b)) -> [a] -> IO [Maybe b]
 forMaybeBounded f =
   let
     swallow x = do
-      got <- try (f x)
+      got <- Exception.try (f x)
       pure $ case got of
-        Left e -> let _ = (e :: IOException) in Nothing
+        Left e -> let _ = (e :: Exception.IOException) in Nothing
         Right r -> r
   in
     forBounded 8 swallow
 
 forBounded :: Int -> (a -> IO b) -> [a] -> IO [b]
 forBounded workers f xs = do
-  slots <- newQSem workers
-  handles <- forM xs $ \x -> do
-    slot <- newEmptyMVar
-    _ <- forkIO $ do
-      waitQSem slots
-      got <- try (f x)
-      signalQSem slots
-      putMVar slot got
+  slots <- Concurrent.newQSem workers
+  handles <- Monad.forM xs $ \x -> do
+    slot <- Concurrent.newEmptyMVar
+    _ <- Concurrent.forkIO $ do
+      Concurrent.waitQSem slots
+      got <- Exception.try (f x)
+      Concurrent.signalQSem slots
+      Concurrent.putMVar slot got
     pure slot
-  forM handles $ \slot -> do
-    got <- takeMVar slot
+  Monad.forM handles $ \slot -> do
+    got <- Concurrent.takeMVar slot
     case got of
-      Left e -> throwIO (e :: IOException)
+      Left e -> Exception.throwIO (e :: Exception.IOException)
       Right r -> pure r
 
 pulseUs :: Int
 pulseUs = 120000
 
-startJob :: Text -> IO a -> (Either Text a -> EventM Name St ()) -> EventM Name St ()
+startJob :: T.Text -> IO a -> (Either T.Text a -> Brick.EventM Types.Name Types.St ()) -> Brick.EventM Types.Name Types.St ()
 startJob label work finish = do
-  st <- get
+  st <- State.get
   let
-    chan = stChan st
-    jobs = stJobs st
+    chan = Types.stChan st
+    jobs = Types.stJobs st
     beat = do
-      threadDelay pulseUs
-      void (writeBChanNonBlocking chan Pulse)
-      running <- readIORef jobs
-      when (running > 0) beat
-  modify (\s -> s {stBusy = stBusy s ++ [label]})
-  first <- liftIO (atomicModifyIORef' jobs (\n -> (n + 1, n == 0)))
-  when first (void (liftIO (forkIO beat)))
-  void . liftIO . forkIO $ do
-    got <- try work
-    atomicModifyIORef' jobs (\n -> (n - 1, ()))
-    writeBChan chan . JobDone label . finish $
+      Concurrent.threadDelay pulseUs
+      Monad.void (BChan.writeBChanNonBlocking chan Types.Pulse)
+      running <- IORef.readIORef jobs
+      Monad.when (running > 0) beat
+  State.modify (\s -> s {Types.stBusy = Types.stBusy s ++ [label]})
+  first <- MonadIO.liftIO (IORef.atomicModifyIORef' jobs (\n -> (n + 1, n == 0)))
+  Monad.when first (Monad.void (MonadIO.liftIO (Concurrent.forkIO beat)))
+  Monad.void . MonadIO.liftIO . Concurrent.forkIO $ do
+    got <- Exception.try work
+    IORef.atomicModifyIORef' jobs (\n -> (n - 1, ()))
+    BChan.writeBChan chan . Types.JobDone label . finish $
       case got of
         Right result -> Right result
-        Left e -> Left (T.pack (show (e :: SomeException)))
+        Left e -> Left (T.pack (show (e :: Exception.SomeException)))
 
-jobFailed :: Text -> Text -> EventM Name St ()
-jobFailed label err = setMsg ("! " <> label <> ": " <> err)
+jobFailed :: T.Text -> T.Text -> Brick.EventM Types.Name Types.St ()
+jobFailed label err = Types.setMsg ("! " <> label <> ": " <> err)
 
-withSlot :: QSem -> IO a -> IO a
-withSlot slots act = (waitQSem slots >> act) `finally` signalQSem slots
+withSlot :: Concurrent.QSem -> IO a -> IO a
+withSlot slots act = (Concurrent.waitQSem slots >> act) `Exception.finally` Concurrent.signalQSem slots

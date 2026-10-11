@@ -36,6 +36,8 @@ executables:
       - app
       - src
     language: Haskell2010
+    default-extensions:
+      - ImportQualifiedPost
     ghc-options:
       - -Wall
       - -threaded

@@ -6,63 +6,44 @@ module Remax.UI.Action.Editor
   , launchEditor
   ) where
 
-import Brick
-  ( EventM
-  , suspendAndResume
-  )
-import Control.Exception
-  ( IOException
-  , try
-  )
-import Control.Monad
-  ( void
-  )
-import Control.Monad.State
-  ( get
-  )
-import Data.Maybe
-  ( fromMaybe
-  )
-import qualified Data.Text as T
-import Remax.Modal
-import Remax.UI.Core.Types
-import System.Environment (lookupEnv)
-import System.FilePath
-  ( takeFileName
-  , (</>)
-  )
-import System.Process
-  ( CreateProcess (delegate_ctlc)
-  , createProcess
-  , proc
-  , waitForProcess
-  )
+import Brick qualified as Brick
+import Control.Exception qualified as Exception
+import Control.Monad qualified as Monad
+import Control.Monad.State qualified as State
+import Data.Maybe qualified as Maybe
+import Data.Text qualified as T
+import Remax.Modal qualified as Modal
+import Remax.UI.Core.Types qualified as Types
+import System.Environment qualified as Env
+import System.FilePath ((</>))
+import System.FilePath qualified as FilePath
+import System.Process qualified as Process
 
-editCurrent :: EventM Name St ()
+editCurrent :: Brick.EventM Types.Name Types.St ()
 editCurrent = do
-  st <- get
-  case currentFileMay st of
-    Nothing -> setMsg "no file on screen — :edit PATH opens one"
+  st <- State.get
+  case Types.currentFileMay st of
+    Nothing -> Types.setMsg "no file on screen — :edit PATH opens one"
     Just fv -> do
       let
-        (row, _) = cursorRC (fvEd fv)
-      launchEditor (stRoot st </> fvPath fv) (row + 1)
+        (row, _) = Modal.cursorRC (Types.fvEd fv)
+      launchEditor (Types.stRoot st </> Types.fvPath fv) (row + 1)
 
 -- Suspend the TUI, run the user's editor on the file at the given line,
 -- and come back; the watcher reloads whatever the editor wrote.
-launchEditor :: FilePath -> Int -> EventM Name St ()
+launchEditor :: FilePath -> Int -> Brick.EventM Types.Name Types.St ()
 launchEditor file line = do
-  st <- get
-  suspendAndResume $ do
+  st <- State.get
+  Brick.suspendAndResume $ do
     (cmd, args) <- editorInvocation file line
     got <-
-      ( try $ do
-          (_, _, _, ph) <- createProcess (proc cmd args) {delegate_ctlc = True}
-          void (waitForProcess ph)
+      ( Exception.try $ do
+          (_, _, _, ph) <- Process.createProcess (Process.proc cmd args) {Process.delegate_ctlc = True}
+          Monad.void (Process.waitForProcess ph)
       ) ::
-        IO (Either IOException ())
+        IO (Either Exception.IOException ())
     pure $ case got of
-      Left _ -> st {stMsg = "could not launch " <> T.pack cmd}
+      Left _ -> st {Types.stMsg = "could not launch " <> T.pack cmd}
       Right () -> st
 
 {- $EDITOR, hx-aware: helix takes file:line, the classic editors take
@@ -70,13 +51,13 @@ launchEditor file line = do
 -}
 editorInvocation :: FilePath -> Int -> IO (String, [String])
 editorInvocation file line = do
-  mEd <- lookupEnv "EDITOR"
+  mEd <- Env.lookupEnv "EDITOR"
   let
-    editorWords = words (fromMaybe "hx" mEd)
+    editorWords = words (Maybe.fromMaybe "hx" mEd)
     (cmd, extraArgs) = case editorWords of
       (c : extra) -> (c, extra)
       [] -> ("hx", [])
-    name = takeFileName cmd
+    name = FilePath.takeFileName cmd
     positional
       | name `elem` ["hx", "helix"] = [file ++ ":" ++ show line]
       | name `elem` ["vi", "vim", "nvim", "nano", "emacs", "kak"] =

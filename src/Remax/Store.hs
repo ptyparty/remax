@@ -47,29 +47,20 @@ module Remax.Store
   , deleteFiles
   ) where
 
-import Control.Monad (unless, void, when)
-import Data.Int (Int64)
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
-import Data.Maybe (listToMaybe, mapMaybe)
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
-import Database.SQLite.Simple
-import System.Directory
-  ( XdgDirectory (XdgState)
-  , createDirectoryIfMissing
-  , getModificationTime
-  , getXdgDirectory
-  , listDirectory
-  , removeFile
-  )
+import Control.Monad qualified as Monad
+import Data.Int qualified as DataInt
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import Data.Time.Clock qualified as Clock
+import Database.SQLite.Simple qualified as SQLite
+import System.Directory qualified as Directory
 import System.FilePath ((</>))
-import System.IO.Error (catchIOError)
-import System.Posix.Process (getProcessID)
+import System.IO.Error qualified as IOError
+import System.Posix.Process qualified as Posix
 
-import Remax.Key (noteGroupId)
+import Remax.Key qualified as Key
 
 data Verdict = Reviewed | Flagged | Questioned
   deriving (Eq, Ord, Show)
@@ -78,8 +69,8 @@ data Verdict = Reviewed | Flagged | Questioned
 -- the author is "reviewer" for the human in the session, or the name an
 -- agent gave on the command line.
 data Post = Post
-  { postAuthor :: Text
-  , postBody :: Text
+  { postAuthor :: T.Text
+  , postBody :: T.Text
   }
   deriving (Eq, Ord, Show)
 
@@ -97,14 +88,14 @@ awaiting posts =
       | isReviewerPost newest -> AwaitingAgent
       | otherwise -> AwaitingReviewer
 
-awaitingText :: Awaiting -> Text
+awaitingText :: Awaiting -> T.Text
 awaitingText a =
   case a of
     AwaitingNote -> "note"
     AwaitingAgent -> "agent"
     AwaitingReviewer -> "reviewer"
 
-parseAwaiting :: Text -> Maybe Awaiting
+parseAwaiting :: T.Text -> Maybe Awaiting
 parseAwaiting t =
   case t of
     "note" -> Just AwaitingNote
@@ -112,29 +103,29 @@ parseAwaiting t =
     "reviewer" -> Just AwaitingReviewer
     _ -> Nothing
 
-verdictText :: Verdict -> Text
+verdictText :: Verdict -> T.Text
 verdictText Reviewed = "reviewed"
 verdictText Flagged = "flagged"
 verdictText Questioned = "questioned"
 
-parseVerdict :: Text -> Maybe Verdict
+parseVerdict :: T.Text -> Maybe Verdict
 parseVerdict "reviewed" = Just Reviewed
 parseVerdict "flagged" = Just Flagged
 parseVerdict "questioned" = Just Questioned
 parseVerdict _ = Nothing
 
 storeDirectory :: IO FilePath
-storeDirectory = getXdgDirectory XdgState "remax"
+storeDirectory = Directory.getXdgDirectory Directory.XdgState "remax"
 
-openStore :: IO Connection
+openStore :: IO SQLite.Connection
 openStore = do
   dir <- storeDirectory
-  createDirectoryIfMissing True dir
-  conn <- open (dir </> "review.db")
+  Directory.createDirectoryIfMissing True dir
+  conn <- SQLite.open (dir </> "review.db")
   -- a persistent session and an agent running `remax list` overlap;
   -- short writes should wait for each other rather than error
-  void (query_ conn "PRAGMA busy_timeout = 3000" :: IO [Only Int])
-  execute_
+  Monad.void (SQLite.query_ conn "PRAGMA busy_timeout = 3000" :: IO [SQLite.Only Int])
+  SQLite.execute_
     conn
     "CREATE TABLE IF NOT EXISTS pass (\
     \  id INTEGER PRIMARY KEY AUTOINCREMENT,\
@@ -142,7 +133,7 @@ openStore = do
     \  scope TEXT NOT NULL,\
     \  started_at TEXT NOT NULL DEFAULT (datetime('now')),\
     \  finished_at TEXT)"
-  execute_
+  SQLite.execute_
     conn
     "CREATE TABLE IF NOT EXISTS line_verdict (\
     \  key TEXT PRIMARY KEY,\
@@ -158,10 +149,10 @@ openStore = do
     \  commit_sha TEXT,\
     \  commit_subject TEXT,\
     \  reply TEXT)"
-  execute_
+  SQLite.execute_
     conn
     "CREATE INDEX IF NOT EXISTS line_verdict_repo ON line_verdict(repo)"
-  execute_
+  SQLite.execute_
     conn
     "CREATE TABLE IF NOT EXISTS note_post (\
     \  repo TEXT NOT NULL,\
@@ -178,100 +169,100 @@ openStore = do
   -- is written the instant the key is pressed, so the tray and the meters
   -- answer at once — reaches the agent seconds before the sentence saying
   -- what is wrong with it.
-  execute_
+  SQLite.execute_
     conn
     "CREATE TABLE IF NOT EXISTS note_composing (\
     \  repo TEXT PRIMARY KEY,\
     \  since TEXT NOT NULL DEFAULT (datetime('now')))"
   -- several instances (sessions, agent CLI calls) share this file; WAL
   -- lets readers proceed under a writer instead of stacking on the lock
-  void (query_ conn "PRAGMA journal_mode = WAL" :: IO [Only Text])
+  Monad.void (SQLite.query_ conn "PRAGMA journal_mode = WAL" :: IO [SQLite.Only T.Text])
   migrate conn
   pure conn
 
 -- Databases created before a column existed pick it up here.
-migrate :: Connection -> IO ()
+migrate :: SQLite.Connection -> IO ()
 migrate conn = do
   cols <-
-    query_ conn "PRAGMA table_info(line_verdict)" ::
-      IO [(Int, Text, Text, Int, Maybe Text, Int)]
+    SQLite.query_ conn "PRAGMA table_info(line_verdict)" ::
+      IO [(Int, T.Text, T.Text, Int, Maybe T.Text, Int)]
   let
     names = map (\(_, name, _, _, _, _) -> name) cols
-  unless ("line_no" `elem` names) $
-    execute_ conn "ALTER TABLE line_verdict ADD COLUMN line_no INTEGER"
-  unless ("note" `elem` names) $
-    execute_ conn "ALTER TABLE line_verdict ADD COLUMN note TEXT"
-  unless ("commit_sha" `elem` names) $
-    execute_ conn "ALTER TABLE line_verdict ADD COLUMN commit_sha TEXT"
-  unless ("commit_subject" `elem` names) $
-    execute_ conn "ALTER TABLE line_verdict ADD COLUMN commit_subject TEXT"
-  unless ("reply" `elem` names) $
-    execute_ conn "ALTER TABLE line_verdict ADD COLUMN reply TEXT"
+  Monad.unless ("line_no" `elem` names) $
+    SQLite.execute_ conn "ALTER TABLE line_verdict ADD COLUMN line_no INTEGER"
+  Monad.unless ("note" `elem` names) $
+    SQLite.execute_ conn "ALTER TABLE line_verdict ADD COLUMN note TEXT"
+  Monad.unless ("commit_sha" `elem` names) $
+    SQLite.execute_ conn "ALTER TABLE line_verdict ADD COLUMN commit_sha TEXT"
+  Monad.unless ("commit_subject" `elem` names) $
+    SQLite.execute_ conn "ALTER TABLE line_verdict ADD COLUMN commit_subject TEXT"
+  Monad.unless ("reply" `elem` names) $
+    SQLite.execute_ conn "ALTER TABLE line_verdict ADD COLUMN reply TEXT"
   postCols <-
-    query_ conn "PRAGMA table_info(note_post)" ::
-      IO [(Int, Text, Text, Int, Maybe Text, Int)]
+    SQLite.query_ conn "PRAGMA table_info(note_post)" ::
+      IO [(Int, T.Text, T.Text, Int, Maybe T.Text, Int)]
   let
     postNames = map (\(_, name, _, _, _, _) -> name) postCols
   -- one-time carry-over from the old note/reply column pair into the
   -- conversation table: note becomes the opening reviewer post, reply
   -- the agent's answer after it
-  [Only posts] <- query_ conn "SELECT COUNT(*) FROM note_post" :: IO [Only Int]
-  [Only oldNotes] <-
-    query_
+  [SQLite.Only posts] <- SQLite.query_ conn "SELECT COUNT(*) FROM note_post" :: IO [SQLite.Only Int]
+  [SQLite.Only oldNotes] <-
+    SQLite.query_
       conn
       "SELECT COUNT(*) FROM line_verdict\
       \ WHERE note IS NOT NULL OR reply IS NOT NULL" ::
-      IO [Only Int]
-  when (posts == 0 && oldNotes > 0) $
-    withTransaction conn $ do
-      execute_
+      IO [SQLite.Only Int]
+  Monad.when (posts == 0 && oldNotes > 0) $
+    SQLite.withTransaction conn $ do
+      SQLite.execute_
         conn
         "INSERT INTO note_post (repo, key, seq, author, body, created_at)\
         \ SELECT repo, key, 0, 'reviewer', note, updated_at\
         \ FROM line_verdict WHERE note IS NOT NULL"
-      execute_
+      SQLite.execute_
         conn
         "INSERT INTO note_post (repo, key, seq, author, body, created_at)\
         \ SELECT repo, key, 1, 'agent', reply, updated_at\
         \ FROM line_verdict WHERE reply IS NOT NULL"
-      execute_ conn "UPDATE line_verdict SET note = NULL, reply = NULL"
+      SQLite.execute_ conn "UPDATE line_verdict SET note = NULL, reply = NULL"
   -- last, so that anything the carry-over above just inserted is named
   -- too rather than left without a group
-  unless ("group_id" `elem` postNames) $ do
-    execute_ conn "ALTER TABLE note_post ADD COLUMN group_id TEXT"
+  Monad.unless ("group_id" `elem` postNames) $ do
+    SQLite.execute_ conn "ALTER TABLE note_post ADD COLUMN group_id TEXT"
     nameExistingGroups conn
 
-loadVerdicts :: Connection -> Text -> IO (Map Text Verdict)
+loadVerdicts :: SQLite.Connection -> T.Text -> IO (Map.Map T.Text Verdict)
 loadVerdicts conn repo = do
   rows <-
-    query conn "SELECT key, verdict FROM line_verdict WHERE repo = ?" (Only repo)
+    SQLite.query conn "SELECT key, verdict FROM line_verdict WHERE repo = ?" (SQLite.Only repo)
   let
     parseRow (k, vt) = fmap (\v -> (k, v)) (parseVerdict vt)
-  pure . Map.fromList . mapMaybe parseRow $ rows
+  pure . Map.fromList . Maybe.mapMaybe parseRow $ rows
 
-beginPass :: Connection -> Text -> Text -> IO Int64
+beginPass :: SQLite.Connection -> T.Text -> T.Text -> IO DataInt.Int64
 beginPass conn repo scope = do
-  execute conn "INSERT INTO pass (repo, scope) VALUES (?, ?)" (repo, scope)
-  lastInsertRowId conn
+  SQLite.execute conn "INSERT INTO pass (repo, scope) VALUES (?, ?)" (repo, scope)
+  SQLite.lastInsertRowId conn
 
-finishPass :: Connection -> Int64 -> IO ()
+finishPass :: SQLite.Connection -> DataInt.Int64 -> IO ()
 finishPass conn passId =
-  execute
+  SQLite.execute
     conn
     "UPDATE pass SET finished_at = datetime('now') WHERE id = ?"
-    (Only passId)
+    (SQLite.Only passId)
 
 -- Re-verdicting a line updates its row in place, so updated_at reads as
 -- the last time it was looked at; a note already on the line survives.
 -- The commit context (sha, subject) is stamped when the review knows
 -- which commit it is looking at — a rebase stop — and is NULL otherwise.
 recordVerdicts ::
-  Connection ->
-  Text ->
-  Int64 ->
+  SQLite.Connection ->
+  T.Text ->
+  DataInt.Int64 ->
   Verdict ->
-  Maybe (Text, Text) ->
-  [(Text, Text, Text, Int)] ->
+  Maybe (T.Text, T.Text) ->
+  [(T.Text, T.Text, T.Text, Int)] ->
   IO ()
 recordVerdicts conn repo passId v mCommit rows =
   let
@@ -281,8 +272,8 @@ recordVerdicts conn repo passId v mCommit rows =
     toParams (key, file, line, lineNo) =
       (key, repo, file, line, lineNo, verdictText v, passId, sha, subject)
   in
-    withTransaction conn $ do
-      executeMany
+    SQLite.withTransaction conn $ do
+      SQLite.executeMany
         conn
         "INSERT INTO line_verdict\
         \ (key, repo, file, line, line_no, verdict, pass_id,\
@@ -297,16 +288,16 @@ recordVerdicts conn repo passId v mCommit rows =
         \   updated_at = excluded.updated_at"
         (map toParams rows)
       -- accepting closes the conversation; other verdicts keep it open
-      when (v == Reviewed) $
+      Monad.when (v == Reviewed) $
         mapM_
           ( \ks ->
               let
                 holes = mconcat (replicate (length ks - 1) ", ?")
               in
-                execute
+                SQLite.execute
                   conn
-                  (Query ("DELETE FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
-                  (toRow (Only repo) <> toRow ks)
+                  (SQLite.Query ("DELETE FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
+                  (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow ks)
           )
           (chunks 400 (map (\(key, _, _, _) -> key) rows))
 
@@ -322,7 +313,7 @@ recordVerdicts conn repo passId v mCommit rows =
 waitingDirectory :: IO FilePath
 waitingDirectory = do
   dir <- fmap (</> "waiting") storeDirectory
-  createDirectoryIfMissing True dir
+  Directory.createDirectoryIfMissing True dir
   pure dir
 
 -- What an agent is doing about a review.
@@ -335,7 +326,7 @@ waitingDirectory = do
 data Presence = Waiting | Working
   deriving (Eq, Show)
 
-presenceWord :: Presence -> Text
+presenceWord :: Presence -> T.Text
 presenceWord p = case p of
   Waiting -> "waiting"
   Working -> "working"
@@ -343,18 +334,18 @@ presenceWord p = case p of
 -- Announce what this process is doing about these repositories. Called
 -- again on a beat: the file's timestamp is the heartbeat, so a listener
 -- can tell somebody still here from somebody gone without being told.
-markPresence :: Presence -> [Text] -> IO ()
+markPresence :: Presence -> [T.Text] -> IO ()
 markPresence what repos = do
   dir <- waitingDirectory
-  pid <- getProcessID
+  pid <- Posix.getProcessID
   ignoringIOErrors
     (TIO.writeFile (dir </> show pid) (T.unlines (presenceWord what : repos)))
 
 clearWaiting :: IO ()
 clearWaiting = do
   dir <- waitingDirectory
-  pid <- getProcessID
-  ignoringIOErrors (removeFile (dir </> show pid))
+  pid <- Posix.getProcessID
+  ignoringIOErrors (Directory.removeFile (dir </> show pid))
 
 -- Which repositories somebody is waiting on, and which somebody is
 -- working on, right now.
@@ -362,28 +353,28 @@ clearWaiting = do
 -- A heartbeat older than a few seconds is somebody who has gone away —
 -- killed, disconnected, or a session that ended — which is why this is
 -- read from timestamps rather than from whoever remembered to tidy up.
-presenceNow :: IO ([Text], [Text])
+presenceNow :: IO ([T.Text], [T.Text])
 presenceNow = do
   dir <- waitingDirectory
-  names <- catchIOError (listDirectory dir) (const (pure []))
-  now <- getCurrentTime
+  names <- IOError.catchIOError (Directory.listDirectory dir) (const (pure []))
+  now <- Clock.getCurrentTime
   found <- mapM (freshRepos dir now) names
   let
     ofKind k = concatMap snd (filter ((== k) . fst) found)
   pure (ofKind Waiting, ofKind Working)
 
-waitingStaleAfter :: NominalDiffTime
+waitingStaleAfter :: Clock.NominalDiffTime
 waitingStaleAfter = 4
 
-freshRepos :: FilePath -> UTCTime -> FilePath -> IO (Presence, [Text])
+freshRepos :: FilePath -> Clock.UTCTime -> FilePath -> IO (Presence, [T.Text])
 freshRepos dir now name =
   let
     path = dir </> name
     nothing = (Working, [])
   in
-    flip catchIOError (const (pure nothing)) $ do
-      touched <- getModificationTime path
-      if diffUTCTime now touched > waitingStaleAfter
+    flip IOError.catchIOError (const (pure nothing)) $ do
+      touched <- Directory.getModificationTime path
+      if Clock.diffUTCTime now touched > waitingStaleAfter
         then pure nothing
         else do
           body <- TIO.readFile path
@@ -393,19 +384,19 @@ freshRepos dir now name =
             [] -> nothing
 
 ignoringIOErrors :: IO () -> IO ()
-ignoringIOErrors act = catchIOError act (const (pure ()))
+ignoringIOErrors act = IOError.catchIOError act (const (pure ()))
 
 -- Say whether this repository has a note being written into it.
-setComposing :: Connection -> Text -> Bool -> IO ()
+setComposing :: SQLite.Connection -> T.Text -> Bool -> IO ()
 setComposing conn repo composing =
   if composing
     then
-      execute
+      SQLite.execute
         conn
         "INSERT INTO note_composing (repo) VALUES (?)\
         \ ON CONFLICT(repo) DO UPDATE SET since = datetime('now')"
-        (Only repo)
-    else execute conn "DELETE FROM note_composing WHERE repo = ?" (Only repo)
+        (SQLite.Only repo)
+    else SQLite.execute conn "DELETE FROM note_composing WHERE repo = ?" (SQLite.Only repo)
 
 -- Whether any of these repositories is mid-note.
 --
@@ -413,17 +404,17 @@ setComposing conn repo composing =
 -- popup open leaves the row behind, and an agent that waited on it would
 -- wait for as long as nobody noticed. Ten minutes is far longer than
 -- writing a note and far shorter than caring.
-composingNow :: Connection -> [Text] -> IO Bool
+composingNow :: SQLite.Connection -> [T.Text] -> IO Bool
 composingNow conn repos = do
   rows <-
     mapM
       ( \repo ->
-          query
+          SQLite.query
             conn
             "SELECT 1 FROM note_composing\
             \ WHERE repo = ? AND since > datetime('now', '-10 minutes')"
-            (Only repo) ::
-            IO [Only Int]
+            (SQLite.Only repo) ::
+            IO [SQLite.Only Int]
       )
       repos
   pure (any (not . null) rows)
@@ -435,16 +426,16 @@ composingNow conn repos = do
 -- because comparing the words was the only handle there was. Those
 -- notes keep behaving exactly as they did; only what happens from here
 -- is different. Run once, when the column appears.
-nameExistingGroups :: Connection -> IO ()
-nameExistingGroups conn = withTransaction conn $ do
+nameExistingGroups :: SQLite.Connection -> IO ()
+nameExistingGroups conn = SQLite.withTransaction conn $ do
   rows <-
-    query_
+    SQLite.query_
       conn
       "SELECT repo, key, author, body FROM note_post ORDER BY repo, key, seq" ::
-      IO [(Text, Text, Text, Text)]
+      IO [(T.Text, T.Text, T.Text, T.Text)]
   places <-
-    query_ conn "SELECT repo, key, file FROM line_verdict" ::
-      IO [(Text, Text, Text)]
+    SQLite.query_ conn "SELECT repo, key, file FROM line_verdict" ::
+      IO [(T.Text, T.Text, T.Text)]
   let
     fileOf =
       Map.fromList (map (\(repo, key, file) -> ((repo, key), file)) places)
@@ -462,24 +453,24 @@ nameExistingGroups conn = withTransaction conn $ do
       ((repo, Map.findWithDefault key (repo, key) fileOf, said), [key])
     grouped = Map.fromListWith (++) (map sameGroup (Map.toList saidBy))
     name ((repo, _, _), keys) =
-      map (\key -> (noteGroupId repo keys, repo, key)) keys
+      map (\key -> (Key.noteGroupId repo keys, repo, key)) keys
   mapM_
     ( \(gid, repo, key) ->
-        execute
+        SQLite.execute
           conn
           "UPDATE note_post SET group_id = ? WHERE repo = ? AND key = ?"
           (gid, repo, key)
     )
     (concatMap name (Map.toList grouped))
 
-loadThreads :: Connection -> Text -> IO (Map Text [Post])
+loadThreads :: SQLite.Connection -> T.Text -> IO (Map.Map T.Text [Post])
 loadThreads conn repo = do
   rows <-
-    query
+    SQLite.query
       conn
       "SELECT key, author, body FROM note_post\
       \ WHERE repo = ? ORDER BY key, seq"
-      (Only repo)
+      (SQLite.Only repo)
   let
     add (key, author, body) =
       Map.insertWith (flip (++)) key [Post author body]
@@ -487,33 +478,33 @@ loadThreads conn repo = do
 
 -- Which named group each key's conversation belongs to. The session
 -- needs this to tell one note from another note worded the same.
-loadNoteGroups :: Connection -> Text -> IO (Map Text Text)
+loadNoteGroups :: SQLite.Connection -> T.Text -> IO (Map.Map T.Text T.Text)
 loadNoteGroups conn repo = do
   rows <-
-    query
+    SQLite.query
       conn
       "SELECT DISTINCT key, group_id FROM note_post\
       \ WHERE repo = ? AND group_id IS NOT NULL"
-      (Only repo) ::
-      IO [(Text, Text)]
+      (SQLite.Only repo) ::
+      IO [(T.Text, T.Text)]
   pure (Map.fromList rows)
 
-nextSeq :: Connection -> Text -> Text -> IO Int
+nextSeq :: SQLite.Connection -> T.Text -> T.Text -> IO Int
 nextSeq conn repo key = do
   rows <-
-    query
+    SQLite.query
       conn
       "SELECT COALESCE(MAX(seq), -1) FROM note_post WHERE repo = ? AND key = ?"
       (repo, key) ::
-      IO [Only Int]
+      IO [SQLite.Only Int]
   pure $ case rows of
-    (Only n : _) -> n + 1
+    (SQLite.Only n : _) -> n + 1
     [] -> 0
 
-trailingPost :: Connection -> Text -> Text -> IO (Maybe (Int, Text))
+trailingPost :: SQLite.Connection -> T.Text -> T.Text -> IO (Maybe (Int, T.Text))
 trailingPost conn repo key = do
   rows <-
-    query
+    SQLite.query
       conn
       "SELECT seq, author FROM note_post\
       \ WHERE repo = ? AND key = ? ORDER BY seq DESC LIMIT 1"
@@ -526,9 +517,9 @@ trailingPost conn repo key = do
 -- newest in the thread it stays editable in place; once someone else
 -- has answered, saving starts the next post instead. Only lines that
 -- already carry verdicts take a thread. Returns how many lines.
-saveReviewerPost :: Connection -> Text -> Text -> [Text] -> IO Int
+saveReviewerPost :: SQLite.Connection -> T.Text -> T.Text -> [T.Text] -> IO Int
 saveReviewerPost conn repo body keys =
-  withTransaction conn $ do
+  SQLite.withTransaction conn $ do
     marked <- markedKeys conn repo keys
     -- a group that already has a name keeps it, so editing a note does
     -- not re-form the group under a second one
@@ -536,20 +527,20 @@ saveReviewerPost conn repo body keys =
     let
       gid = case held of
         Just g -> g
-        Nothing -> noteGroupId repo marked
+        Nothing -> Key.noteGroupId repo marked
     mapM_
       ( \key -> do
           trailing <- trailingPost conn repo key
           case trailing of
             Just (seq_, "reviewer") ->
-              execute
+              SQLite.execute
                 conn
                 "UPDATE note_post SET body = ?, created_at = datetime('now')\
                 \ WHERE repo = ? AND key = ? AND seq = ?"
                 (body, repo, key, seq_)
             _ -> do
               seq_ <- nextSeq conn repo key
-              execute
+              SQLite.execute
                 conn
                 "INSERT INTO note_post (repo, key, seq, author, body, group_id)\
                 \ VALUES (?, ?, ?, 'reviewer', ?, ?)"
@@ -560,7 +551,7 @@ saveReviewerPost conn repo body keys =
     -- that predate it and any key joining the group now
     mapM_
       ( \key ->
-          execute
+          SQLite.execute
             conn
             "UPDATE note_post SET group_id = ? WHERE repo = ? AND key = ?"
             (gid, repo, key)
@@ -570,42 +561,42 @@ saveReviewerPost conn repo body keys =
 
 -- The name these keys' conversation already goes by, if any of them
 -- carries one.
-heldGroupId :: Connection -> Text -> [Text] -> IO (Maybe Text)
+heldGroupId :: SQLite.Connection -> T.Text -> [T.Text] -> IO (Maybe T.Text)
 heldGroupId conn repo keys =
   let
     batch ks = do
       let
         holes = mconcat (replicate (length ks - 1) ", ?")
       rows <-
-        query
+        SQLite.query
           conn
-          ( Query
+          ( SQLite.Query
               ( "SELECT group_id FROM note_post WHERE repo = ?\
                 \ AND group_id IS NOT NULL AND key IN (?"
                   <> holes
                   <> ") LIMIT 1"
               )
           )
-          (toRow (Only repo) <> toRow ks) ::
-          IO [Only Text]
-      pure (map (\(Only g) -> g) rows)
+          (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow ks) ::
+          IO [SQLite.Only T.Text]
+      pure (map (\(SQLite.Only g) -> g) rows)
   in
     if null keys
       then pure Nothing
       else do
         found <- mapM batch (chunks 400 keys)
-        pure (listToMaybe (concat found))
+        pure (Maybe.listToMaybe (concat found))
 
 -- Every key the named group covers.
-groupMembers :: Connection -> Text -> Text -> IO [Text]
+groupMembers :: SQLite.Connection -> T.Text -> T.Text -> IO [T.Text]
 groupMembers conn repo gid = do
   rows <-
-    query
+    SQLite.query
       conn
       "SELECT DISTINCT key FROM note_post WHERE repo = ? AND group_id = ?"
       (repo, gid) ::
-      IO [Only Text]
-  pure (map (\(Only k) -> k) rows)
+      IO [SQLite.Only T.Text]
+  pure (map (\(SQLite.Only k) -> k) rows)
 
 -- An agent's post, addressed by a group's name or by any line key of a
 -- noted group; it lands on every key of that group, so the session shows
@@ -616,17 +607,17 @@ groupMembers conn repo gid = do
 -- The group is found by name. It used to be found by comparing what the
 -- notes said, which made two notes worded alike into one group and sent
 -- a reply to hunks nobody had asked about; see noteGroupId.
-appendAgentPost :: Connection -> Text -> Text -> Text -> Text -> IO Int
+appendAgentPost :: SQLite.Connection -> T.Text -> T.Text -> T.Text -> T.Text -> IO Int
 appendAgentPost conn repo author target body = do
   addressed <- listedConversation conn repo target
   case addressed of
     Nothing -> pure 0
     Just (gid, groupKeys) -> do
-      withTransaction conn $
+      SQLite.withTransaction conn $
         mapM_
           ( \k -> do
               seq_ <- nextSeq conn repo k
-              execute
+              SQLite.execute
                 conn
                 "INSERT INTO note_post (repo, key, seq, author, body, group_id)\
                 \ VALUES (?, ?, ?, ?, ?, ?)"
@@ -635,7 +626,7 @@ appendAgentPost conn repo author target body = do
           groupKeys
       pure (length groupKeys)
 
-listedConversation :: Connection -> Text -> Text -> IO (Maybe (Text, [Text]))
+listedConversation :: SQLite.Connection -> T.Text -> T.Text -> IO (Maybe (T.Text, [T.Text]))
 listedConversation conn repo target = do
   named <- groupMembers conn repo target
   found <-
@@ -652,62 +643,62 @@ listedConversation conn repo target = do
       listed <- listedKeys conn repo keys
       pure (if null listed then Nothing else found)
 
-bareLineConversation :: Connection -> Text -> Text -> IO (Maybe (Text, [Text]))
+bareLineConversation :: SQLite.Connection -> T.Text -> T.Text -> IO (Maybe (T.Text, [T.Text]))
 bareLineConversation conn repo gid = do
   rows <- repoRows conn repo
   pure $
-    case filter (\(key, _) -> noteGroupId repo [key] == gid) rows of
+    case filter (\(key, _) -> Key.noteGroupId repo [key] == gid) rows of
       ((key, _) : _) -> Just (gid, [key])
       [] -> Nothing
 
-keyConversation :: Connection -> Text -> Text -> IO (Maybe (Text, [Text]))
+keyConversation :: SQLite.Connection -> T.Text -> T.Text -> IO (Maybe (T.Text, [T.Text]))
 keyConversation conn repo key = do
   present <-
-    query
+    SQLite.query
       conn
       "SELECT COUNT(*) FROM line_verdict WHERE repo = ? AND key = ?"
       (repo, key) ::
-      IO [Only Int]
+      IO [SQLite.Only Int]
   case present of
-    (Only 0 : _) -> pure Nothing
+    (SQLite.Only 0 : _) -> pure Nothing
     _ -> do
       held <- heldGroupId conn repo [key]
       fmap Just $ case held of
         -- a line nobody has noted takes the post by itself, under a name
         -- of its own, so an answer to it can be found again later
-        Nothing -> pure (noteGroupId repo [key], [key])
+        Nothing -> pure (Key.noteGroupId repo [key], [key])
         Just g -> fmap ((,) g) (groupMembers conn repo g)
 
 -- Drop the whole conversation from some lines. Returns how many lines
 -- actually had one.
-clearThread :: Connection -> Text -> [Text] -> IO Int
+clearThread :: SQLite.Connection -> T.Text -> [T.Text] -> IO Int
 clearThread conn repo keys =
   let
     batch ks = do
       let
         holes = mconcat (replicate (length ks - 1) ", ?")
       cleared <-
-        query
+        SQLite.query
           conn
-          (Query ("SELECT COUNT(DISTINCT key) FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
-          (toRow (Only repo) <> toRow ks) ::
-          IO [Only Int]
-      execute
+          (SQLite.Query ("SELECT COUNT(DISTINCT key) FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
+          (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow ks) ::
+          IO [SQLite.Only Int]
+      SQLite.execute
         conn
-        (Query ("DELETE FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
-        (toRow (Only repo) <> toRow ks)
+        (SQLite.Query ("DELETE FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
+        (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow ks)
       pure $ case cleared of
-        (Only n : _) -> n
+        (SQLite.Only n : _) -> n
         [] -> 0
   in
-    withTransaction conn $ do
+    SQLite.withTransaction conn $ do
       counts <- mapM batch (chunks 400 keys)
       pure (sum counts)
 
 -- Close every answered conversation at once: a thread whose newest post
 -- came from someone other than the reviewer clears entirely. Returns
 -- how many lines.
-resolveAnswered :: Connection -> Text -> IO Int
+resolveAnswered :: SQLite.Connection -> T.Text -> IO Int
 resolveAnswered conn repo = do
   threads <- loadThreads conn repo
   let
@@ -716,79 +707,79 @@ resolveAnswered conn repo = do
     [] -> pure 0
     keys -> clearThread conn repo keys
 
-answeredKeys :: Map Text [Post] -> [Text]
+answeredKeys :: Map.Map T.Text [Post] -> [T.Text]
 answeredKeys threads =
   Map.keys (Map.filter ((== AwaitingReviewer) . awaiting) threads)
 
 -- Threads attach only to lines that already carry verdicts; noting an
 -- unmarked line would record a conversation nothing displays.
-markedKeys :: Connection -> Text -> [Text] -> IO [Text]
+markedKeys :: SQLite.Connection -> T.Text -> [T.Text] -> IO [T.Text]
 markedKeys conn repo keys =
   let
     batch ks = do
       let
         holes = mconcat (replicate (length ks - 1) ", ?")
       rows <-
-        query
+        SQLite.query
           conn
-          (Query ("SELECT key FROM line_verdict WHERE repo = ? AND key IN (?" <> holes <> ")"))
-          (toRow (Only repo) <> toRow ks) ::
-          IO [Only Text]
-      pure (map (\(Only k) -> k) rows)
+          (SQLite.Query ("SELECT key FROM line_verdict WHERE repo = ? AND key IN (?" <> holes <> ")"))
+          (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow ks) ::
+          IO [SQLite.Only T.Text]
+      pure (map (\(SQLite.Only k) -> k) rows)
   in
     fmap concat (mapM batch (chunks 400 keys))
 
-listedKeys :: Connection -> Text -> [Text] -> IO [Text]
+listedKeys :: SQLite.Connection -> T.Text -> [T.Text] -> IO [T.Text]
 listedKeys conn repo keys =
   let
     batch ks = do
       let
         holes = mconcat (replicate (length ks - 1) ", ?")
       rows <-
-        query
+        SQLite.query
           conn
-          ( Query
+          ( SQLite.Query
               ( "SELECT key FROM line_verdict WHERE repo = ?\
                 \ AND verdict <> 'reviewed' AND key IN (?"
                   <> holes
                   <> ")"
               )
           )
-          (toRow (Only repo) <> toRow ks) ::
-          IO [Only Text]
-      pure (map (\(Only k) -> k) rows)
+          (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow ks) ::
+          IO [SQLite.Only T.Text]
+      pure (map (\(SQLite.Only k) -> k) rows)
   in
     fmap concat (mapM batch (chunks 400 keys))
 
-newtype GroupId = GroupId {groupIdToText :: Text}
+newtype GroupId = GroupId {groupIdToText :: T.Text}
   deriving (Eq, Ord, Show)
 
-newtype LineKey = LineKey {lineKeyToText :: Text}
+newtype LineKey = LineKey {lineKeyToText :: T.Text}
   deriving (Eq, Ord, Show)
 
 data PunchRow = PunchRow
   { punchKey :: LineKey
-  , punchFile :: Text
+  , punchFile :: T.Text
   , punchVerdict :: Verdict
-  , punchLine :: Text
+  , punchLine :: T.Text
   , punchLineNo :: Maybe Int
   , punchThread :: [Post]
-  , punchCommitSha :: Maybe Text
-  , punchCommitSubject :: Maybe Text
-  , punchAt :: Text
+  , punchCommitSha :: Maybe T.Text
+  , punchCommitSubject :: Maybe T.Text
+  , punchAt :: T.Text
   }
 
 -- Every flagged or questioned line for the repo, grouped by file.
-punchRows :: Connection -> Text -> IO [PunchRow]
+punchRows :: SQLite.Connection -> T.Text -> IO [PunchRow]
 punchRows conn repo = do
   rows <-
-    query
+    SQLite.query
       conn
       "SELECT key, file, verdict, line, line_no,\
       \ commit_sha, commit_subject, updated_at FROM line_verdict\
       \ WHERE repo = ? AND verdict <> 'reviewed'\
       \ ORDER BY file, line_no, updated_at DESC"
-      (Only repo)
+      (SQLite.Only repo)
   threads <- loadThreads conn repo
   let
     toPunch (key, file, verdictName, line, lineNo, sha, subject, at) =
@@ -807,15 +798,15 @@ punchRows conn repo = do
               }
         )
         (parseVerdict verdictName)
-  pure (mapMaybe toPunch rows)
+  pure (Maybe.mapMaybe toPunch rows)
 
-repoRows :: Connection -> Text -> IO [(Text, Text)]
+repoRows :: SQLite.Connection -> T.Text -> IO [(T.Text, T.Text)]
 repoRows conn repo =
-  query conn "SELECT key, file FROM line_verdict WHERE repo = ?" (Only repo)
+  SQLite.query conn "SELECT key, file FROM line_verdict WHERE repo = ?" (SQLite.Only repo)
 
 -- Forget the verdicts for particular line keys (unmarking a hunk or a
 -- selection of lines).
-deleteKeys :: Connection -> Text -> [Text] -> IO ()
+deleteKeys :: SQLite.Connection -> T.Text -> [T.Text] -> IO ()
 deleteKeys conn repo keys =
   let
     batch ks =
@@ -823,21 +814,21 @@ deleteKeys conn repo keys =
         holes = mconcat (replicate (length ks - 1) ", ?")
       in
         do
-          execute
+          SQLite.execute
             conn
-            (Query ("DELETE FROM line_verdict WHERE repo = ? AND key IN (?" <> holes <> ")"))
-            (toRow (Only repo) <> toRow ks)
-          execute
+            (SQLite.Query ("DELETE FROM line_verdict WHERE repo = ? AND key IN (?" <> holes <> ")"))
+            (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow ks)
+          SQLite.execute
             conn
-            (Query ("DELETE FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
-            (toRow (Only repo) <> toRow ks)
+            (SQLite.Query ("DELETE FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
+            (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow ks)
   in
-    withTransaction conn $
+    SQLite.withTransaction conn $
       mapM_ batch (chunks 400 keys)
 
 -- Batched so a repository with thousands of recorded lines stays inside
 -- sqlite's limit on parameters per statement.
-deleteFiles :: Connection -> Text -> [Text] -> IO ()
+deleteFiles :: SQLite.Connection -> T.Text -> [T.Text] -> IO ()
 deleteFiles conn repo files =
   let
     batch fs =
@@ -845,22 +836,22 @@ deleteFiles conn repo files =
         holes = mconcat (replicate (length fs - 1) ", ?") -- first hole below
       in
         do
-          execute
+          SQLite.execute
             conn
-            ( Query
+            ( SQLite.Query
                 ( "DELETE FROM note_post WHERE repo = ? AND key IN\
                   \ (SELECT key FROM line_verdict WHERE repo = ? AND file IN (?"
                     <> holes
                     <> "))"
                 )
             )
-            (toRow (repo, repo) <> toRow fs)
-          execute
+            (SQLite.toRow (repo, repo) <> SQLite.toRow fs)
+          SQLite.execute
             conn
-            (Query ("DELETE FROM line_verdict WHERE repo = ? AND file IN (?" <> holes <> ")"))
-            (toRow (Only repo) <> toRow fs)
+            (SQLite.Query ("DELETE FROM line_verdict WHERE repo = ? AND file IN (?" <> holes <> ")"))
+            (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow fs)
   in
-    withTransaction conn $
+    SQLite.withTransaction conn $
       mapM_ batch (chunks 400 files)
 
 chunks :: Int -> [a] -> [[a]]
