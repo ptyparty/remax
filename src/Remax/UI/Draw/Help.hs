@@ -7,50 +7,34 @@ module Remax.UI.Draw.Help
   , pendingMenuLayer
   ) where
 
-import Brick
-  ( Padding (Max)
-  , Widget
-  , hBox
-  , hLimit
-  , padRight
-  , txt
-  , vBox
-  , withAttr
-  )
-import Brick.Types
-  ( Size (Greedy)
-  , Widget (Widget)
-  , availWidth
-  , getContext
-  , render
-  )
-import Data.Text (Text)
-import qualified Data.Text as T
-import Remax.Config
-import Remax.Modal
-import Remax.UI.Action.Menus
-import Remax.UI.Core.Attrs
-import Remax.UI.Core.Types
-import Remax.UI.Core.Widgets
+import Brick qualified as Brick
+import Brick.Types qualified as BrickTypes
+import Data.Text qualified as T
+import Remax.Config qualified as Config
+import Remax.Modal qualified as Modal
+import Remax.UI.Action.Menus qualified as Menus
+import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Widgets qualified as Widgets
 
 -- Two columns, split where the row counts come out even, so the sheet is
 -- one glance rather than a scroll.
-helpLayer :: KeyMode -> Widget Name
+helpLayer :: Config.KeyMode -> BrickTypes.Widget Types.Name
 helpLayer mode =
-  Widget Greedy Greedy $ do
-    ctx <- getContext
+  BrickTypes.Widget BrickTypes.Greedy BrickTypes.Greedy $ do
+    ctx <- BrickTypes.getContext
     let
-      groups = helpGroups mode
-      colWidth = max 36 (min 50 (div (availWidth ctx - 24) 2))
+      groups = Menus.helpGroups mode
+      colWidth = max 36 (min 50 (div (BrickTypes.availWidth ctx - 24) 2))
       keyWidth = 13
       entryRow (key, desc) =
-        hBox
-          [ hLimit keyWidth (padRight Max (withAttr noteInlineAttr (txt (" " <> key))))
-          , withAttr statusAttr (txt desc)
+        Brick.hBox
+          [ Brick.hLimit keyWidth (Brick.padRight Brick.Max (Brick.withAttr Attrs.noteInlineAttr (Brick.txt (" " <> key))))
+          , Brick.withAttr Attrs.statusAttr (Brick.txt desc)
           ]
       groupRows (name, entries) =
-        (withAttr floatTitleAttr (txt (" " <> name)) : map entryRow entries)
-          ++ [txt " "]
+        (Brick.withAttr Attrs.floatTitleAttr (Brick.txt (" " <> name)) : map entryRow entries)
+          ++ [Brick.txt " "]
       height g = length (snd g) + 2
       half = div (sum (map height groups)) 2
       -- take a group into the left column while doing so lands closer to
@@ -68,25 +52,25 @@ helpLayer mode =
                   (g : a, b)
             | otherwise -> ([], g : rest)
       (leftGroups, rightGroups) = pack 0 groups
-      column shown = vBox (concatMap groupRows shown)
-    render $
-      floatFrame "keys" "any key closes" $
-        hBox
-          [ hLimit colWidth (padRight Max (column leftGroups))
-          , hLimit colWidth (padRight Max (column rightGroups))
+      column shown = Brick.vBox (concatMap groupRows shown)
+    BrickTypes.render $
+      Widgets.floatFrame "keys" "any key closes" $
+        Brick.hBox
+          [ Brick.hLimit colWidth (Brick.padRight Brick.Max (column leftGroups))
+          , Brick.hLimit colWidth (Brick.padRight Brick.Max (column rightGroups))
           ]
 
-spaceMenu :: Widget Name
+spaceMenu :: BrickTypes.Widget Types.Name
 spaceMenu =
   let
     item (key, label, _) =
-      hBox
-        [ withAttr noteInlineAttr (txt (" " <> key))
-        , withAttr statusAttr (txt ("  " <> label))
+      Brick.hBox
+        [ Brick.withAttr Attrs.noteInlineAttr (Brick.txt (" " <> key))
+        , Brick.withAttr Attrs.statusAttr (Brick.txt ("  " <> label))
         ]
   in
-    cornerFrame "space" "any other key cancels" . hLimit 26 . padRight Max $
-      vBox (map item spaceMenuEntries)
+    Widgets.cornerFrame "space" "any other key cancels" . Brick.hLimit 26 . Brick.padRight Brick.Max $
+      Brick.vBox (map item Menus.spaceMenuEntries)
 
 -- What a half-typed prefix is waiting for.
 --
@@ -97,7 +81,7 @@ spaceMenu =
 --
 -- f, t and r are left out on purpose. They wait for any character at
 -- all, and "type a character" is not worth a box in the corner.
-pendingMenu :: Text -> Maybe (Text, [(Text, Text)])
+pendingMenu :: T.Text -> Maybe (T.Text, [(T.Text, T.Text)])
 pendingMenu label =
   let
     pairs =
@@ -105,7 +89,7 @@ pendingMenu label =
       , ("\" ' `", "quotes")
       ]
     objects = pairs ++ [("w W", "word under the cursor")]
-    fromMatch = map (\(k, what, _) -> (T.singleton k, what)) matchMenu
+    fromMatch = map (\(k, what, _) -> (T.singleton k, what)) Modal.matchMenu
   in
     case label of
       "g" ->
@@ -131,22 +115,22 @@ pendingMenu label =
       "ma" -> Just ("select around", objects)
       _ -> Nothing
 
-pendingMenuLayer :: St -> Maybe (Widget Name)
+pendingMenuLayer :: Types.St -> Maybe (BrickTypes.Widget Types.Name)
 pendingMenuLayer st = do
-  fv <- currentFileMay st
-  label <- pendingLabel (fvEd fv)
+  fv <- Types.currentFileMay st
+  label <- Modal.pendingLabel (Types.fvEd fv)
   (title, entries) <- pendingMenu label
   let
     -- the key column is padded to the widest of them, so the labels line
     -- up even where a key is a row of brackets rather than one letter
     keyW = maximum (map (T.length . fst) entries)
     item (key, what) =
-      hBox
-        [ withAttr noteInlineAttr (txt (" " <> T.justifyLeft keyW ' ' key))
-        , withAttr statusAttr (txt ("  " <> what))
+      Brick.hBox
+        [ Brick.withAttr Attrs.noteInlineAttr (Brick.txt (" " <> T.justifyLeft keyW ' ' key))
+        , Brick.withAttr Attrs.statusAttr (Brick.txt ("  " <> what))
         ]
     width = 5 + keyW + maximum (map (T.length . snd) entries)
   pure
-    ( cornerFrame title "any other key cancels" . hLimit width . padRight Max $
-        vBox (map item entries)
+    ( Widgets.cornerFrame title "any other key cancels" . Brick.hLimit width . Brick.padRight Brick.Max $
+        Brick.vBox (map item entries)
     )

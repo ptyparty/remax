@@ -6,22 +6,14 @@ module Remax.UI.Core.WordDiff
   , shiftSpans
   ) where
 
-import Data.Algorithm.Diff (PolyDiff (..), getGroupedDiff)
-import Data.Char
-  ( isAlphaNum
-  , isSpace
-  )
-import Data.List
-  ( sortOn
-  )
-import qualified Data.Map.Strict as Map
-import Data.Maybe
-  ( mapMaybe
-  )
-import qualified Data.Set as Set
-import Data.Text (Text)
-import qualified Data.Text as T
-import Remax.DiffModel
+import Data.Algorithm.Diff qualified as Diff
+import Data.Char qualified as Char
+import Data.List qualified as List
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Set qualified as Set
+import Data.Text qualified as T
+import Remax.DiffModel qualified as DiffModel
 
 -- Words, for the purpose of telling two versions of a line apart: runs of
 -- identifier characters, runs of space, runs of operator characters, and
@@ -33,12 +25,12 @@ import Remax.DiffModel
 -- Lumping all punctuation together made ")+(" a single token, so
 -- changing the operator between two parenthesised terms marked the
 -- parentheses along with it.
-wordTokens :: Text -> [(Int, Text)]
+wordTokens :: T.Text -> [(Int, T.Text)]
 wordTokens t =
   let
     kind c
-      | isAlphaNum c || c == '_' = 0 :: Int
-      | isSpace c = 1
+      | Char.isAlphaNum c || c == '_' = 0 :: Int
+      | Char.isSpace c = 1
       | c `elem` ("()[]{},;" :: String) = 2
       | otherwise = 3
     -- kind 2 never joins anything, itself included: "))" is two brackets
@@ -88,21 +80,21 @@ matchShare wm = (wmKeptChars wm * 1000) `div` max 1 (wmChars wm)
 -- WhitespaceIgnored the blanks are dropped before the comparison rather
 -- than merely discounted — having said spacing is not a difference,
 -- pointing at it anyway would be the noise that setting exists to avoid.
-wordMatch :: WhitespaceMode -> Text -> Text -> WordMatch
+wordMatch :: DiffModel.WhitespaceMode -> T.Text -> T.Text -> WordMatch
 wordMatch mode oldLine newLine =
   let
     tokensOf line = case mode of
-      WhitespaceMatters -> wordTokens line
-      WhitespaceIgnored ->
-        filter (not . T.all isSpace . snd) (wordTokens line)
+      DiffModel.WhitespaceMatters -> wordTokens line
+      DiffModel.WhitespaceIgnored ->
+        filter (not . T.all Char.isSpace . snd) (wordTokens line)
     olds = tokensOf oldLine
     news = tokensOf newLine
-    grouped = getGroupedDiff (map snd olds) (map snd news)
+    grouped = Diff.getGroupedDiff (map snd olds) (map snd news)
     -- measured on words, not on the blanks between them: two lines with
     -- nothing whatever in common still share their spaces, and counting
     -- those as common was enough to call a rewrite an edit
-    solid = filter (not . T.all isSpace)
-    shared = solid (concatMap (\g -> case g of Both bs _ -> bs; _ -> []) grouped)
+    solid = filter (not . T.all Char.isSpace)
+    shared = solid (concatMap (\g -> case g of Diff.Both bs _ -> bs; _ -> []) grouped)
     oldWords = solid (map snd olds)
     newWords = solid (map snd news)
     chars = sum . map T.length
@@ -114,13 +106,13 @@ wordMatch mode oldLine newLine =
     walk _ _ [] = ([], [])
     walk oi ni (g : gs) =
       case g of
-        Both bs _ -> walk (oi + length bs) (ni + length bs) gs
-        First os ->
+        Diff.Both bs _ -> walk (oi + length bs) (ni + length bs) gs
+        Diff.First os ->
           let
             (a, b) = walk (oi + length os) ni gs
           in
             (spanOf olds oi (length os) ++ a, b)
-        Second ns ->
+        Diff.Second ns ->
           let
             (a, b) = walk oi (ni + length ns) gs
           in
@@ -167,9 +159,9 @@ pairingBudget = 2500
 -- none, which is the honest answer for one that was purely added or
 -- purely deleted.
 bestPairs ::
-  WhitespaceMode ->
-  [RowR] ->
-  [RowR] ->
+  DiffModel.WhitespaceMode ->
+  [DiffModel.RowR] ->
+  [DiffModel.RowR] ->
   [(Int, Int, ([(Int, Int)], [(Int, Int)]))]
 bestPairs mode removed added =
   let
@@ -178,12 +170,12 @@ bestPairs mode removed added =
       | (i, o) <- zip [0 :: Int ..] removed
       , (j, n) <- zip [0 :: Int ..] added
       , let
-          wm = wordMatch mode (rText o) (rText n)
+          wm = wordMatch mode (DiffModel.rText o) (DiffModel.rText n)
       , worthMarking wm
       ]
     -- most text in common first; ties go to the earlier rows, which keeps
     -- equal-sized blocks pairing straight down as they read
-    ranked = sortOn (\(share, i, j, _) -> (negate share, i, j)) scored
+    ranked = List.sortOn (\(share, i, j, _) -> (negate share, i, j)) scored
     take' _ _ [] = []
     take' usedO usedN ((_, i, j, spans) : rest)
       | Set.member i usedO || Set.member j usedN = take' usedO usedN rest
@@ -192,15 +184,15 @@ bestPairs mode removed added =
   in
     take' Set.empty Set.empty ranked
 
-intralineSpans :: WhitespaceMode -> [RowR] -> [[(Int, Int)]]
+intralineSpans :: DiffModel.WhitespaceMode -> [DiffModel.RowR] -> [[(Int, Int)]]
 intralineSpans mode =
   let
     go [] = []
     go rows@(r : _)
-      | rMark r == '-' =
+      | DiffModel.rMark r == '-' =
           let
-            (removed, afterRemoved) = span ((== '-') . rMark) rows
-            (added, rest) = span ((== '+') . rMark) afterRemoved
+            (removed, afterRemoved) = span ((== '-') . DiffModel.rMark) rows
+            (added, rest) = span ((== '+') . DiffModel.rMark) afterRemoved
             chosen =
               if length removed * length added > pairingBudget
                 then []
@@ -220,7 +212,7 @@ intralineSpans mode =
 -- those scrolled off the left dropped.
 shiftSpans :: Int -> [(Int, Int)] -> [(Int, Int)]
 shiftSpans off =
-  mapMaybe
+  Maybe.mapMaybe
     ( \(s, e) ->
         if e < off then Nothing else Just (max 0 (s - off), e - off)
     )

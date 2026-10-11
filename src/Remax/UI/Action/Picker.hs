@@ -13,73 +13,52 @@ module Remax.UI.Action.Picker
   , handlePickerKey
   ) where
 
-import Brick
-  ( EventM
-  )
-import Control.Monad (forM_)
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.State
-  ( get
-  , modify
-  )
-import Data.List
-  ( findIndex
-  , sortOn
-  )
-import qualified Data.Map.Strict as Map
-import Data.Maybe
-  ( fromMaybe
-  , mapMaybe
-  )
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Read as TR
-import qualified Graphics.Vty as V
-import Remax.Git
-  ( ReviewMode (..)
-  , localBranches
-  , recentCommits
-  , runGit
-  )
-import Remax.Modal
-import Remax.UI.Action.Fuzzy
-import Remax.UI.Action.Open
-import Remax.UI.Action.Repo
-import Remax.UI.Action.Settings
-import Remax.UI.Core.Jobs
-import Remax.UI.Core.Types
-import Remax.UI.Core.Widgets
-import Remax.UI.Model.Load
-import Remax.UI.Model.Nav
-import qualified Remax.Zipper as Z
-import System.FilePath
-  ( takeFileName
-  )
-import System.Process
-  ( readProcessWithExitCode
-  )
+import Brick qualified as Brick
+import Control.Monad qualified as Monad
+import Control.Monad.IO.Class qualified as MonadIO
+import Control.Monad.State qualified as State
+import Data.List qualified as List
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Text qualified as T
+import Data.Text.Read qualified as TR
+import Graphics.Vty qualified as V
+import Remax.Git qualified as Git
+import Remax.Modal qualified as Modal
+import Remax.UI.Action.Fuzzy qualified as Fuzzy
+import Remax.UI.Action.Open qualified as Open
+import Remax.UI.Action.Repo qualified as Repo
+import Remax.UI.Action.Settings qualified as Settings
+import Remax.UI.Core.Jobs qualified as Jobs
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Widgets qualified as Widgets
+import Remax.UI.Model.Load qualified as Load
+import Remax.UI.Model.Nav qualified as Nav
+import Remax.Zipper qualified as Z
+import System.FilePath qualified as FilePath
+import System.Process qualified as Process
 
 -- Reopen it. Helix spells this ␣' and means the same thing by it: not
 -- a fresh dialog of the same kind, but the one you had, with what you
 -- had typed into it and where you had got to in the results.
-reopenLastSelector :: EventM Name St ()
+reopenLastSelector :: Brick.EventM Types.Name Types.St ()
 reopenLastSelector = do
-  st <- get
-  case stLastSelector st of
-    Nothing -> setMsg "nothing selected yet this session"
-    Just (LastTree tv) ->
-      modify (\s -> s {stTree = Just tv, stPicker = Nothing})
-    Just (LastPicker pk) ->
-      modify (\s -> s {stPicker = Just pk, stTree = Nothing})
+  st <- State.get
+  case Types.stLastSelector st of
+    Nothing -> Types.setMsg "nothing selected yet this session"
+    Just (Types.LastTree tv) ->
+      State.modify (\s -> s {Types.stTree = Just tv, Types.stPicker = Nothing})
+    Just (Types.LastPicker pk) ->
+      State.modify (\s -> s {Types.stPicker = Just pk, Types.stTree = Nothing})
 
 -- The picker narrowed to what the session already has open.
-openBufferPicker :: EventM Name St ()
+openBufferPicker :: Brick.EventM Types.Name Types.St ()
 openBufferPicker = do
-  st <- get
-  modify $ \s ->
+  st <- State.get
+  State.modify $ \s ->
     s
-      { stPicker =
-          Just (refreshPicker (Picker PickFiles "" (map fvPath (stFiles st)) [] [] 0))
+      { Types.stPicker =
+          Just (refreshPicker (Types.Picker Types.PickFiles "" (map Types.fvPath (Types.stFiles st)) [] [] 0))
       }
 
 -- A picker row carries three separate things, because they are not the
@@ -87,11 +66,11 @@ openBufferPicker = do
 -- filter against. Filtering has to see the unclipped cells -- otherwise
 -- the tail of a long branch name is both invisible and unsearchable --
 -- and acting has to see the unclipped ref.
-pickerRow :: Text -> Text -> Text -> FilePath
+pickerRow :: T.Text -> T.Text -> T.Text -> FilePath
 pickerRow ref display match =
   T.unpack (T.intercalate "\t" [ref, display, match])
 
-splitPickerRow :: FilePath -> (Text, Text, Text)
+splitPickerRow :: FilePath -> (T.Text, T.Text, T.Text)
 splitPickerRow row =
   case T.splitOn "\t" (T.pack row) of
     (ref : display : match : _) -> (ref, display, match)
@@ -99,13 +78,13 @@ splitPickerRow row =
     _ -> (T.pack row, T.pack row, T.pack row)
 
 -- Pick a base out of the history instead of spelling one: bare :base.
-openBasePicker :: EventM Name St ()
+openBasePicker :: Brick.EventM Types.Name Types.St ()
 openBasePicker = do
-  st <- get
-  commits <- liftIO (recentCommits 300 (stRoot st))
+  st <- State.get
+  commits <- MonadIO.liftIO (Git.recentCommits 300 (Types.stRoot st))
   let
-    here ref = case stMode st of
-      VsRef cur | cur == ref -> "  \8592 current"
+    here ref = case Types.stMode st of
+      Git.VsRef cur | cur == ref -> "  \8592 current"
       _ -> ""
     -- sha · how long ago · what points here · subject
     cellsFor (sha, ago, refs, subject) = [sha, ago, refs, subject <> here sha]
@@ -114,190 +93,190 @@ openBasePicker = do
       , ["branch", "", "", "the whole branch \8212 merge-base with the mainline"]
       ]
         ++ map cellsFor commits
-    widths = columnWidths [12, 15, 28] cells
-    refOf cs = fromMaybe "" (safeIdx cs 0)
+    widths = Widgets.columnWidths [12, 15, 28] cells
+    refOf cs = Maybe.fromMaybe "" (Types.safeIdx cs 0)
     rows =
       map
-        (\cs -> pickerRow (refOf cs) (columnRow widths cs) (T.unwords cs))
+        (\cs -> pickerRow (refOf cs) (Widgets.columnRow widths cs) (T.unwords cs))
         cells
-  modify $ \s ->
-    s {stPicker = Just (refreshRowPicker (Picker PickBase "" rows [] [] 0))}
+  State.modify $ \s ->
+    s {Types.stPicker = Just (refreshRowPicker (Types.Picker Types.PickBase "" rows [] [] 0))}
 
 -- For the base and branch pickers, where the incoming order carries
 -- meaning: rank on match quality alone and let the sort's stability keep
 -- it within a tier. (refreshPicker's third component is path length,
 -- which would scramble it.)
-refreshRowPicker :: Picker -> Picker
+refreshRowPicker :: Types.Picker -> Types.Picker
 refreshRowPicker pk =
   let
-    q = pkInput pk
-    quality t = fmap (\(a, b, _) -> (a, b)) (fuzzyScore q (T.unpack t))
+    q = Types.pkInput pk
+    quality t = fmap (\(a, b, _) -> (a, b)) (Fuzzy.fuzzyScore q (T.unpack t))
     score row =
       let
         (ref, disp, match) = splitPickerRow row
       in
         fmap (\sc -> (sc, (ref, disp))) (quality match)
-    ranked = map snd (sortOn fst (mapMaybe score (pkAll pk)))
+    ranked = map snd (List.sortOn fst (Maybe.mapMaybe score (Types.pkAll pk)))
   in
     pk
-      { pkMatches = map snd ranked
-      , pkTargets = map (\(ref, _) -> (T.unpack ref, 0)) ranked
-      , pkSel = 0
+      { Types.pkMatches = map snd ranked
+      , Types.pkTargets = map (\(ref, _) -> (T.unpack ref, 0)) ranked
+      , Types.pkSel = 0
       }
 
 -- 'branch' means the merge-base, the same word :base already takes.
-applyBaseChoice :: Text -> EventM Name St ()
+applyBaseChoice :: T.Text -> Brick.EventM Types.Name Types.St ()
 applyBaseChoice ref
   | T.null ref = pure ()
-  | ref == "branch" = setBaseBranch
-  | otherwise = setBase (VsRef ref)
+  | ref == "branch" = Settings.setBaseBranch
+  | otherwise = Settings.setBase (Git.VsRef ref)
 
-openRepoPicker :: EventM Name St ()
+openRepoPicker :: Brick.EventM Types.Name Types.St ()
 openRepoPicker = do
-  rescanRepos
-  st <- get
-  case stRoots st of
-    [] -> setMsg "no other repositories here"
-    [_] -> setMsg "this is the only repository here"
+  Repo.rescanRepos
+  st <- State.get
+  case Types.stRoots st of
+    [] -> Types.setMsg "no other repositories here"
+    [_] -> Types.setMsg "this is the only repository here"
     roots -> do
       let
         remembered root =
           Map.findWithDefault
-            [T.pack (takeFileName root), "", "\8230"]
+            [T.pack (FilePath.takeFileName root), "", "\8230"]
             root
-            (stRepoInfo st)
+            (Types.stRepoInfo st)
         rows = repoPickerRows st (map (\root -> (root, remembered root)) roots)
         -- opening on the next one round makes Enter by itself "move on",
         -- while the list is still there to choose from deliberately
-        startAt = case findIndex (== stRoot st) roots of
+        startAt = case List.findIndex (== Types.stRoot st) roots of
           Just i -> (i + 1) `mod` length roots
           Nothing -> 0
       -- refreshRowPicker ranks the rows and lands on the first, so the
       -- starting row is chosen after it has done that
-      modify $ \s ->
+      State.modify $ \s ->
         s
-          { stPicker =
+          { Types.stPicker =
               Just
-                ( (refreshRowPicker (Picker PickRepo "" rows [] [] 0))
-                    { pkSel = startAt
+                ( (refreshRowPicker (Types.Picker Types.PickRepo "" rows [] [] 0))
+                    { Types.pkSel = startAt
                     }
                 )
           }
-      startJob "describing repositories" (forBounded 4 (describeRepo st) roots) $
+      Jobs.startJob "describing repositories" (Jobs.forBounded 4 (Repo.describeRepo st) roots) $
         \outcome -> case outcome of
-          Left err -> jobFailed "describing repositories" err
+          Left err -> Jobs.jobFailed "describing repositories" err
           Right described -> do
-            modify $ \s ->
-              s {stRepoInfo = Map.union (Map.fromList described) (stRepoInfo s)}
-            latest <- get
-            case stPicker latest of
-              Just pk -> case pkMode pk of
-                PickRepo ->
-                  modify $ \s ->
-                    s {stPicker = Just (replaceRepoRows (repoPickerRows latest described) pk)}
+            State.modify $ \s ->
+              s {Types.stRepoInfo = Map.union (Map.fromList described) (Types.stRepoInfo s)}
+            latest <- State.get
+            case Types.stPicker latest of
+              Just pk -> case Types.pkMode pk of
+                Types.PickRepo ->
+                  State.modify $ \s ->
+                    s {Types.stPicker = Just (replaceRepoRows (repoPickerRows latest described) pk)}
                 _ -> pure ()
               Nothing -> pure ()
 
-repoPickerRows :: St -> [(FilePath, [Text])] -> [FilePath]
+repoPickerRows :: Types.St -> [(FilePath, [T.Text])] -> [FilePath]
 repoPickerRows st described =
   let
     markCurrent (root, cells) =
-      case (root == stRoot st, reverse cells) of
+      case (root == Types.stRoot st, reverse cells) of
         (True, lastCell : before) -> (root, reverse ((lastCell <> "  \8592 current") : before))
         _ -> (root, cells)
     marked = map markCurrent described
-    widths = columnWidths [24, 28, 16] (map snd marked)
+    widths = Widgets.columnWidths [24, 28, 16] (map snd marked)
     -- the row shows the basename; the ref carries the whole path, so
     -- a clipped name can never become the thing we switch to
     row (root, cells) =
       pickerRow
         (T.pack root)
-        (columnRow widths cells)
+        (Widgets.columnRow widths cells)
         (T.pack root <> " " <> T.unwords cells)
   in
     map row marked
 
-replaceRepoRows :: [FilePath] -> Picker -> Picker
+replaceRepoRows :: [FilePath] -> Types.Picker -> Types.Picker
 replaceRepoRows rows pk =
   let
-    chosen = fmap fst (safeIdx (pkTargets pk) (pkSel pk))
-    refreshed = refreshRowPicker pk {pkAll = rows}
+    chosen = fmap fst (Types.safeIdx (Types.pkTargets pk) (Types.pkSel pk))
+    refreshed = refreshRowPicker pk {Types.pkAll = rows}
     kept = do
       ref <- chosen
-      findIndex ((== ref) . fst) (pkTargets refreshed)
+      List.findIndex ((== ref) . fst) (Types.pkTargets refreshed)
   in
-    refreshed {pkSel = fromMaybe (pkSel pk) kept}
+    refreshed {Types.pkSel = Maybe.fromMaybe (Types.pkSel pk) kept}
 
 -- Check out a branch from the same overlay. A sixth explicit mutation
 -- point, and like the others it only ever runs because you asked: the
 -- picker is the confirmation, and git's own refusal is the guardrail
 -- when the tree would be clobbered.
-openBranchPicker :: EventM Name St ()
+openBranchPicker :: Brick.EventM Types.Name Types.St ()
 openBranchPicker = do
-  st <- get
-  case stRebase st of
-    Just _ -> setMsg "mid-rebase — :continue or :abort! before switching branches"
+  st <- State.get
+  case Types.stRebase st of
+    Just _ -> Types.setMsg "mid-rebase — :continue or :abort! before switching branches"
     Nothing -> do
-      branches <- liftIO (localBranches (stRoot st))
+      branches <- MonadIO.liftIO (Git.localBranches (Types.stRoot st))
       let
-        here b = if Just b == stBranch st then "  \8592 current" else ""
+        here b = if Just b == Types.stBranch st then "  \8592 current" else ""
         -- branch · how long ago · the tip you would land on · subject
         cellsFor (b, ago, sha, subject) = [b, ago, sha, subject <> here b]
         cells = map cellsFor branches
-        widths = columnWidths [28, 15, 12] cells
-        refOf cs = fromMaybe "" (safeIdx cs 0)
+        widths = Widgets.columnWidths [28, 15, 12] cells
+        refOf cs = Maybe.fromMaybe "" (Types.safeIdx cs 0)
         rows =
           map
-            (\cs -> pickerRow (refOf cs) (columnRow widths cs) (T.unwords cs))
+            (\cs -> pickerRow (refOf cs) (Widgets.columnRow widths cs) (T.unwords cs))
             cells
       if null rows
-        then setMsg "no local branches"
-        else modify $ \s ->
+        then Types.setMsg "no local branches"
+        else State.modify $ \s ->
           s
-            { stPicker =
+            { Types.stPicker =
                 Just
-                  (refreshRowPicker (Picker PickBranch "" rows [] [] 0))
+                  (refreshRowPicker (Types.Picker Types.PickBranch "" rows [] [] 0))
             }
 
-applyCheckout :: Text -> EventM Name St ()
+applyCheckout :: T.Text -> Brick.EventM Types.Name Types.St ()
 applyCheckout branch
   | T.null branch = pure ()
   | otherwise = do
-      st <- get
-      if Just branch == stBranch st
-        then setMsg ("already on " <> branch)
+      st <- State.get
+      if Just branch == Types.stBranch st
+        then Types.setMsg ("already on " <> branch)
         else do
-          res <- liftIO (runGit (stRoot st) ["checkout", T.unpack branch])
+          res <- MonadIO.liftIO (Git.runGit (Types.stRoot st) ["checkout", T.unpack branch])
           case res of
-            Left e -> setMsg e
+            Left e -> Types.setMsg e
             Right () -> do
-              forceGitRefresh
-              setMsg ("checked out " <> branch)
+              Load.forceGitRefresh
+              Types.setMsg ("checked out " <> branch)
 
 -- Project-wide search: git grep behind the same overlay, Enter jumping
 -- straight to the hit.
-openGrepPicker :: Text -> EventM Name St ()
+openGrepPicker :: T.Text -> Brick.EventM Types.Name Types.St ()
 openGrepPicker query = do
-  st <- get
-  (matches, targets) <- liftIO (grepRepo (stRoot st) query)
-  modify $ \s ->
+  st <- State.get
+  (matches, targets) <- MonadIO.liftIO (grepRepo (Types.stRoot st) query)
+  State.modify $ \s ->
     s
-      { stPicker =
-          Just (Picker PickGrep query [] matches targets 0)
+      { Types.stPicker =
+          Just (Types.Picker Types.PickGrep query [] matches targets 0)
       }
 
 -- Land on a grep hit: open the file, select the match on its line, and
 -- prime n/N so the in-file search continues from there.
-openGrepHit :: FilePath -> Int -> Text -> EventM Name St ()
+openGrepHit :: FilePath -> Int -> T.Text -> Brick.EventM Types.Name Types.St ()
 openGrepHit path line query = do
-  openFilePath (T.pack path)
-  st <- get
-  case currentFileMay st of
+  Open.openFilePath (T.pack path)
+  st <- State.get
+  case Types.currentFileMay st of
     Just fv
-      | fvPath fv == path -> do
+      | Types.fvPath fv == path -> do
           let
-            ed = fvEd fv
-            ls = bufferLines ed
+            ed = Types.fvEd fv
+            ls = Modal.bufferLines ed
             row = max 0 (min (line - 1) (length ls - 1))
             lineText = case drop row ls of
               (l : _) -> l
@@ -309,23 +288,23 @@ openGrepHit path line query = do
             width = max 1 (T.length query)
             placed =
               ed
-                { edZipper = Z.moveCursor (row, col + width - 1) (edZipper ed)
-                , edSelAnchor = Just (row, col)
-                , edSelKind = CharSel
+                { Modal.edZipper = Z.moveCursor (row, col + width - 1) (Modal.edZipper ed)
+                , Modal.edSelAnchor = Just (row, col)
+                , Modal.edSelKind = Modal.CharSel
                 }
-          setEd (stCurF st) placed
-          modify (\s -> s {stLastSearch = query})
+          Nav.setEd (Types.stCurF st) placed
+          State.modify (\s -> s {Types.stLastSearch = query})
     _ -> pure ()
 
 -- Literal, case-sensitive, binary-skipping; capped so a short query
 -- cannot flood the overlay.
-grepRepo :: FilePath -> Text -> IO ([Text], [(FilePath, Int)])
+grepRepo :: FilePath -> T.Text -> IO ([T.Text], [(FilePath, Int)])
 grepRepo root query =
   if T.length query < 2
     then pure ([], [])
     else do
       (_, out, _) <-
-        readProcessWithExitCode
+        Process.readProcessWithExitCode
           "git"
           [ "-C"
           , root
@@ -352,71 +331,71 @@ grepRepo root query =
           let
             snippet = T.strip (T.drop 1 rest2)
             display =
-              shortPath 36 path
+              Widgets.shortPath 36 path
                 <> ":"
                 <> lineT
                 <> "  "
                 <> T.take 160 snippet
           pure (display, (T.unpack path, n))
-        parsed = mapMaybe parse hits
+        parsed = Maybe.mapMaybe parse hits
       pure (map fst parsed, map snd parsed)
 
-refreshPicker :: Picker -> Picker
+refreshPicker :: Types.Picker -> Types.Picker
 refreshPicker pk =
   let
-    q = pkInput pk
+    q = Types.pkInput pk
     scored =
-      mapMaybe (\path -> fmap (\sc -> (sc, path)) (fuzzyScore q path)) (pkAll pk)
-    ranked = take 200 (map snd (sortOn fst scored))
+      Maybe.mapMaybe (\path -> fmap (\sc -> (sc, path)) (Fuzzy.fuzzyScore q path)) (Types.pkAll pk)
+    ranked = take 200 (map snd (List.sortOn fst scored))
   in
     pk
-      { pkMatches = map (shortPath 120 . T.pack) ranked
-      , pkTargets = map (\path -> (path, 0)) ranked
-      , pkSel = 0
+      { Types.pkMatches = map (Widgets.shortPath 120 . T.pack) ranked
+      , Types.pkTargets = map (\path -> (path, 0)) ranked
+      , Types.pkSel = 0
       }
 
-handlePickerKey :: V.Event -> Picker -> EventM Name St ()
+handlePickerKey :: V.Event -> Types.Picker -> Brick.EventM Types.Name Types.St ()
 handlePickerKey ev pk =
   case ev of
-    V.EvKey V.KEsc [] -> modify (\s -> s {stPicker = Nothing})
+    V.EvKey V.KEsc [] -> State.modify (\s -> s {Types.stPicker = Nothing})
     V.EvKey V.KEnter [] -> do
-      modify (\s -> s {stPicker = Nothing})
-      forM_ (safeIdx (pkTargets pk) (pkSel pk)) (pickerChoose pk)
+      State.modify (\s -> s {Types.stPicker = Nothing})
+      Monad.forM_ (Types.safeIdx (Types.pkTargets pk) (Types.pkSel pk)) (pickerChoose pk)
     V.EvKey V.KUp [] -> pickerMove pk (-1)
     V.EvKey (V.KChar 'p') [V.MCtrl] -> pickerMove pk (-1)
     V.EvKey V.KDown [] -> pickerMove pk 1
     V.EvKey (V.KChar 'n') [V.MCtrl] -> pickerMove pk 1
-    V.EvKey V.KBS [] -> pickerRetype pk (T.dropEnd 1 (pkInput pk))
-    V.EvKey (V.KChar c) [] -> pickerRetype pk (T.snoc (pkInput pk) c)
+    V.EvKey V.KBS [] -> pickerRetype pk (T.dropEnd 1 (Types.pkInput pk))
+    V.EvKey (V.KChar c) [] -> pickerRetype pk (T.snoc (Types.pkInput pk) c)
     _ -> pure ()
 
-pickerMove :: Picker -> Int -> EventM Name St ()
+pickerMove :: Types.Picker -> Int -> Brick.EventM Types.Name Types.St ()
 pickerMove pk d =
   let
-    bound = max 0 (length (pkMatches pk) - 1)
-    next = max 0 (min bound (pkSel pk + d))
+    bound = max 0 (length (Types.pkMatches pk) - 1)
+    next = max 0 (min bound (Types.pkSel pk + d))
   in
-    modify (\s -> s {stPicker = Just pk {pkSel = next}})
+    State.modify (\s -> s {Types.stPicker = Just pk {Types.pkSel = next}})
 
-pickerRetype :: Picker -> Text -> EventM Name St ()
+pickerRetype :: Types.Picker -> T.Text -> Brick.EventM Types.Name Types.St ()
 pickerRetype pk q =
-  case pkMode pk of
-    PickFiles -> modify (\s -> s {stPicker = Just (refreshPicker pk {pkInput = q})})
-    PickGrep -> do
-      st <- get
-      (matches, targets) <- liftIO (grepRepo (stRoot st) q)
-      modify $ \s ->
-        s {stPicker = Just pk {pkInput = q, pkMatches = matches, pkTargets = targets, pkSel = 0}}
-    _ -> modify (\s -> s {stPicker = Just (refreshRowPicker pk {pkInput = q})})
+  case Types.pkMode pk of
+    Types.PickFiles -> State.modify (\s -> s {Types.stPicker = Just (refreshPicker pk {Types.pkInput = q})})
+    Types.PickGrep -> do
+      st <- State.get
+      (matches, targets) <- MonadIO.liftIO (grepRepo (Types.stRoot st) q)
+      State.modify $ \s ->
+        s {Types.stPicker = Just pk {Types.pkInput = q, Types.pkMatches = matches, Types.pkTargets = targets, Types.pkSel = 0}}
+    _ -> State.modify (\s -> s {Types.stPicker = Just (refreshRowPicker pk {Types.pkInput = q})})
 
-pickerChoose :: Picker -> (FilePath, Int) -> EventM Name St ()
+pickerChoose :: Types.Picker -> (FilePath, Int) -> Brick.EventM Types.Name Types.St ()
 pickerChoose pk (target, line) =
-  case pkMode pk of
-    PickBase -> applyBaseChoice (T.pack target)
-    PickBranch -> applyCheckout (T.pack target)
-    PickRepo -> switchRepo target
+  case Types.pkMode pk of
+    Types.PickBase -> applyBaseChoice (T.pack target)
+    Types.PickBranch -> applyCheckout (T.pack target)
+    Types.PickRepo -> Repo.switchRepo target
     _
-      | line == 0 -> openFilePath (T.pack target)
+      | line == 0 -> Open.openFilePath (T.pack target)
       | otherwise -> do
-          modify (\s -> s {stGrepNav = Just (pkInput pk, pkTargets pk, pkSel pk)})
-          openGrepHit target line (pkInput pk)
+          State.modify (\s -> s {Types.stGrepNav = Just (Types.pkInput pk, Types.pkTargets pk, Types.pkSel pk)})
+          openGrepHit target line (Types.pkInput pk)

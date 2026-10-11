@@ -216,6 +216,8 @@ executable remax
     , unix
     , vty >=6.0
     , vty-crossplatform
+  default-extensions:
+      ImportQualifiedPost
   default-language: Haskell2010
   if flag(ci)
     ghc-options: -Werror -Wcompat -Widentities -Wpartial-fields -fplugin Henforcer -fplugin-opt "Henforcer:-c./henforcer.toml"

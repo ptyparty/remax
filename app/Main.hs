@@ -2,52 +2,34 @@
 
 module Main (main) where
 
-import Control.Concurrent (threadDelay)
-import Control.Exception (IOException, finally, try)
-import Control.Monad (filterM, forM, forM_, unless, void, when)
-import Data.Char (isControl, ord)
-import Data.Foldable (toList)
-import Data.List (nub)
-import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
-import qualified Data.Set as Set
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import Data.Version (showVersion)
-import Numeric (showHex)
-import System.Directory
-  ( doesDirectoryExist
-  , getCurrentDirectory
-  , setCurrentDirectory
-  )
-import System.Environment (getArgs)
-import System.Exit (die)
-import System.FilePath
-  ( isAbsolute
-  , makeRelative
-  , normalise
-  , takeFileName
-  , (</>)
-  )
-import System.IO (hFlush, stdout)
+import Control.Concurrent qualified as Concurrent
+import Control.Exception qualified as Exception
+import Control.Monad qualified as Monad
+import Data.Char qualified as Char
+import Data.Foldable qualified as Foldable
+import Data.List qualified as List
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Set qualified as Set
+import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import Data.Version qualified as Version
+import Numeric qualified as Numeric
+import System.Directory qualified as Directory
+import System.Environment qualified as Env
+import System.Exit qualified as Exit
+import System.FilePath ((</>))
+import System.FilePath qualified as FilePath
+import System.IO qualified as SysIO
 
-import Paths_remax (version)
-import Remax.Git
-  ( ReviewMode (..)
-  , branchRoot
-  , childRepos
-  , readFileOr
-  , rebaseStatus
-  , refExists
-  , repoRoot
-  )
-import Remax.Punch
-import Remax.Store
-import Remax.UI (runReview)
-import System.Posix.Process (getParentProcessID)
+import Paths_remax qualified as Paths
+import Remax.Git qualified as Git
+import Remax.Punch qualified as Punch
+import Remax.Store qualified as Store
+import Remax.UI qualified as UI
+import System.Posix.Process qualified as Posix
 
-data ModeArg = ArgHead | ArgBase Text | ArgBranch | ArgUnstaged | ArgUntracked
+data ModeArg = ArgHead | ArgBase T.Text | ArgBranch | ArgUnstaged | ArgUntracked
 
 data Cmd
   = Review ModeArg
@@ -56,7 +38,7 @@ data Cmd
     -- is gone.
     Forget (Maybe FilePath)
   | List ListOptions
-  | Reply Text Text
+  | Reply T.Text T.Text
   | Attend
   | ShowVersion
 
@@ -75,7 +57,7 @@ data ListOptions = ListOptions
   { listFormat :: ListFormat
   , listWhen :: ListWhen
   , listStateFile :: Maybe FilePath
-  , listAwaiting :: Maybe Awaiting
+  , listAwaiting :: Maybe Store.Awaiting
   }
 
 -- A file remax keeps the last listing's fingerprint in. With one, a wait
@@ -86,14 +68,14 @@ data ListOptions = ListOptions
 
 main :: IO ()
 main = do
-  args <- getArgs
+  args <- Env.getArgs
   case parseArgs args of
-    Left err -> die err
+    Left err -> Exit.die err
     Right (mDir, cmd) -> do
-      forM_ mDir $ \dir -> do
-        there <- doesDirectoryExist dir
-        unless there $
-          die
+      Monad.forM_ mDir $ \dir -> do
+        there <- Directory.doesDirectoryExist dir
+        Monad.unless there $
+          Exit.die
             ( "No such directory: "
                 ++ dir
                 ++ "\nTo forget verdicts for a directory that is gone, run"
@@ -101,14 +83,14 @@ main = do
                 ++ dir
                 ++ " from somewhere that still exists."
             )
-        setCurrentDirectory dir
+        Directory.setCurrentDirectory dir
       case cmd of
         Review marg -> review marg
         Forget mPath -> forget mPath
         List options -> list options
         Reply target text -> reply target text
         Attend -> attend
-        ShowVersion -> putStrLn ("remax " ++ showVersion version)
+        ShowVersion -> putStrLn ("remax " ++ Version.showVersion Paths.version)
 
 -- list's flags, in either order and each at most once.
 listArgs :: [String] -> Maybe Cmd
@@ -128,7 +110,7 @@ listArgs =
               go options {listStateFile = Just path} rest
         ("--awaiting" : who : rest)
           | listAwaiting options == Nothing
-          , Just a <- parseAwaiting (T.pack who) ->
+          , Just a <- Store.parseAwaiting (T.pack who) ->
               go options {listAwaiting = Just a} rest
         _ -> Nothing
   in
@@ -199,19 +181,19 @@ review :: ModeArg -> IO ()
 review marg = do
   (root, roots, story) <- reviewStart
   mode <- case marg of
-    ArgHead -> pure (VsRef "HEAD")
-    ArgUnstaged -> pure VsIndex
-    ArgUntracked -> pure Untracked
+    ArgHead -> pure (Git.VsRef "HEAD")
+    ArgUnstaged -> pure Git.VsIndex
+    ArgUntracked -> pure Git.Untracked
     ArgBase ref -> do
-      ok <- refExists root ref
-      unless ok (die ("No such ref: " ++ T.unpack ref))
-      pure (VsRef ref)
+      ok <- Git.refExists root ref
+      Monad.unless ok (Exit.die ("No such ref: " ++ T.unpack ref))
+      pure (Git.VsRef ref)
     ArgBranch -> do
-      got <- branchRoot root
+      got <- Git.branchRoot root
       case got of
-        Left e -> die (T.unpack e)
-        Right sha -> pure (VsRef (T.take 10 sha))
-  runReview mode root roots story
+        Left e -> Exit.die (T.unpack e)
+        Right sha -> pure (Git.VsRef (T.take 10 sha))
+  UI.runReview mode root roots story
 
 -- Every repository a command should act on: the one we are inside, or —
 -- for a directory that merely holds repositories, which is what a story
@@ -223,15 +205,15 @@ review marg = do
 -- there would make the first command an agent runs fail.
 targetRepos :: IO [FilePath]
 targetRepos = do
-  got <- repoRoot
-  here <- getCurrentDirectory
+  got <- Git.repoRoot
+  here <- Directory.getCurrentDirectory
   case got of
     Just root -> pure [root]
     Nothing -> do
-      children <- childRepos here
+      children <- Git.childRepos here
       if null children
         then
-          die
+          Exit.die
             ( "Not inside a git repository, and no repositories directly under "
                 ++ here
                 ++ "."
@@ -245,16 +227,16 @@ targetRepos = do
 -- partway through a review is noticed.
 reviewStart :: IO (FilePath, [FilePath], Maybe FilePath)
 reviewStart = do
-  inRepo <- repoRoot
+  inRepo <- Git.repoRoot
   roots <- targetRepos
   story <- case inRepo of
     Just _ -> pure Nothing
-    Nothing -> fmap Just getCurrentDirectory
+    Nothing -> fmap Just Directory.getCurrentDirectory
   case roots of
     (first : _) -> do
-      paused <- filterM (fmap isJust . rebaseStatus) roots
-      pure (fromMaybe first (listToMaybe paused), roots, story)
-    [] -> die "No repository to review."
+      paused <- Monad.filterM (fmap Maybe.isJust . Git.rebaseStatus) roots
+      pure (Maybe.fromMaybe first (Maybe.listToMaybe paused), roots, story)
+    [] -> Exit.die "No repository to review."
 
 -- Forget the verdicts recorded for files under the current directory, so
 -- those changes come up for review from scratch. At the top of the
@@ -270,14 +252,14 @@ forget mPath = do
   -- standing in: from a story directory this is all of the checkouts,
   -- and refusing there is what `list` and `reply` long ago stopped doing
   roots <- targetRepos
-  here <- getCurrentDirectory
-  conn <- openStore
+  here <- Directory.getCurrentDirectory
+  conn <- Store.openStore
   let
     target = case mPath of
       Nothing -> here
       Just path
-        | isAbsolute path -> normalise path
-        | otherwise -> normalise (here </> path)
+        | FilePath.isAbsolute path -> FilePath.normalise path
+        | otherwise -> FilePath.normalise (here </> path)
     -- Three ways a target can sit against a repository, and
     -- makeRelative tells them apart: it hands back an absolute path when
     -- it cannot express one under the other.
@@ -287,21 +269,21 @@ forget mPath = do
     -- what asking only the first question gave.
     scopeIn root =
       let
-        inward = makeRelative root target
-        outward = makeRelative target root
+        inward = FilePath.makeRelative root target
+        outward = FilePath.makeRelative target root
       in
-        if not (isAbsolute inward)
+        if not (FilePath.isAbsolute inward)
           then -- target is inside this repository
             Just (if inward == "." then "" else T.pack inward)
           else
-            if not (isAbsolute outward)
+            if not (FilePath.isAbsolute outward)
               then Just "" -- the repository is inside the target
               else Nothing -- unrelated
-  found <- forM roots $ \root ->
+  found <- Monad.forM roots $ \root ->
     case scopeIn root of
       Nothing -> pure (root, "", [])
       Just scope -> do
-        rows <- repoRows conn (T.pack root)
+        rows <- Store.repoRows conn (T.pack root)
         let
           -- by path component, as :accept matches: "gen" covers gen/a.txt
           -- but not generated.hs, and naming one file exactly forgets
@@ -312,7 +294,7 @@ forget mPath = do
   let
     hits = filter (\(_, _, rows) -> not (null rows)) found
     doomedCount = sum (map (\(_, _, rows) -> length rows) hits)
-    fileCount = sum (map (\(_, _, rows) -> length (nub (map snd rows))) hits)
+    fileCount = sum (map (\(_, _, rows) -> length (List.nub (map snd rows))) hits)
     -- named as it was asked for: a path relativised against each root in
     -- turn has no single answer to report, and "." is not what anybody
     -- typed
@@ -332,17 +314,17 @@ forget mPath = do
         )
       -- named when there is more than one, so a story-wide forget says
       -- what it is about to reach into
-      when (length hits > 1) $
-        forM_ hits $ \(root, _, rows) ->
-          putStrLn ("    " ++ takeFileName root ++ ": " ++ show (length rows))
+      Monad.when (length hits > 1) $
+        Monad.forM_ hits $ \(root, _, rows) ->
+          putStrLn ("    " ++ FilePath.takeFileName root ++ ": " ++ show (length rows))
       putStrLn "  Forgetting them means reviewing those changes again from scratch."
       putStr "  Forget them? [y/n]: "
-      hFlush stdout
+      SysIO.hFlush SysIO.stdout
       answer <- getLine
       if answer == "y"
         then do
-          forM_ hits $ \(root, _, rows) ->
-            deleteFiles conn (T.pack root) (nub (map snd rows))
+          Monad.forM_ hits $ \(root, _, rows) ->
+            Store.deleteFiles conn (T.pack root) (List.nub (map snd rows))
           putStrLn ("  \10003 forgot " ++ show doomedCount ++ " line verdict(s)")
         else putStrLn "  left alone"
 
@@ -364,15 +346,15 @@ attend = do
   -- Orphaned rather than merely detached: a process started with no
   -- parent to lose has one already, and refusing to run for it would
   -- take a legitimate way of starting this away.
-  started <- getParentProcessID
+  started <- Posix.getParentProcessID
   let
     beat = do
-      parent <- getParentProcessID
-      when (parent == started) $ do
-        markPresence Working (map T.pack roots)
-        threadDelay attendBeatUs
+      parent <- Posix.getParentProcessID
+      Monad.when (parent == started) $ do
+        Store.markPresence Store.Working (map T.pack roots)
+        Concurrent.threadDelay attendBeatUs
         beat
-  beat `finally` clearWaiting
+  beat `Exception.finally` Store.clearWaiting
 
 attendBeatUs :: Int
 attendBeatUs = 1000000
@@ -391,10 +373,10 @@ list options = do
     while = listWhen options
     stateFile = listStateFile options
   roots <- targetRepos
-  conn <- openStore
+  conn <- Store.openStore
   let
     digest = do
-      rows <- mapM (punchRows conn . T.pack) roots
+      rows <- mapM (Store.punchRows conn . T.pack) roots
       pure (reviewerDigest (listAwaiting options) (concat rows))
     news before now =
       case listAwaiting options of
@@ -405,13 +387,13 @@ list options = do
       T.intercalate
         "\t"
         ( "digest/2"
-            : maybe "all" awaitingText (listAwaiting options)
+            : maybe "all" Store.awaitingText (listAwaiting options)
             : map T.pack roots
         )
     remembered = case stateFile of
       Nothing -> pure Nothing
       Just path -> do
-        got <- try (TIO.readFile path) :: IO (Either IOException Text)
+        got <- Exception.try (TIO.readFile path) :: IO (Either Exception.IOException T.Text)
         pure $ case got of
           Left _ -> Nothing
           Right raw -> case T.breakOn "\n" raw of
@@ -438,33 +420,33 @@ list options = do
           -- verdict is in the store seconds before the sentence saying
           -- what is wrong with it, and returning on it means answering
           -- before being told
-          busy <- composingNow conn (map T.pack roots)
-          unless (news before now && not busy) $ do
+          busy <- Store.composingNow conn (map T.pack roots)
+          Monad.unless (news before now && not busy) $ do
             -- re-announced rather than announced: the timestamp is what
             -- tells a session somebody is still here, so an agent that
             -- dies stops saying so without having to say anything
-            markPresence Waiting (map T.pack roots)
-            threadDelay waitPollUs
+            Store.markPresence Store.Waiting (map T.pack roots)
+            Concurrent.threadDelay waitPollUs
             settle
-      settle `finally` clearWaiting
-  forM_ stateFile $ \path -> do
+      settle `Exception.finally` Store.clearWaiting
+  Monad.forM_ stateFile $ \path -> do
     now <- digest
-    void
-      ( try (TIO.writeFile path (T.unlines (watching : Set.toList now))) ::
-          IO (Either IOException ())
+    Monad.void
+      ( Exception.try (TIO.writeFile path (T.unlines (watching : Set.toList now))) ::
+          IO (Either Exception.IOException ())
       )
-  here <- getCurrentDirectory
-  found <- mapM (\r -> fmap ((,) r) (punchRows conn (T.pack r))) roots
+  here <- Directory.getCurrentDirectory
+  found <- mapM (\r -> fmap ((,) r) (Store.punchRows conn (T.pack r))) roots
   listed <-
     mapM
       ( \(repo, rows) -> do
-          groups <- loadNoteGroups conn (T.pack repo)
+          groups <- Store.loadNoteGroups conn (T.pack repo)
           let
             wanted conversation =
-              maybe True (== conversationAwaiting conversation) (listAwaiting options)
-            shown = filter wanted (conversations repo groups rows)
-            files = nub (map conversationFile shown)
-          contents <- mapM (readFileOr "" . (repo </>) . T.unpack) files
+              maybe True (== Punch.conversationAwaiting conversation) (listAwaiting options)
+            shown = filter wanted (Punch.conversations repo groups rows)
+            files = List.nub (map Punch.conversationFile shown)
+          contents <- mapM (Git.readFileOr "" . (repo </>) . T.unpack) files
           let
             fileLines = Map.fromList (zip files (map T.lines contents))
           pure (repo, map (describe fileLines) shown)
@@ -472,7 +454,7 @@ list options = do
       found
   let
     asJson = fmt == ListJson
-    subjects = commitSubjects (concatMap snd found)
+    subjects = Punch.commitSubjects (concatMap snd found)
     nonEmpty = filter (not . null . snd) listed
     scope = case roots of
       [only] -> only
@@ -484,63 +466,63 @@ list options = do
         then putStrLn $
           case listAwaiting options of
             Nothing -> "No flagged or questioned lines recorded for this repository."
-            Just party -> "No conversations awaiting " ++ T.unpack (awaitingText party) ++ "."
-        else forM_ nonEmpty $ \(repo, described) -> do
+            Just party -> "No conversations awaiting " ++ T.unpack (Store.awaitingText party) ++ "."
+        else Monad.forM_ nonEmpty $ \(repo, described) -> do
           -- name the repository only when there is more than one in
           -- play, so a single-repo listing reads exactly as before
-          when (length roots > 1) $
-            putStrLn ("── " ++ takeFileName repo ++ " ──")
+          Monad.when (length roots > 1) $
+            putStrLn ("── " ++ FilePath.takeFileName repo ++ " ──")
           printConversations subjects described
 
 data Described = Described
-  { describedConversation :: Conversation
-  , describedLinesInFile :: Maybe LinesInFile
+  { describedConversation :: Punch.Conversation
+  , describedLinesInFile :: Maybe Punch.LinesInFile
   }
 
-describe :: Map.Map Text [Text] -> Conversation -> Described
+describe :: Map.Map T.Text [T.Text] -> Punch.Conversation -> Described
 describe fileLines conversation =
   Described
     { describedConversation = conversation
     , describedLinesInFile =
-        linesInFile
-          (Map.findWithDefault [] (conversationFile conversation) fileLines)
-          (conversationLines conversation)
+        Punch.linesInFile
+          (Map.findWithDefault [] (Punch.conversationFile conversation) fileLines)
+          (Punch.conversationLines conversation)
     }
 
-printConversations :: Map.Map Text Text -> [Described] -> IO ()
+printConversations :: Map.Map T.Text T.Text -> [Described] -> IO ()
 printConversations subjects described =
-  forM_ described $ \(Described conversation inFile) -> do
+  Monad.forM_ described $ \(Described conversation inFile) -> do
     TIO.putStrLn
-      ( conversationFile conversation
+      ( Punch.conversationFile conversation
           <> "  ("
-          <> conversationUpdatedAt conversation
+          <> Punch.conversationUpdatedAt conversation
           <> ", awaiting "
-          <> awaitingText (conversationAwaiting conversation)
-          <> maybe "" (\l -> ", lines in file: " <> linesInFileText l) inFile
+          <> Store.awaitingText (Punch.conversationAwaiting conversation)
+          <> maybe "" (\l -> ", lines in file: " <> Punch.linesInFileText l) inFile
           <> ")"
       )
-    forM_ (conversationLines conversation) $ \line -> do
+    Monad.forM_ (Punch.conversationLines conversation) $ \line -> do
       let
-        position = case punchLineNumber line of
+        position = case Punch.punchLineNumber line of
           Just n -> " :" <> T.pack (show n)
           Nothing -> ""
       TIO.putStrLn
         ( "    "
-            <> verdictText (punchLineVerdict line)
+            <> Store.verdictText (Punch.punchLineVerdict line)
             <> position
             <> "  "
-            <> punchLineText line
+            <> Punch.punchLineText line
         )
-    forM_ (conversationThread conversation) $ \post ->
-      case T.lines (postBody post) of
+    Monad.forM_ (Punch.conversationThread conversation) $ \post ->
+      case T.lines (Store.postBody post) of
         [] -> pure ()
         (firstLine : more) -> do
           let
-            label = postAuthor post <> ": "
+            label = Store.postAuthor post <> ": "
             indent = T.replicate (T.length label) " "
           TIO.putStrLn ("    " <> label <> firstLine)
-          forM_ more (\l -> TIO.putStrLn ("    " <> indent <> l))
-    forM_ (conversationCommitSha conversation) $ \sha ->
+          Monad.forM_ more (\l -> TIO.putStrLn ("    " <> indent <> l))
+    Monad.forM_ (Punch.conversationCommitSha conversation) $ \sha ->
       TIO.putStrLn
         ( "    commit: "
             <> sha
@@ -553,21 +535,21 @@ printConversations subjects described =
 -- An id belongs to exactly one repository — it hashes the repo path
 -- along with the lines — so from a directory of checkouts we can simply
 -- offer the id to each and let the one that owns it answer.
-reply :: Text -> Text -> IO ()
+reply :: T.Text -> T.Text -> IO ()
 reply target text = do
   roots <- targetRepos
-  conn <- openStore
+  conn <- Store.openStore
   attached <-
-    mapM (\r -> fmap ((,) r) (appendAgentPost conn (T.pack r) "agent" target text)) roots
+    mapM (\r -> fmap ((,) r) (Store.appendAgentPost conn (T.pack r) "agent" target text)) roots
   case filter ((> 0) . snd) attached of
-    [] -> die "No such conversation recorded for this repository."
+    [] -> Exit.die "No such conversation recorded for this repository."
     hits ->
-      forM_ hits $ \(repo, n) ->
+      Monad.forM_ hits $ \(repo, n) ->
         putStrLn
           ( "reply attached to "
               ++ show n
               ++ " line(s)"
-              ++ (if length roots > 1 then " in " ++ takeFileName repo else "")
+              ++ (if length roots > 1 then " in " ++ FilePath.takeFileName repo else "")
           )
 
 -- JSON output ------------------------------------------------------------------
@@ -578,31 +560,31 @@ reply target text = do
 -- Conversations have their own repo, because a listing can now span
 -- several: an agent aggregating a story's feedback needs to know which
 -- checkout each conversation lives in before it can act on any of it.
-punchJson :: Text -> Map.Map Text Text -> [(FilePath, [Described])] -> Text
+punchJson :: T.Text -> Map.Map T.Text T.Text -> [(FilePath, [Described])] -> T.Text
 punchJson scope subjects listed =
   let
     lineJson line =
       jsonObject
-        [ ("line_no", maybe "null" (T.pack . show) (punchLineNumber line))
-        , ("line", jsonString (punchLineText line))
-        , ("verdict", jsonString (verdictText (punchLineVerdict line)))
+        [ ("line_no", maybe "null" (T.pack . show) (Punch.punchLineNumber line))
+        , ("line", jsonString (Punch.punchLineText line))
+        , ("verdict", jsonString (Store.verdictText (Punch.punchLineVerdict line)))
         ]
     conversationJson (Described conversation inFile) =
       jsonObject
-        [ ("id", jsonString (groupIdToText (conversationId conversation)))
-        , ("repo", jsonString (T.pack (conversationRepo conversation)))
-        , ("file", jsonString (conversationFile conversation))
-        , ("commit_sha", maybe "null" jsonString (conversationCommitSha conversation))
-        , ("lines", jsonArray (map lineJson (toList (conversationLines conversation))))
-        , ("thread", threadJson (conversationThread conversation))
-        , ("awaiting", jsonString (awaitingText (conversationAwaiting conversation)))
-        , ("lines_in_file", maybe "null" (jsonString . linesInFileText) inFile)
-        , ("updated_at", jsonString (conversationUpdatedAt conversation))
+        [ ("id", jsonString (Store.groupIdToText (Punch.conversationId conversation)))
+        , ("repo", jsonString (T.pack (Punch.conversationRepo conversation)))
+        , ("file", jsonString (Punch.conversationFile conversation))
+        , ("commit_sha", maybe "null" jsonString (Punch.conversationCommitSha conversation))
+        , ("lines", jsonArray (map lineJson (Foldable.toList (Punch.conversationLines conversation))))
+        , ("thread", threadJson (Punch.conversationThread conversation))
+        , ("awaiting", jsonString (Store.awaitingText (Punch.conversationAwaiting conversation)))
+        , ("lines_in_file", maybe "null" (jsonString . Punch.linesInFileText) inFile)
+        , ("updated_at", jsonString (Punch.conversationUpdatedAt conversation))
         ]
     shown = concatMap snd listed
     listedShas =
       Set.fromList
-        (mapMaybe (conversationCommitSha . describedConversation) shown)
+        (Maybe.mapMaybe (Punch.conversationCommitSha . describedConversation) shown)
     commits =
       jsonObject
         ( map
@@ -620,44 +602,44 @@ punchJson scope subjects listed =
         )
       ]
 
-reviewerDigest :: Maybe Awaiting -> [PunchRow] -> Set.Set Text
+reviewerDigest :: Maybe Store.Awaiting -> [Store.PunchRow] -> Set.Set T.Text
 reviewerDigest party rows =
   let
-    wanted row = maybe True (== awaiting (punchThread row)) party
+    wanted row = maybe True (== Store.awaiting (Store.punchThread row)) party
     rowJson row =
       jsonObject
-        [ ("key", jsonString (lineKeyToText (punchKey row)))
-        , ("file", jsonString (punchFile row))
-        , ("commit_sha", maybe "null" jsonString (punchCommitSha row))
-        , ("line", jsonString (punchLine row))
-        , ("verdict", jsonString (verdictText (punchVerdict row)))
-        , ("thread", threadJson (filter isReviewerPost (punchThread row)))
+        [ ("key", jsonString (Store.lineKeyToText (Store.punchKey row)))
+        , ("file", jsonString (Store.punchFile row))
+        , ("commit_sha", maybe "null" jsonString (Store.punchCommitSha row))
+        , ("line", jsonString (Store.punchLine row))
+        , ("verdict", jsonString (Store.verdictText (Store.punchVerdict row)))
+        , ("thread", threadJson (filter Store.isReviewerPost (Store.punchThread row)))
         ]
   in
     Set.fromList (map rowJson (filter wanted rows))
 
-threadJson :: [Post] -> Text
+threadJson :: [Store.Post] -> T.Text
 threadJson posts =
   let
     one post =
       jsonObject
-        [ ("author", jsonString (postAuthor post))
-        , ("body", jsonString (postBody post))
+        [ ("author", jsonString (Store.postAuthor post))
+        , ("body", jsonString (Store.postBody post))
         ]
   in
     jsonArray (map one posts)
 
-jsonArray :: [Text] -> Text
+jsonArray :: [T.Text] -> T.Text
 jsonArray values = "[" <> T.intercalate ", " values <> "]"
 
-jsonObject :: [(Text, Text)] -> Text
+jsonObject :: [(T.Text, T.Text)] -> T.Text
 jsonObject fields =
   let
     field (k, v) = jsonString k <> ": " <> v
   in
     "{" <> T.intercalate ", " (map field fields) <> "}"
 
-jsonString :: Text -> Text
+jsonString :: T.Text -> T.Text
 jsonString t =
   let
     escape c = case c of
@@ -667,9 +649,9 @@ jsonString t =
       '\t' -> "\\t"
       '\r' -> "\\r"
       _
-        | isControl c ->
+        | Char.isControl c ->
             let
-              hex = showHex (ord c) ""
+              hex = Numeric.showHex (Char.ord c) ""
             in
               T.pack ("\\u" ++ replicate (4 - length hex) '0' ++ hex)
         | otherwise -> T.singleton c

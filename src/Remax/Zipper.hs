@@ -29,8 +29,7 @@ module Remax.Zipper
   , deletePrevChar
   ) where
 
-import Data.Text (Text)
-import qualified Data.Text as T
+import Data.Text qualified as T
 
 -- Invariant: the buffer always holds at least one line (tzLeft/tzRight
 -- form the current one); tzAbove is reversed. tzAboveLen and tzBelowLen
@@ -39,45 +38,45 @@ import qualified Data.Text as T
 -- frame, and walking a million-line list twice a redraw is the kind of
 -- cost that only shows up on the files least able to afford it.
 data TextZipper a = TextZipper
-  { tzAbove :: [Text]
+  { tzAbove :: [T.Text]
   , tzAboveLen :: !Int
-  , tzLeft :: Text
-  , tzRight :: Text
-  , tzBelow :: [Text]
+  , tzLeft :: T.Text
+  , tzRight :: T.Text
+  , tzBelow :: [T.Text]
   , tzBelowLen :: !Int
   }
 
 -- The second argument mirrors Data.Text.Zipper's line limit; the review
 -- buffer never limits lines, so it is accepted and ignored.
-textZipper :: [Text] -> Maybe Int -> TextZipper Text
+textZipper :: [T.Text] -> Maybe Int -> TextZipper T.Text
 textZipper ls _limit =
   case ls of
     [] -> TextZipper [] 0 T.empty T.empty [] 0
     (first : rest) -> TextZipper [] 0 T.empty first rest (length rest)
 
-getText :: TextZipper Text -> [Text]
+getText :: TextZipper T.Text -> [T.Text]
 getText tz =
   reverse (tzAbove tz) ++ (currentLine tz : tzBelow tz)
 
 -- O(1), and always equal to length (getText tz).
-lineCount :: TextZipper Text -> Int
+lineCount :: TextZipper T.Text -> Int
 lineCount tz = tzAboveLen tz + 1 + tzBelowLen tz
 
 -- The cursor's line and everything above it, nearest first. tzAbove is
 -- already held in that order, so a search upward from the cursor walks
 -- only as far as its answer instead of rebuilding the whole buffer to
 -- look at the near end of it.
-linesUpward :: TextZipper Text -> [Text]
+linesUpward :: TextZipper T.Text -> [T.Text]
 linesUpward tz = currentLine tz : tzAbove tz
 
-currentLine :: TextZipper Text -> Text
+currentLine :: TextZipper T.Text -> T.Text
 currentLine tz = tzLeft tz <> tzRight tz
 
-cursorPosition :: TextZipper Text -> (Int, Int)
+cursorPosition :: TextZipper T.Text -> (Int, Int)
 cursorPosition tz = (tzAboveLen tz, T.length (tzLeft tz))
 
 -- Clamps to the buffer, like the library it replaces.
-moveCursor :: (Int, Int) -> TextZipper Text -> TextZipper Text
+moveCursor :: (Int, Int) -> TextZipper T.Text -> TextZipper T.Text
 moveCursor (row, col) tz =
   let
     total = lineCount tz
@@ -91,7 +90,7 @@ moveCursor (row, col) tz =
   in
     TextZipper above r (T.take c line) (T.drop c line) below (total - r - 1)
 
-moveLeft :: TextZipper Text -> TextZipper Text
+moveLeft :: TextZipper T.Text -> TextZipper T.Text
 moveLeft tz =
   if T.null (tzLeft tz)
     then tz
@@ -101,13 +100,13 @@ moveLeft tz =
         , tzRight = T.cons (T.last (tzLeft tz)) (tzRight tz)
         }
 
-moveRight :: TextZipper Text -> TextZipper Text
+moveRight :: TextZipper T.Text -> TextZipper T.Text
 moveRight tz =
   case T.uncons (tzRight tz) of
     Nothing -> tz
     Just (c, rest) -> tz {tzLeft = T.snoc (tzLeft tz) c, tzRight = rest}
 
-moveUp :: TextZipper Text -> TextZipper Text
+moveUp :: TextZipper T.Text -> TextZipper T.Text
 moveUp tz =
   case tzAbove tz of
     [] -> tz
@@ -123,7 +122,7 @@ moveUp tz =
           (currentLine tz : tzBelow tz)
           (tzBelowLen tz + 1)
 
-moveDown :: TextZipper Text -> TextZipper Text
+moveDown :: TextZipper T.Text -> TextZipper T.Text
 moveDown tz =
   case tzBelow tz of
     [] -> tz
@@ -139,13 +138,13 @@ moveDown tz =
           rest
           (tzBelowLen tz - 1)
 
-gotoBOL :: TextZipper Text -> TextZipper Text
+gotoBOL :: TextZipper T.Text -> TextZipper T.Text
 gotoBOL tz = tz {tzLeft = T.empty, tzRight = currentLine tz}
 
-gotoEOL :: TextZipper Text -> TextZipper Text
+gotoEOL :: TextZipper T.Text -> TextZipper T.Text
 gotoEOL tz = tz {tzLeft = currentLine tz, tzRight = T.empty}
 
-insertChar :: Char -> TextZipper Text -> TextZipper Text
+insertChar :: Char -> TextZipper T.Text -> TextZipper T.Text
 insertChar ch tz =
   if ch == '\n'
     then breakLine tz
@@ -153,7 +152,7 @@ insertChar ch tz =
 
 -- Pasted content may span lines; everything else is one line-local
 -- append per segment.
-insertMany :: Text -> TextZipper Text -> TextZipper Text
+insertMany :: T.Text -> TextZipper T.Text -> TextZipper T.Text
 insertMany t tz =
   case T.split (== '\n') t of
     [] -> tz
@@ -168,7 +167,7 @@ insertMany t tz =
             , tzLeft = final
             }
 
-breakLine :: TextZipper Text -> TextZipper Text
+breakLine :: TextZipper T.Text -> TextZipper T.Text
 breakLine tz =
   tz
     { tzAbove = tzLeft tz : tzAbove tz
@@ -178,7 +177,7 @@ breakLine tz =
 
 -- Delete at the cursor; at end of line the next line joins up, the way
 -- editors treat Del.
-deleteChar :: TextZipper Text -> TextZipper Text
+deleteChar :: TextZipper T.Text -> TextZipper T.Text
 deleteChar tz =
   case T.uncons (tzRight tz) of
     Just (_, rest) -> tz {tzRight = rest}
@@ -190,7 +189,7 @@ deleteChar tz =
 
 -- Backspace; at column zero the line joins the one above, cursor at the
 -- junction.
-deletePrevChar :: TextZipper Text -> TextZipper Text
+deletePrevChar :: TextZipper T.Text -> TextZipper T.Text
 deletePrevChar tz =
   if T.null (tzLeft tz)
     then case tzAbove tz of

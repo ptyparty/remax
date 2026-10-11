@@ -6,57 +6,31 @@ module Remax.UI.Draw.Body
   , renderFile
   ) where
 
-import Brick
-  ( AttrName
-  , Location (..)
-  , Padding (Max)
-  , Widget
-  , hBox
-  , padBottom
-  , padRight
-  , raw
-  , showCursor
-  , txt
-  , vBox
-  , visibleRegion
-  , withAttr
-  )
-import Brick.Types
-  ( Size (Fixed, Greedy)
-  , Widget (Widget)
-  , ctxAttrMap
-  , ctxAttrName
-  , getContext
-  , render
-  )
-import Data.List (zipWith4)
-import qualified Data.Map.Strict as Map
-import Data.Maybe
-  ( fromMaybe
-  , listToMaybe
-  , mapMaybe
-  )
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Graphics.Vty as V
-import Remax.Config
-import Remax.DiffModel
-import Remax.Modal
-import Remax.Store
-import Remax.UI.Core.Attrs
-import Remax.UI.Core.Ink
-import Remax.UI.Core.Types
-import Remax.UI.Core.Verdict
-import Remax.UI.Core.View
-import Remax.UI.Core.Widgets
-import Remax.UI.Core.WordDiff
+import Brick qualified as Brick
+import Brick.Types qualified as BrickTypes
+import Data.List qualified as List
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Text qualified as T
+import Graphics.Vty qualified as V
+import Remax.Config qualified as Config
+import Remax.DiffModel qualified as DiffModel
+import Remax.Modal qualified as Modal
+import Remax.Store qualified as Store
+import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Ink qualified as Ink
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Verdict qualified as Verdict
+import Remax.UI.Core.View qualified as View
+import Remax.UI.Core.Widgets qualified as Widgets
+import Remax.UI.Core.WordDiff qualified as WordDiff
 
-idleBody :: St -> Widget Name
+idleBody :: Types.St -> BrickTypes.Widget Types.Name
 idleBody st =
   let
-    keys = cfgKeys (stConfig st)
+    keys = Config.cfgKeys (Types.stConfig st)
     hint =
-      if length (stRoots st) > 1
+      if length (Types.stRoots st) > 1
         then "  watching for changes · gr switches repository · :base"
         else "  watching for changes · :base REF or :mode switches the view"
   in
@@ -66,24 +40,24 @@ idleBody st =
     -- again. It used to sit at the end of the line above, behind three
     -- other things.
 
-    padBottom Max . padRight Max $
-      vBox
-        [ txt " "
-        , withAttr doneMarkAttr (txt "  ✓ all clear — nothing to review")
-        , txt " "
-        , withAttr hintAttr (txt hint)
+    Brick.padBottom Brick.Max . Brick.padRight Brick.Max $
+      Brick.vBox
+        [ Brick.txt " "
+        , Brick.withAttr Attrs.doneMarkAttr (Brick.txt "  ✓ all clear — nothing to review")
+        , Brick.txt " "
+        , Brick.withAttr Attrs.hintAttr (Brick.txt hint)
         , -- the key lit and the word dim, the way the space menu reads,
           -- rather than in the colour that everywhere else means reviewed
-          hBox
-            [ withAttr noteInlineAttr (txt ("  " <> quitKeys keys))
-            , withAttr hintAttr (txt " quits")
+          Brick.hBox
+            [ Brick.withAttr Attrs.noteInlineAttr (Brick.txt ("  " <> Types.quitKeys keys))
+            , Brick.withAttr Attrs.hintAttr (Brick.txt " quits")
             ]
         ]
 
 data RowItem = RowItem
-  { riRow :: RowR
+  { riRow :: DiffModel.RowR
   , riPoint :: Int
-  , riNotes :: [NoteLine]
+  , riNotes :: [Types.NoteLine]
   , riEmph :: [(Int, Int)]
   }
 
@@ -92,60 +66,60 @@ data WindowView = WindowView
   , wvHi :: Int
   , wvCursorOut :: Int
   , wvItems :: [RowItem]
-  , wvNoteRows :: [[NoteLine]]
+  , wvNoteRows :: [[Types.NoteLine]]
   }
 
 data RowPaint = RowPaint
-  { rpPens :: PenSet
-  , rpRowPens :: PenSet
-  , rpBarName :: AttrName
+  { rpPens :: Ink.PenSet
+  , rpRowPens :: Ink.PenSet
+  , rpBarName :: Brick.AttrName
   , rpBarGlyph :: Char
   , rpNumW :: Int
   , rpHOff :: Int
   , rpIsCursor :: Bool
-  , rpVerdict :: Maybe Verdict
+  , rpVerdict :: Maybe Store.Verdict
   }
 
-renderFile :: Int -> Int -> St -> FileView -> Widget Name
+renderFile :: Int -> Int -> Types.St -> Types.FileView -> BrickTypes.Widget Types.Name
 renderFile paneWidth screenRows st fv =
   let
     view = windowView paneWidth screenRows st fv
-    numW = gutterWidth fv
-    curCol = snd (cursorRC (fvEd fv))
+    numW = View.gutterWidth fv
+    curCol = snd (Modal.cursorRC (Types.fvEd fv))
     -- how far the whole window is shifted right; every line shifts in
     -- step, so it is worked out once rather than per row
-    hOff = hScrollFor paneWidth numW curCol
+    hOff = View.hScrollFor paneWidth numW curCol
     -- keep a margin of context visible around the cursor, so the view
     -- scrolls before the cursor reaches the top or bottom edge; virtual
     -- note rows above the cursor shift where it lands in the rendering
     cursorIn = wvCursorOut view - wvLo view
     notesAbove = sum (map length (take cursorIn (wvNoteRows view)))
     cursorRender = cursorIn + notesAbove
-    scrollOff = cfgScrolloff (stConfig st)
+    scrollOff = Config.cfgScrolloff (Types.stConfig st)
     marginTop = max 0 (cursorRender - scrollOff)
     marginHeight = cursorRender + scrollOff - marginTop + 1
   in
-    Widget Greedy Fixed $ do
-      ctx <- getContext
+    BrickTypes.Widget BrickTypes.Greedy BrickTypes.Fixed $ do
+      ctx <- BrickTypes.getContext
       let
-        pens = PenSet (ctxAttrName ctx) (ctxAttrMap ctx)
+        pens = Ink.PenSet (BrickTypes.ctxAttrName ctx) (BrickTypes.ctxAttrMap ctx)
         blocks = map (rowImages paneWidth st fv pens numW hOff) (wvItems view)
-        bodyImg = raw (composeBody st fv screenRows (wvHi view) pens blocks)
+        bodyImg = Brick.raw (composeBody st fv screenRows (wvHi view) pens blocks)
         placed = case cursorScreenRow blocks of
           Just y ->
-            showCursor TheCursor (Location (numW + 5 + curCol - hOff, y)) bodyImg
+            Brick.showCursor Types.TheCursor (Brick.Location (numW + 5 + curCol - hOff, y)) bodyImg
           Nothing -> bodyImg
-      render (visibleRegion (Location (0, marginTop)) (1, marginHeight) placed)
+      BrickTypes.render (Brick.visibleRegion (Brick.Location (0, marginTop)) (1, marginHeight) placed)
 
 -- Which display row the view keeps in sight, and where the window
 -- that carries it starts. lo is the body's origin: nothing above it
 -- is drawn, so the pane never asks brick for a row it cannot reach.
-windowView :: Int -> Int -> St -> FileView -> WindowView
+windowView :: Int -> Int -> Types.St -> Types.FileView -> WindowView
 windowView paneWidth screenRows st fv =
   let
-    rows = fvRows fv
-    (cursorOut, lo) = bodyWindow screenRows st fv
-    hi = min (fvRowCount fv) (lo + windowSpanFor screenRows)
+    rows = Types.fvRows fv
+    (cursorOut, lo) = View.bodyWindow screenRows st fv
+    hi = min (Types.fvRowCount fv) (lo + View.windowSpanFor screenRows)
     -- one walk to the window, shared by everything that reads it
     fromLo = drop lo rows
     windowed = take (hi - lo) fromLo
@@ -156,22 +130,22 @@ windowView paneWidth screenRows st fv =
     -- the row just past it: the first real row that follows, or the end
     -- of the buffer when nothing does.
     seedPoint =
-      case mapMaybe rNewRow beyond of
+      case Maybe.mapMaybe DiffModel.rNewRow beyond of
         (p : _) -> p
-        [] -> lastRestingRow fv
+        [] -> View.lastRestingRow fv
     points =
-      drop 1 (scanr (\row acc -> fromMaybe acc (rNewRow row)) seedPoint windowed)
+      drop 1 (scanr (\row acc -> Maybe.fromMaybe acc (DiffModel.rNewRow row)) seedPoint windowed)
     noteRows =
-      take (hi - lo) (drop lo (shownNoteLines (noteTextWidth paneWidth fv) st rows))
+      take (hi - lo) (drop lo (View.shownNoteLines (View.noteTextWidth paneWidth fv) st rows))
     -- worked out once for the whole file when the rows were built, so
     -- the marks are the same wherever the window happens to sit
-    emphs = take (hi - lo) (drop lo (fvEmph fv))
+    emphs = take (hi - lo) (drop lo (Types.fvEmph fv))
   in
     WindowView
       { wvLo = lo
       , wvHi = hi
       , wvCursorOut = cursorOut
-      , wvItems = zipWith4 RowItem windowed points noteRows emphs
+      , wvItems = List.zipWith4 RowItem windowed points noteRows emphs
       , wvNoteRows = noteRows
       }
 
@@ -179,54 +153,54 @@ windowView paneWidth screenRows st fv =
 -- it, paired with whether the cursor sits on this line. Counting the
 -- cursor's screen row off the images that precede it is how the
 -- cursor stays with its line whatever the notes above it do.
-rowImages :: Int -> St -> FileView -> PenSet -> Int -> Int -> RowItem -> ([V.Image], Bool)
+rowImages :: Int -> Types.St -> Types.FileView -> Ink.PenSet -> Int -> Int -> RowItem -> ([V.Image], Bool)
 rowImages paneWidth st fv pens numW hOff item =
   let
     r = riRow item
-    ed = fvEd fv
-    curH = clampH (fvRuns fv) (stCurH st)
-    isCurRun = rRunIx r == Just curH
-    isCursor = rNewRow r == Just (fst (cursorRC ed))
-    inSel = rowSelected (selectionRows ed) r (riPoint item)
+    ed = Types.fvEd fv
+    curH = Types.clampH (Types.fvRuns fv) (Types.stCurH st)
+    isCurRun = DiffModel.rRunIx r == Just curH
+    isCursor = DiffModel.rNewRow r == Just (fst (Modal.cursorRC ed))
+    inSel = rowSelected (Modal.selectionRows ed) r (riPoint item)
     paint =
       RowPaint
         { rpPens = pens
         , -- a selected line reads every attribute it draws against a map
           -- whose default is the selection, so tokens that set only a
           -- foreground pick the highlight up behind them
-          rpRowPens = if inSel then penUnder selAttr pens else pens
+          rpRowPens = if inSel then Ink.penUnder Attrs.selAttr pens else pens
         , -- the first gutter column doubles as the border between tray
           -- and body: drawn on every row, in the highlight color across
           -- the current hunk's rows; the second column carries the
           -- line's status, so neither ever hides the other
-          rpBarName = if isCurRun then curRunAttr else borderAttr
+          rpBarName = if isCurRun then Attrs.curRunAttr else Attrs.borderAttr
         , rpBarGlyph = if isCurRun then '\9612' else '\9614' -- wide ▌, thin ▎
         , rpNumW = numW
         , rpHOff = hOff
         , rpIsCursor = isCursor
         , rpVerdict =
-            listToMaybe (mapMaybe (`Map.lookup` stVerdicts st) (rowFeedbackKeys r))
+            Maybe.listToMaybe (Maybe.mapMaybe (`Map.lookup` Types.stVerdicts st) (Verdict.rowFeedbackKeys r))
         }
     -- reviewed lines keep their full syntax colors; the gutter dot
     -- and the tray checkmark already say "answered for", and dimming
     -- whole regions made the buffer feel murky
     lineImg =
-      spanInk
+      Ink.spanInk
         paneWidth
         [ barInk paint
         , statusInk paint r
         , numInk paint r
         , markInk paint r
-        , contentInk paint (charSelection ed) (riEmph item) r
+        , contentInk paint (Modal.charSelection ed) (riEmph item) r
         ]
   in
     (lineImg : map (noteInk paneWidth paint) (riNotes item), isCursor)
 
-rowSelected :: Maybe (Int, Int) -> RowR -> Int -> Bool
+rowSelected :: Maybe (Int, Int) -> DiffModel.RowR -> Int -> Bool
 rowSelected lineSel r point =
   case lineSel of
     Nothing -> False
-    Just (a, b) -> case rNewRow r of
+    Just (a, b) -> case DiffModel.rNewRow r of
       Just nr -> nr >= a && nr <= b
       -- a removed line counts when its resting point does,
       -- matching how verdicts scope it
@@ -234,10 +208,10 @@ rowSelected lineSel r point =
 
 -- the column span of the char selection on one display row: start
 -- col, and Nothing for "through end of line"
-rowSpan :: Maybe ((Int, Int), (Int, Int)) -> RowR -> Maybe (Int, Maybe Int)
+rowSpan :: Maybe ((Int, Int), (Int, Int)) -> DiffModel.RowR -> Maybe (Int, Maybe Int)
 rowSpan charSel r = do
   ((lr, lc), (hr, hc)) <- charSel
-  nr <- rNewRow r
+  nr <- DiffModel.rNewRow r
   if nr < lr || nr > hr
     then Nothing
     else
@@ -248,106 +222,106 @@ rowSpan charSel r = do
 
 barInk :: RowPaint -> Int -> V.Image
 barInk paint left =
-  inkT left (penFor (rpRowPens paint) (rpBarName paint)) (T.singleton (rpBarGlyph paint))
+  Ink.inkT left (Ink.penFor (rpRowPens paint) (rpBarName paint)) (T.singleton (rpBarGlyph paint))
 
 -- the cursor paints this cell yellow and renders the verdict
 -- glyph in black over it — shape carries the meaning where the
 -- colors would fight the background (• pending, ✓ reviewed,
 -- ! flagged, ? questioned)
-statusInk :: RowPaint -> RowR -> Int -> V.Image
+statusInk :: RowPaint -> DiffModel.RowR -> Int -> V.Image
 statusInk paint r left =
   let
     rowPens = rpRowPens paint
     statusPick = case rpVerdict paint of
-      Just Flagged -> Just ('!', flagMarkAttr)
-      Just Questioned -> Just ('?', questionMarkAttr)
-      Just Reviewed -> Just ('\10003', doneMarkAttr)
+      Just Store.Flagged -> Just ('!', Attrs.flagMarkAttr)
+      Just Store.Questioned -> Just ('?', Attrs.questionMarkAttr)
+      Just Store.Reviewed -> Just ('\10003', Attrs.doneMarkAttr)
       Nothing ->
-        case rKey r of
-          Just _ -> Just ('\8226', pendingMarkAttr)
+        case DiffModel.rKey r of
+          Just _ -> Just ('\8226', Attrs.pendingMarkAttr)
           Nothing -> Nothing
   in
     case (rpIsCursor paint, statusPick) of
       (True, Just (c, a)) ->
-        inkT left (penFor (penUnder cursorMarkAttr rowPens) a) (T.singleton c)
-      (True, Nothing) -> inkT left (penFor rowPens cursorMarkAttr) " "
-      (False, Just (c, a)) -> inkT left (penFor rowPens a) (T.singleton c)
-      (False, Nothing) -> inkT left (penPlain rowPens) " "
+        Ink.inkT left (Ink.penFor (Ink.penUnder Attrs.cursorMarkAttr rowPens) a) (T.singleton c)
+      (True, Nothing) -> Ink.inkT left (Ink.penFor rowPens Attrs.cursorMarkAttr) " "
+      (False, Just (c, a)) -> Ink.inkT left (Ink.penFor rowPens a) (T.singleton c)
+      (False, Nothing) -> Ink.inkT left (Ink.penPlain rowPens) " "
 
-numInk :: RowPaint -> RowR -> Int -> V.Image
+numInk :: RowPaint -> DiffModel.RowR -> Int -> V.Image
 numInk paint r left =
   let
     rowPens = rpRowPens paint
     numW = rpNumW paint
     numAttr
-      | rpIsCursor paint = lineNrCurAttr
-      | rpVerdict paint == Just Reviewed = lineNrDoneAttr
-      | otherwise = lineNrAttr
+      | rpIsCursor paint = Attrs.lineNrCurAttr
+      | rpVerdict paint == Just Store.Reviewed = Attrs.lineNrDoneAttr
+      | otherwise = Attrs.lineNrAttr
   in
-    case rNewRow r of
+    case DiffModel.rNewRow r of
       Just nr ->
-        inkT left (penFor rowPens numAttr) (T.justifyRight numW ' ' (tshow (nr + 1)) <> " ")
+        Ink.inkT left (Ink.penFor rowPens numAttr) (T.justifyRight numW ' ' (Types.tshow (nr + 1)) <> " ")
       Nothing ->
-        inkT left (penFor rowPens lineNrAttr) (T.replicate (numW + 1) " ")
+        Ink.inkT left (Ink.penFor rowPens Attrs.lineNrAttr) (T.replicate (numW + 1) " ")
 
-markInk :: RowPaint -> RowR -> Int -> V.Image
+markInk :: RowPaint -> DiffModel.RowR -> Int -> V.Image
 markInk paint r left =
-  inkT left (penFor (rpRowPens paint) (markerAttrFor (rMark r))) (T.pack [rMark r, ' '])
+  Ink.inkT left (Ink.penFor (rpRowPens paint) (Ink.markerAttrFor (DiffModel.rMark r))) (T.pack [DiffModel.rMark r, ' '])
 
 -- content shifted hOff columns left, for reading long lines:
 -- the view follows the cursor horizontally while the gutter
 -- stays pinned
-contentInk :: RowPaint -> Maybe ((Int, Int), (Int, Int)) -> [(Int, Int)] -> RowR -> Int -> V.Image
+contentInk :: RowPaint -> Maybe ((Int, Int), (Int, Int)) -> [(Int, Int)] -> DiffModel.RowR -> Int -> V.Image
 contentInk paint charSel emph r left =
   let
     hOff = rpHOff paint
     rowPens = rpRowPens paint
-    marks = shiftSpans hOff emph
-    sliced = snd (splitAtCol hOff (effRuns r))
+    marks = WordDiff.shiftSpans hOff emph
+    sliced = snd (Ink.splitAtCol hOff (Verdict.effRuns r))
   in
-    if rMark r == '-'
-      then removedInk rowPens marks (padT (T.drop hOff (rText r))) left
+    if DiffModel.rMark r == '-'
+      then removedInk rowPens marks (Widgets.padT (T.drop hOff (DiffModel.rText r))) left
       else case rowSpan charSel r of
         -- a live selection outranks the marks: it is what the
         -- reader is pointing at this instant
         Just (s, mEnd)
-          | fromMaybe maxBound mEnd >= hOff ->
-              selInk rowPens left sliced (max 0 (s - hOff)) (fmap (subtract hOff) mEnd)
+          | Maybe.fromMaybe maxBound mEnd >= hOff ->
+              Ink.selInk rowPens left sliced (max 0 (s - hOff)) (fmap (subtract hOff) mEnd)
         _
-          | not (null marks) -> emphInk rowPens left marks sliced
+          | not (null marks) -> Ink.emphInk rowPens left marks sliced
         _ ->
-          case nonEmptySegs sliced of
-            [] -> inkT left (penPlain rowPens) " "
-            filled -> segsInk rowPens left filled
+          case Widgets.nonEmptySegs sliced of
+            [] -> Ink.inkT left (Ink.penPlain rowPens) " "
+            filled -> Ink.segsInk rowPens left filled
 
-removedInk :: PenSet -> [(Int, Int)] -> Text -> Int -> V.Image
+removedInk :: Ink.PenSet -> [(Int, Int)] -> T.Text -> Int -> V.Image
 removedInk rowPens marks shown left =
   if null marks
-    then inkT left (penFor rowPens removedTextAttr) shown
-    else emphInk rowPens left marks [(removedTextAttr, shown)]
+    then Ink.inkT left (Ink.penFor rowPens Attrs.removedTextAttr) shown
+    else Ink.emphInk rowPens left marks [(Attrs.removedTextAttr, shown)]
 
 -- the reviewer's note renders inline as virtual rows under
 -- the line it annotates — visible where the feedback lives
-noteInk :: Int -> RowPaint -> NoteLine -> V.Image
+noteInk :: Int -> RowPaint -> Types.NoteLine -> V.Image
 noteInk paneWidth paint nl =
   let
     pens = rpPens paint
-    fromReviewer = nlAuthor nl == "reviewer"
+    fromReviewer = Types.nlAuthor nl == "reviewer"
     glyph
-      | not (nlOpens nl) = "  "
+      | not (Types.nlOpens nl) = "  "
       | fromReviewer = "\9492 \8801 "
       | otherwise = "\8618 "
     label =
-      if nlOpens nl && not fromReviewer
-        then nlAuthor nl <> " · "
+      if Types.nlOpens nl && not fromReviewer
+        then Types.nlAuthor nl <> " · "
         else ""
-    noteAttr = if fromReviewer then noteInlineAttr else replyInlineAttr
-    body = T.replicate (rpNumW paint + 4) " " <> glyph <> label <> padT (nlText nl)
+    noteAttr = if fromReviewer then Attrs.noteInlineAttr else Attrs.replyInlineAttr
+    body = T.replicate (rpNumW paint + 4) " " <> glyph <> label <> Widgets.padT (Types.nlText nl)
   in
-    spanInk
+    Ink.spanInk
       paneWidth
-      [ \left -> inkT left (penFor pens (rpBarName paint)) (T.singleton (rpBarGlyph paint))
-      , \left -> inkT left (penFor pens noteAttr) body
+      [ \left -> Ink.inkT left (Ink.penFor pens (rpBarName paint)) (T.singleton (rpBarGlyph paint))
+      , \left -> Ink.inkT left (Ink.penFor pens noteAttr) body
       ]
 
 -- the cursor's screen row, or nothing at all when the window
@@ -364,7 +338,7 @@ cursorScreenRow blocks =
   in
     findY (0 :: Int) blocks
 
-composeBody :: St -> FileView -> Int -> Int -> PenSet -> [([V.Image], Bool)] -> V.Image
+composeBody :: Types.St -> Types.FileView -> Int -> Int -> Ink.PenSet -> [([V.Image], Bool)] -> V.Image
 composeBody st fv screenRows hi pens blocks =
   let
     -- always leave border tail below the window so the divider
@@ -373,11 +347,11 @@ composeBody st fv screenRows hi pens blocks =
     -- tail only has to outlast the pane, not the file.
     tailRows =
       max
-        (min (fvRowCount fv - hi) (windowRowsFor screenRows))
+        (min (Types.fvRowCount fv - hi) (View.windowRowsFor screenRows))
         (max 60 screenRows)
     bodyRows =
       concatMap fst blocks
-        ++ [V.charFill (stBorder st) '\9614' (1 :: Int) tailRows]
+        ++ [V.charFill (Types.stBorder st) '\9614' (1 :: Int) tailRows]
     -- every row filled out to the width of the widest, so no
     -- attribute runs on past the text it belongs to
     fullWidth = maximum (0 : map V.imageWidth bodyRows)
@@ -387,6 +361,6 @@ composeBody st fv screenRows hi pens blocks =
       in
         if short <= 0
           then img
-          else V.horizJoin img (V.charFill (penPlain pens) ' ' short (V.imageHeight img))
+          else V.horizJoin img (V.charFill (Ink.penPlain pens) ' ' short (V.imageHeight img))
   in
     V.vertCat (map squared bodyRows)

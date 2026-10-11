@@ -12,30 +12,29 @@ module Remax.Highlight
   , tsScopeAttr
   ) where
 
-import Brick (AttrName, attrName)
-import Data.Text (Text)
-import qualified Data.Text as T
+import Brick qualified as Brick
+import Data.Text qualified as T
 
-type Seg = (AttrName, Text)
+type Seg = (Brick.AttrName, T.Text)
 
-plainAttr :: AttrName
-plainAttr = attrName "plain"
+plainAttr :: Brick.AttrName
+plainAttr = Brick.attrName "plain"
 
-plainLines :: [Text] -> [[Seg]]
+plainLines :: [T.Text] -> [[Seg]]
 plainLines = map plainLine
 
-plainLine :: Text -> [Seg]
+plainLine :: T.Text -> [Seg]
 plainLine l = [(plainAttr, l)]
 
 -- A tree-sitter capture scope ("function.method") to a segment; the empty
 -- scope is an unstyled stretch.
-scopeSeg :: Text -> AttrName
+scopeSeg :: T.Text -> Brick.AttrName
 scopeSeg "" = plainAttr
 scopeSeg scope = tsScopeAttr scope
 
 -- "ts" <> the dotted scope path, so brick's attribute hierarchy resolves
 -- "ts.function.method" down to "ts.function" when the theme lacks the
 -- deeper entry.
-tsScopeAttr :: Text -> AttrName
+tsScopeAttr :: T.Text -> Brick.AttrName
 tsScopeAttr scope =
-  foldl (<>) (attrName "ts") (map (attrName . T.unpack) (T.splitOn "." scope))
+  foldl (<>) (Brick.attrName "ts") (map (Brick.attrName . T.unpack) (T.splitOn "." scope))

@@ -18,27 +18,27 @@ module Remax.Clipboard
   , writeClipboard
   ) where
 
-import Control.Exception (IOException, try)
-import Data.Bits (shiftL, shiftR, (.&.), (.|.))
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Char8 as BSC
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
-import Data.Word (Word8)
-import System.Directory (findExecutable)
-import System.Environment (lookupEnv)
-import System.Exit (ExitCode (ExitSuccess))
-import System.Process (readProcessWithExitCode)
-import System.Timeout (timeout)
+import Control.Exception qualified as Exception
+import Data.Bits ((.&.), (.|.))
+import Data.Bits qualified as Bits
+import Data.ByteString qualified as BS
+import Data.ByteString.Char8 qualified as BSC
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Data.Word qualified as DataWord
+import System.Directory qualified as Directory
+import System.Environment qualified as Env
+import System.Exit qualified as Exit
+import System.Process qualified as Process
+import System.Timeout qualified as Timeout
 
 -- A helper that can copy and paste, or the escape-sequence route that
 -- can only copy.
 data Clipboard
-  = ClipTool Text (String, [String]) (String, [String]) -- label, copy, paste
+  = ClipTool T.Text (String, [String]) (String, [String]) -- label, copy, paste
   | ClipOsc52
 
-clipboardName :: Clipboard -> Text
+clipboardName :: Clipboard -> T.Text
 clipboardName clip =
   case clip of
     ClipTool label _ _ -> label
@@ -59,8 +59,8 @@ clipboardReadable clip =
 -- XWayland's clipboard instead of the real one.
 discoverClipboard :: IO Clipboard
 discoverClipboard = do
-  wayland <- lookupEnv "WAYLAND_DISPLAY"
-  x11 <- lookupEnv "DISPLAY"
+  wayland <- Env.lookupEnv "WAYLAND_DISPLAY"
+  x11 <- Env.lookupEnv "DISPLAY"
   let
     onWayland = maybe False (not . null) wayland
     onX11 = maybe False (not . null) x11
@@ -76,7 +76,7 @@ discoverClipboard = do
     firstAvailable (c : rest) = do
       let
         (bin, _, _) = c
-      found <- findExecutable bin
+      found <- Directory.findExecutable bin
       case found of
         Just _ -> pure (toClipboard c)
         Nothing -> firstAvailable rest
@@ -120,7 +120,7 @@ osc52Limit = 100000
 
 -- Put text on the clipboard. False means it went nowhere and the caller
 -- should say so.
-writeClipboard :: Clipboard -> (BS.ByteString -> IO ()) -> Text -> IO Bool
+writeClipboard :: Clipboard -> (BS.ByteString -> IO ()) -> T.Text -> IO Bool
 writeClipboard clip emit text =
   case clip of
     ClipOsc52 ->
@@ -130,43 +130,43 @@ writeClipboard clip emit text =
         if BS.length payload > osc52Limit
           then pure False
           else do
-            attempted <- try (emit payload)
+            attempted <- Exception.try (emit payload)
             case attempted of
               Right () -> pure True
-              Left e -> const (pure False) (e :: IOException)
+              Left e -> const (pure False) (e :: Exception.IOException)
     ClipTool _ (bin, args) _ -> do
       done <-
-        timeout
+        Timeout.timeout
           toolTimeoutMicros
-          (try (readProcessWithExitCode bin args (T.unpack text)))
+          (Exception.try (Process.readProcessWithExitCode bin args (T.unpack text)))
       case done of
         -- a helper still running is the normal case for xclip, which
         -- stays alive to serve the selection it was just handed
         Nothing -> pure True
-        Just (Right (ExitSuccess, _, _)) -> pure True
+        Just (Right (Exit.ExitSuccess, _, _)) -> pure True
         Just (Right _) -> pure False
-        Just (Left e) -> const (pure False) (e :: IOException)
+        Just (Left e) -> const (pure False) (e :: Exception.IOException)
 
 -- What the clipboard currently holds, or Nothing when there is no way to
 -- ask (or nothing there).
-readClipboard :: Clipboard -> IO (Maybe Text)
+readClipboard :: Clipboard -> IO (Maybe T.Text)
 readClipboard clip =
   case clip of
     ClipOsc52 -> pure Nothing
     ClipTool _ _ (bin, args) -> do
       done <-
-        timeout toolTimeoutMicros (try (readProcessWithExitCode bin args ""))
+        Timeout.timeout toolTimeoutMicros (Exception.try (Process.readProcessWithExitCode bin args ""))
       case done of
-        Just (Right (ExitSuccess, out, _)) ->
+        Just (Right (Exit.ExitSuccess, out, _)) ->
           let
             text = T.pack out
           in
             if T.null text then pure Nothing else pure (Just text)
-        Just (Left e) -> const (pure Nothing) (e :: IOException)
+        Just (Left e) -> const (pure Nothing) (e :: Exception.IOException)
         _ -> pure Nothing
 
 -- ESC ] 52 ; c ; <base64> BEL — the terminal takes it from here.
-osc52 :: Text -> BS.ByteString
+osc52 :: T.Text -> BS.ByteString
 osc52 text =
   BS.concat ["\ESC]52;c;", base64 (TE.encodeUtf8 text), "\a"]
 
@@ -178,12 +178,12 @@ base64Alphabet =
 base64 :: BS.ByteString -> BS.ByteString
 base64 input =
   let
-    pad = 61 :: Word8 -- '='
+    pad = 61 :: DataWord.Word8 -- '='
     sym i = BS.index base64Alphabet i
-    triple :: Word8 -> Word8 -> Word8 -> Int
+    triple :: DataWord.Word8 -> DataWord.Word8 -> DataWord.Word8 -> Int
     triple a b c =
-      shiftL (fromIntegral a) 16 .|. shiftL (fromIntegral b) 8 .|. fromIntegral c
-    chunk n = map (\s -> sym (shiftR n s .&. 63)) [18, 12, 6, 0]
+      Bits.shiftL (fromIntegral a) 16 .|. Bits.shiftL (fromIntegral b) 8 .|. fromIntegral c
+    chunk n = map (\s -> sym (Bits.shiftR n s .&. 63)) [18, 12, 6, 0]
     go bytes =
       case bytes of
         [] -> []

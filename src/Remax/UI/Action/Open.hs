@@ -8,77 +8,52 @@ module Remax.UI.Action.Open
   , switchFile
   ) where
 
-import Brick
-  ( EventM
-  )
-import Control.Exception
-  ( IOException
-  , try
-  )
-import Control.Monad
-  ( when
-  )
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.State
-  ( get
-  , modify
-  )
-import Data.List
-  ( findIndex
-  )
-import Data.Maybe
-  ( fromMaybe
-  , listToMaybe
-  )
-import qualified Data.Set as Set
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import Remax.Config
-import Remax.Git
-  ( looksBinary
-  )
-import Remax.Modal
-import qualified Remax.TreeSitter as TS
-import Remax.UI.Action.Repo
-import Remax.UI.Core.Types
-import Remax.UI.Core.Verdict
-import Remax.UI.Model.Load
-import Remax.UI.Model.Nav
-import System.FilePath
-  ( isAbsolute
-  , joinPath
-  , makeRelative
-  , normalise
-  , splitDirectories
-  , takeFileName
-  , (</>)
-  )
+import Brick qualified as Brick
+import Control.Exception qualified as Exception
+import Control.Monad qualified as Monad
+import Control.Monad.IO.Class qualified as MonadIO
+import Control.Monad.State qualified as State
+import Data.List qualified as List
+import Data.Maybe qualified as Maybe
+import Data.Set qualified as Set
+import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import Remax.Config qualified as Config
+import Remax.Git qualified as Git
+import Remax.Modal qualified as Modal
+import Remax.TreeSitter qualified as TS
+import Remax.UI.Action.Repo qualified as Repo
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Verdict qualified as Verdict
+import Remax.UI.Model.Load qualified as Load
+import Remax.UI.Model.Nav qualified as Nav
+import System.FilePath ((</>))
+import System.FilePath qualified as FilePath
 
 -- Space a: bounce to the alternate file — the one you were in before
 -- the last file jump — restoring the hunk you'd been on. Pressing it
 -- again bounces back, since each jump records the other side.
-gotoAltFile :: EventM Name St ()
+gotoAltFile :: Brick.EventM Types.Name Types.St ()
 gotoAltFile = do
-  st <- get
-  case stAltFile st of
-    Nothing -> setMsg "no alternate file yet"
+  st <- State.get
+  case Types.stAltFile st of
+    Nothing -> Types.setMsg "no alternate file yet"
     Just (path, h) ->
-      case findIndex ((== path) . fvPath) (stFiles st) of
-        Nothing -> setMsg ("alternate file left the session: " <> T.pack path)
+      case List.findIndex ((== path) . Types.fvPath) (Types.stFiles st) of
+        Nothing -> Types.setMsg ("alternate file left the session: " <> T.pack path)
         Just f -> visitFile f (Just h)
 
 -- Open any repository file in the session. A file already on screen is
 -- jumped to; one outside the change set loads against its own content
 -- (zero hunks — a plain editable view whose later session edits decorate
 -- honestly). Opened files are pinned so git refreshes keep them around.
-openFilePath :: Text -> EventM Name St ()
+openFilePath :: T.Text -> Brick.EventM Types.Name Types.St ()
 openFilePath rawPath = do
-  st <- get
+  st <- State.get
   let
-    rootP = stRoot st
+    rootP = Types.stRoot st
     given = T.unpack rawPath
-    joined = normalise (if isAbsolute given then given else rootP </> given)
+    joined = FilePath.normalise (if FilePath.isAbsolute given then given else rootP </> given)
     -- normalise tidies separators and dots but leaves .. where it stands,
     -- so a path written through a parent never matches the repository it
     -- actually lands in. Collapsed here rather than by asking the
@@ -91,7 +66,7 @@ openFilePath rawPath = do
             ".." -> if length acc > 1 then init acc else acc
             _ -> acc ++ [part]
       in
-        joinPath (foldl step [] (splitDirectories joined))
+        FilePath.joinPath (foldl step [] (FilePath.splitDirectories joined))
     -- Whether a path lies inside a repository, and where.
     --
     -- makeRelative alone is not the test. It never invents a ..,
@@ -101,15 +76,15 @@ openFilePath rawPath = do
     -- back looking like it belongs. Both have to be asked.
     under root =
       let
-        rel = makeRelative root absolute
+        rel = FilePath.makeRelative root absolute
       in
-        if isAbsolute rel || ".." `elem` splitDirectories rel
+        if FilePath.isAbsolute rel || ".." `elem` FilePath.splitDirectories rel
           then Nothing
-          else Just (normalise rel)
+          else Just (FilePath.normalise rel)
     elsewhere =
-      listToMaybe
+      Maybe.listToMaybe
         [ (root, rel)
-        | root <- stRoots st
+        | root <- Types.stRoots st
         , root /= rootP
         , Just rel <- [under root]
         ]
@@ -121,132 +96,132 @@ openFilePath rawPath = do
         -- and open it, so it is keyed under the repository that owns it
         -- rather than under whichever one happened to be on screen
         Just (root, rel) -> do
-          switchRepo root
+          Repo.switchRepo root
           openInRoot rel
         Nothing ->
-          setMsg
+          Types.setMsg
             ( "outside "
-                <> T.pack (takeFileName rootP)
+                <> T.pack (FilePath.takeFileName rootP)
                 <> ": "
                 <> T.pack absolute
             )
 
 -- Open a path already known to be inside the current repository.
-openInRoot :: FilePath -> EventM Name St ()
+openInRoot :: FilePath -> Brick.EventM Types.Name Types.St ()
 openInRoot rel = do
-  st <- get
+  st <- State.get
   let
-    rootP = stRoot st
-  case findIndex ((== rel) . fvPath) (stFiles st) of
+    rootP = Types.stRoot st
+  case List.findIndex ((== rel) . Types.fvPath) (Types.stFiles st) of
     Just i -> do
-      modify (\s -> s {stOpened = Set.insert rel (stOpened s)})
+      State.modify (\s -> s {Types.stOpened = Set.insert rel (Types.stOpened s)})
       visitFile i Nothing
     Nothing -> do
-      got <- liftIO (loadOpened (stConfig st) (stHls st) rootP rel)
+      got <- MonadIO.liftIO (loadOpened (Types.stConfig st) (Types.stHls st) rootP rel)
       case got of
-        Nothing -> setMsg ("cannot open " <> T.pack rel)
+        Nothing -> Types.setMsg ("cannot open " <> T.pack rel)
         Just fv -> do
-          liftIO (stWatch st (fileDir rootP rel))
-          modify $ \s ->
+          MonadIO.liftIO (Types.stWatch st (Types.fileDir rootP rel))
+          State.modify $ \s ->
             s
-              { stFiles = stFiles s ++ [recountIn s fv]
-              , stOpened = Set.insert rel (stOpened s)
+              { Types.stFiles = Types.stFiles s ++ [Verdict.recountIn s fv]
+              , Types.stOpened = Set.insert rel (Types.stOpened s)
               }
-          grown <- get
-          parkM (length (stFiles grown) - 1) 0
+          grown <- State.get
+          Nav.parkM (length (Types.stFiles grown) - 1) 0
 
 -- Like loadOne, but the base is the file's own content right now.
 loadOpened ::
-  Config ->
+  Config.Config ->
   TS.HighlighterTable ->
   FilePath ->
   FilePath ->
-  IO (Maybe FileView)
+  IO (Maybe Types.FileView)
 loadOpened cfg hls root path = do
-  readable <- try (looksBinary root path) :: IO (Either IOException Bool)
+  readable <- Exception.try (Git.looksBinary root path) :: IO (Either Exception.IOException Bool)
   case readable of
     Left _ -> pure Nothing
     Right True -> pure Nothing
     Right False -> do
-      gotNew <- try (TIO.readFile (root </> path)) :: IO (Either IOException Text)
+      gotNew <- Exception.try (TIO.readFile (root </> path)) :: IO (Either Exception.IOException T.Text)
       case gotNew of
         Left _ -> pure Nothing
         Right newTxt -> do
           let
             newLs = T.lines newTxt
             fv0 =
-              FileView
-                { fvPath = path
-                , fvBase = newLs
-                , fvEd = newEdState 0 newLs
-                , fvRows = []
-                , fvEmph = []
-                , fvRowCount = 0
-                , fvOrigin = 0
-                , fvRuns = []
-                , fvToks = []
-                , fvStale = False
-                , fvDeleted = False
-                , fvHighlighted = False
+              Types.FileView
+                { Types.fvPath = path
+                , Types.fvBase = newLs
+                , Types.fvEd = Modal.newEdState 0 newLs
+                , Types.fvRows = []
+                , Types.fvEmph = []
+                , Types.fvRowCount = 0
+                , Types.fvOrigin = 0
+                , Types.fvRuns = []
+                , Types.fvToks = []
+                , Types.fvStale = False
+                , Types.fvDeleted = False
+                , Types.fvHighlighted = False
                 , -- the shebang is the fallback for a file with no
                   -- extension to go on, so the first line comes along
-                  fvHl = TS.highlighterFor hls path (listToMaybe newLs)
-                , fvRunDecls = []
-                , fvRemarks = []
-                , fvPending = 0
-                , fvMtime = Nothing
+                  Types.fvHl = TS.highlighterFor hls path (Maybe.listToMaybe newLs)
+                , Types.fvRunDecls = []
+                , Types.fvRemarks = []
+                , Types.fvPending = 0
+                , Types.fvMtime = Nothing
                 }
-          (fv, _) <- rebuildFV cfg (T.pack root) fv0
+          (fv, _) <- Load.rebuildFV cfg (T.pack root) fv0
           pure (Just fv)
 
-closeCurrent :: EventM Name St ()
+closeCurrent :: Brick.EventM Types.Name Types.St ()
 closeCurrent = do
-  st <- get
-  case currentFileMay st of
+  st <- State.get
+  case Types.currentFileMay st of
     Nothing -> pure ()
     Just fv -> do
       let
-        i = stCurF st
-      modify $ \s ->
+        i = Types.stCurF st
+      State.modify $ \s ->
         s
-          { stOpened = Set.delete (fvPath fv) (stOpened s)
-          , stFiles = take i (stFiles s) ++ drop (i + 1) (stFiles s)
-          , stCurF = max 0 (min i (length (stFiles s) - 2))
-          , stCurH = 0
+          { Types.stOpened = Set.delete (Types.fvPath fv) (Types.stOpened s)
+          , Types.stFiles = take i (Types.stFiles s) ++ drop (i + 1) (Types.stFiles s)
+          , Types.stCurF = max 0 (min i (length (Types.stFiles s) - 2))
+          , Types.stCurH = 0
           }
       -- if the file belongs to the change set, the refresh reinstates it
-      forceGitRefresh
+      Load.forceGitRefresh
 
-switchFile :: Int -> EventM Name St ()
+switchFile :: Int -> Brick.EventM Types.Name Types.St ()
 switchFile d = do
-  st <- get
+  st <- State.get
   let
-    n = length (stFiles st)
-  when (n > 1) $
-    visitFile ((stCurF st + d + n) `mod` n) Nothing
+    n = length (Types.stFiles st)
+  Monad.when (n > 1) $
+    visitFile ((Types.stCurF st + d + n) `mod` n) Nothing
 
 -- Change files without re-parking: the file's buffer keeps its own
 -- cursor, so coming back finds it where it was left. Review-flow parks
 -- still position deliberately; this is for browsing moves.
-visitFile :: Int -> Maybe Int -> EventM Name St ()
+visitFile :: Int -> Maybe Int -> Brick.EventM Types.Name Types.St ()
 visitFile f mh = do
-  st <- get
-  case safeIdx (stFiles st) f of
+  st <- State.get
+  case Types.safeIdx (Types.stFiles st) f of
     Nothing -> pure ()
     Just fv -> do
-      when (f /= stCurF st) $
-        modify $ \s ->
+      Monad.when (f /= Types.stCurF st) $
+        State.modify $ \s ->
           s
-            { stAltFile =
-                case currentFileMay s of
-                  Just prev -> Just (fvPath prev, stCurH s)
-                  Nothing -> stAltFile s
+            { Types.stAltFile =
+                case Types.currentFileMay s of
+                  Just prev -> Just (Types.fvPath prev, Types.stCurH s)
+                  Nothing -> Types.stAltFile s
             }
-      modify $ \s ->
+      State.modify $ \s ->
         s
-          { stCurF = f
-          , stCurH = clampH (fvRuns fv) (fromMaybe (stCurH st) mh)
-          , stMsg = " "
+          { Types.stCurF = f
+          , Types.stCurH = Types.clampH (Types.fvRuns fv) (Maybe.fromMaybe (Types.stCurH st) mh)
+          , Types.stMsg = " "
           }
 
 -- The fuzzy file finder -----------------------------------------------------------

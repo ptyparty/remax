@@ -38,28 +38,23 @@ module Remax.Git
   , runGit
   ) where
 
-import qualified Data.ByteString as BS
-import Data.List (sort)
-import qualified Data.Map.Strict as Map
-import Data.Maybe (mapMaybe)
-import qualified Data.Set as Set
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
-import qualified Data.Text.Encoding.Error as TEE
-import qualified Data.Text.Read as TR
-import System.Directory (doesDirectoryExist, doesFileExist, listDirectory)
-import qualified System.Environment as Env
-import System.Exit (ExitCode (..))
-import System.FilePath (isAbsolute, (</>))
-import System.IO (IOMode (ReadMode), withFile)
-import System.IO.Error (catchIOError)
-import System.Process
-  ( CreateProcess (env)
-  , proc
-  , readCreateProcessWithExitCode
-  , readProcessWithExitCode
-  )
+import Data.ByteString qualified as BS
+import Data.List qualified as List
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Set qualified as Set
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Data.Text.Encoding.Error qualified as TEE
+import Data.Text.Read qualified as TR
+import System.Directory qualified as Directory
+import System.Environment qualified as Env
+import System.Exit qualified as Exit
+import System.FilePath ((</>))
+import System.FilePath qualified as FilePath
+import System.IO qualified as SysIO
+import System.IO.Error qualified as IOError
+import System.Process qualified as Process
 
 -- What the working tree is reviewed against. The buffer on screen is
 -- always the working file (that is what editing edits), so the mode picks
@@ -69,10 +64,10 @@ import System.Process
 --               gives the whole-branch review)
 --   VsIndex   — only what is not staged yet
 --   Untracked — new files, reviewed as pure additions
-data ReviewMode = VsRef Text | VsIndex | Untracked
+data ReviewMode = VsRef T.Text | VsIndex | Untracked
   deriving (Eq, Show)
 
-modeLabel :: ReviewMode -> Text
+modeLabel :: ReviewMode -> T.Text
 modeLabel mode =
   case mode of
     VsRef "HEAD" -> "uncommitted"
@@ -83,10 +78,10 @@ modeLabel mode =
 repoRoot :: IO (Maybe FilePath)
 repoRoot = do
   (code, out, _) <-
-    readProcessWithExitCode "git" ["rev-parse", "--show-toplevel"] ""
+    Process.readProcessWithExitCode "git" ["rev-parse", "--show-toplevel"] ""
   pure $ case code of
-    ExitSuccess -> Just (T.unpack (T.strip (T.pack out)))
-    ExitFailure _ -> Nothing
+    Exit.ExitSuccess -> Just (T.unpack (T.strip (T.pack out)))
+    Exit.ExitFailure _ -> Nothing
 
 -- Every path the change set covers, deletions included: a file that was
 -- removed is a change like any other and has to be reviewable, so no
@@ -102,10 +97,10 @@ changedFiles mode root = do
         ["-C", root, "diff", "--name-only", "--no-color"]
       Untracked ->
         ["-C", root, "ls-files", "--others", "--exclude-standard"]
-  (code, out, _) <- readProcessWithExitCode "git" args ""
+  (code, out, _) <- Process.readProcessWithExitCode "git" args ""
   pure $ case code of
-    ExitSuccess -> filter (not . null) (lines out)
-    ExitFailure _ -> []
+    Exit.ExitSuccess -> filter (not . null) (lines out)
+    Exit.ExitFailure _ -> []
 
 -- The files a review puts on screen: what git reports as changed, plus
 -- the ones that are new.
@@ -136,7 +131,7 @@ reviewFiles mode withNew root = do
 
 -- The base copy of one file. A file with no base copy (new file, or the
 -- ref side is missing) reviews against nothing.
-baseLines :: ReviewMode -> FilePath -> FilePath -> IO [Text]
+baseLines :: ReviewMode -> FilePath -> FilePath -> IO [T.Text]
 baseLines mode root path =
   case mode of
     Untracked -> pure []
@@ -146,10 +141,10 @@ baseLines mode root path =
           VsRef r -> T.unpack r ++ ":"
           _ -> ":"
       (code, out, _) <-
-        readProcessWithExitCode "git" ["-C", root, "show", ref ++ path] ""
+        Process.readProcessWithExitCode "git" ["-C", root, "show", ref ++ path] ""
       pure $ case code of
-        ExitSuccess -> T.lines (T.pack out)
-        ExitFailure _ -> []
+        Exit.ExitSuccess -> T.lines (T.pack out)
+        Exit.ExitFailure _ -> []
 
 -- NUL in the first 8k is the same heuristic git uses. Only those 8k are
 -- read: the caller reads the whole file straight afterwards, and pulling
@@ -157,7 +152,7 @@ baseLines mode root path =
 -- largest files paid twice.
 looksBinary :: FilePath -> FilePath -> IO Bool
 looksBinary root path =
-  withFile (root </> path) ReadMode $ \h -> do
+  SysIO.withFile (root </> path) SysIO.ReadMode $ \h -> do
     bytes <- BS.hGet h 8000
     pure (BS.elem 0 bytes)
 
@@ -207,13 +202,13 @@ listFilesUnder scope root paths = do
       -- them rather than listing them for us to throw away.
       AllFiles -> concatMap (\d -> ["-x", d]) buildOutputDirs
   (code, out, _) <-
-    readProcessWithExitCode
+    Process.readProcessWithExitCode
       "git"
       (["-C", root, "ls-files", "--cached", "--others"] ++ excluding ++ within)
       ""
   pure $ case code of
-    ExitSuccess -> filter (not . null) (lines out)
-    ExitFailure _ -> []
+    Exit.ExitSuccess -> filter (not . null) (lines out)
+    Exit.ExitFailure _ -> []
 
 -- Whether git has this path in the index — for a directory, whether it
 -- holds anything git knows about. It decides whether a move or a removal
@@ -223,25 +218,25 @@ listFilesUnder scope root paths = do
 isTracked :: FilePath -> FilePath -> IO Bool
 isTracked root path = do
   (code, out, _) <-
-    readProcessWithExitCode "git" ["-C", root, "ls-files", "--", path] ""
+    Process.readProcessWithExitCode "git" ["-C", root, "ls-files", "--", path] ""
   pure $ case code of
-    ExitSuccess -> any (not . null) (lines out)
-    ExitFailure _ -> False
+    Exit.ExitSuccess -> any (not . null) (lines out)
+    Exit.ExitFailure _ -> False
 
 isIgnored :: FilePath -> FilePath -> IO Bool
 isIgnored root path = do
   (code, _, _) <-
-    readProcessWithExitCode
+    Process.readProcessWithExitCode
       "git"
       ["-C", root, "check-ignore", "-q", "--", path]
       ""
-  pure (code == ExitSuccess)
+  pure (code == Exit.ExitSuccess)
 
 -- Short ref names for completion: local branches first, then remotes.
-listRefs :: FilePath -> IO [Text]
+listRefs :: FilePath -> IO [T.Text]
 listRefs root = do
   (code, out, _) <-
-    readProcessWithExitCode
+    Process.readProcessWithExitCode
       "git"
       [ "-C"
       , root
@@ -252,8 +247,8 @@ listRefs root = do
       ]
       ""
   pure $ case code of
-    ExitSuccess -> "HEAD" : filter (not . T.null) (T.lines (T.pack out))
-    ExitFailure _ -> ["HEAD"]
+    Exit.ExitSuccess -> "HEAD" : filter (not . T.null) (T.lines (T.pack out))
+    Exit.ExitFailure _ -> ["HEAD"]
 
 -- Sibling repositories --------------------------------------------------------
 
@@ -268,21 +263,21 @@ listRefs root = do
 childRepos :: FilePath -> IO [FilePath]
 childRepos dir = do
   entries <- listDirectoryOr dir
-  found <- mapM asRepo (sort entries)
+  found <- mapM asRepo (List.sort entries)
   pure (concat found)
 
 asRepo :: FilePath -> IO [FilePath]
 asRepo path = do
   -- .git is a directory in a normal clone and a file in a linked
   -- worktree, which is most of what these directories hold
-  isDir <- doesDirectoryExist (path </> ".git")
-  isFile <- doesFileExist (path </> ".git")
+  isDir <- Directory.doesDirectoryExist (path </> ".git")
+  isFile <- Directory.doesFileExist (path </> ".git")
   pure [path | isDir || isFile]
 
 listDirectoryOr :: FilePath -> IO [FilePath]
 listDirectoryOr dir =
-  catchIOError
-    (fmap (map (dir </>)) (listDirectory dir))
+  IOError.catchIOError
+    (fmap (map (dir </>)) (Directory.listDirectory dir))
     (const (pure []))
 
 -- Per-path change shape ------------------------------------------------------
@@ -309,7 +304,7 @@ data PathStat = PathStat
   }
   deriving (Eq, Show)
 
-pathChangeLetter :: PathChange -> Text
+pathChangeLetter :: PathChange -> T.Text
 pathChangeLetter change =
   case change of
     PathAdded -> "A"
@@ -345,13 +340,13 @@ pathStats mode root = do
           _ -> []
         diffFields kind = do
           (code, out, _) <-
-            readProcessWithExitCode
+            Process.readProcessWithExitCode
               "git"
               (["-C", root, "diff", kind, "-M", "-z"] ++ refArgs)
               ""
           pure $ case code of
-            ExitSuccess -> nulFields (T.pack out)
-            ExitFailure _ -> []
+            Exit.ExitSuccess -> nulFields (T.pack out)
+            Exit.ExitFailure _ -> []
       changes <- fmap parseNameStatus (diffFields "--name-status")
       counts <- fmap parseNumstat (diffFields "--numstat")
       let
@@ -362,18 +357,18 @@ pathStats mode root = do
 untrackedFiles :: FilePath -> IO [FilePath]
 untrackedFiles root = do
   (code, out, _) <-
-    readProcessWithExitCode
+    Process.readProcessWithExitCode
       "git"
       ["-C", root, "ls-files", "--others", "--exclude-standard"]
       ""
   pure $ case code of
-    ExitSuccess -> filter (not . null) (lines out)
-    ExitFailure _ -> []
+    Exit.ExitSuccess -> filter (not . null) (lines out)
+    Exit.ExitFailure _ -> []
 
-nulFields :: Text -> [Text]
+nulFields :: T.Text -> [T.Text]
 nulFields = filter (not . T.null) . T.splitOn "\NUL"
 
-parseNameStatus :: [Text] -> Map.Map FilePath PathChange
+parseNameStatus :: [T.Text] -> Map.Map FilePath PathChange
 parseNameStatus fields =
   case fields of
     [] -> Map.empty
@@ -393,16 +388,16 @@ parseNameStatus fields =
             _ -> Map.empty
 
 -- R and C are the two statuses that name a source as well as a target.
-pairedToken :: Text -> Bool
+pairedToken :: T.Text -> Bool
 pairedToken token = T.isPrefixOf "R" token || T.isPrefixOf "C" token
 
-pairedChange :: Text -> FilePath -> PathChange
+pairedChange :: T.Text -> FilePath -> PathChange
 pairedChange token from =
   case T.take 1 token of
     "C" -> PathCopied from
     _ -> PathRenamed from
 
-letterChange :: Text -> PathChange
+letterChange :: T.Text -> PathChange
 letterChange token =
   case T.take 1 token of
     "A" -> PathAdded
@@ -410,7 +405,7 @@ letterChange token =
     "D" -> PathDeleted
     _ -> PathOtherChange
 
-parseNumstat :: [Text] -> Map.Map FilePath (Maybe (Int, Int))
+parseNumstat :: [T.Text] -> Map.Map FilePath (Maybe (Int, Int))
 parseNumstat fields =
   case fields of
     [] -> Map.empty
@@ -434,13 +429,13 @@ parseNumstat fields =
         _ -> parseNumstat rest
 
 -- git writes "-" for both sides of a binary file.
-numstatCounts :: Text -> Text -> Maybe (Int, Int)
+numstatCounts :: T.Text -> T.Text -> Maybe (Int, Int)
 numstatCounts added removed = do
   a <- readCount added
   r <- readCount removed
   pure (a, r)
 
-readCount :: Text -> Maybe Int
+readCount :: T.Text -> Maybe Int
 readCount t =
   case TR.decimal t of
     Right (n, rest)
@@ -449,17 +444,17 @@ readCount t =
 
 -- Ref probing ---------------------------------------------------------------
 
-refExists :: FilePath -> Text -> IO Bool
+refExists :: FilePath -> T.Text -> IO Bool
 refExists root ref = do
   (code, _, _) <-
-    readProcessWithExitCode
+    Process.readProcessWithExitCode
       "git"
       ["-C", root, "rev-parse", "--verify", "--quiet", T.unpack ref ++ "^{commit}"]
       ""
-  pure (code == ExitSuccess)
+  pure (code == Exit.ExitSuccess)
 
 -- The ref the repository treats as its mainline, for merge-base reviews.
-mainlineRef :: FilePath -> IO (Maybe Text)
+mainlineRef :: FilePath -> IO (Maybe T.Text)
 mainlineRef root =
   let
     go candidates =
@@ -473,33 +468,33 @@ mainlineRef root =
 
 -- Where the current branch forked from the mainline: the whole-branch
 -- review base.
-branchRoot :: FilePath -> IO (Either Text Text)
+branchRoot :: FilePath -> IO (Either T.Text T.Text)
 branchRoot root = do
   mMain <- mainlineRef root
   case mMain of
     Nothing -> pure (Left "no mainline ref found (origin/main, origin/master, main, master)")
     Just mainline -> do
       (code, out, err) <-
-        readProcessWithExitCode
+        Process.readProcessWithExitCode
           "git"
           ["-C", root, "merge-base", "HEAD", T.unpack mainline]
           ""
       pure $ case code of
-        ExitSuccess -> Right (T.strip (T.pack out))
-        ExitFailure _ -> Left (T.strip (T.pack err))
+        Exit.ExitSuccess -> Right (T.strip (T.pack out))
+        Exit.ExitFailure _ -> Left (T.strip (T.pack err))
 
 -- Whether any tracked file differs from HEAD or the index — the guard
 -- before starting a rebase.
 trackedChanges :: FilePath -> IO Bool
 trackedChanges root = do
   (code, out, _) <-
-    readProcessWithExitCode
+    Process.readProcessWithExitCode
       "git"
       ["-C", root, "status", "--porcelain", "--untracked-files=no"]
       ""
   pure $ case code of
-    ExitSuccess -> not (null (filter (not . null) (lines out)))
-    ExitFailure _ -> True
+    Exit.ExitSuccess -> not (null (filter (not . null) (lines out)))
+    Exit.ExitFailure _ -> True
 
 -- Where git actually writes its state, for the filesystem watcher: in a
 -- linked worktree the root's .git is a file and index/HEAD live under
@@ -510,17 +505,17 @@ gitStateWatchDirs root = do
   let
     resolve name = do
       (code, out, _) <-
-        readProcessWithExitCode
+        Process.readProcessWithExitCode
           "git"
           ["-C", root, "rev-parse", "--path-format=absolute", name]
           ""
       pure $ case code of
-        ExitSuccess ->
+        Exit.ExitSuccess ->
           let
             path = T.unpack (T.strip (T.pack out))
           in
             if null path then [] else [path]
-        ExitFailure _ -> []
+        Exit.ExitFailure _ -> []
   gitDir <- resolve "--git-dir"
   commonDir <- resolve "--git-common-dir"
   let
@@ -534,11 +529,11 @@ gitStateWatchDirs root = do
 hasStagedChanges :: FilePath -> IO Bool
 hasStagedChanges root = do
   (code, _, _) <-
-    readProcessWithExitCode
+    Process.readProcessWithExitCode
       "git"
       ["-C", root, "diff", "--cached", "--quiet"]
       ""
-  pure (code /= ExitSuccess)
+  pure (code /= Exit.ExitSuccess)
 
 -- Rebase awareness ------------------------------------------------------------
 
@@ -548,8 +543,8 @@ hasStagedChanges root = do
 data RebaseStatus = RebaseStatus
   { rebaseStep :: Int
   , rebaseTotal :: Int
-  , rebaseSha :: Text -- short sha of the stopped commit ("" when unknown)
-  , rebaseSubject :: Text
+  , rebaseSha :: T.Text -- short sha of the stopped commit ("" when unknown)
+  , rebaseSubject :: T.Text
   , rebaseConflicted :: Bool
   }
   deriving (Eq, Show)
@@ -561,21 +556,21 @@ data RebaseStatus = RebaseStatus
 gitStateDir :: FilePath -> String -> IO (Maybe FilePath)
 gitStateDir root name = do
   (code, out, _) <-
-    readProcessWithExitCode "git" ["-C", root, "rev-parse", "--git-path", name] ""
+    Process.readProcessWithExitCode "git" ["-C", root, "rev-parse", "--git-path", name] ""
   case code of
-    ExitFailure _ -> pure Nothing
-    ExitSuccess -> do
+    Exit.ExitFailure _ -> pure Nothing
+    Exit.ExitSuccess -> do
       let
         raw = T.unpack (T.strip (T.pack out))
-        path = if isAbsolute raw then raw else root </> raw
-      present <- doesDirectoryExist path
+        path = if FilePath.isAbsolute raw then raw else root </> raw
+      present <- Directory.doesDirectoryExist path
       pure (if present then Just path else Nothing)
 
 hasUnmerged :: FilePath -> IO Bool
 hasUnmerged root = do
   (code, out, _) <-
-    readProcessWithExitCode "git" ["-C", root, "ls-files", "--unmerged"] ""
-  pure (code == ExitSuccess && not (null (filter (not . null) (lines out))))
+    Process.readProcessWithExitCode "git" ["-C", root, "ls-files", "--unmerged"] ""
+  pure (code == Exit.ExitSuccess && not (null (filter (not . null) (lines out))))
 
 rebaseStatus :: FilePath -> IO (Maybe RebaseStatus)
 rebaseStatus root = do
@@ -590,8 +585,8 @@ rebaseStatus root = do
           (verb : pickSha : rest)
             | verb `elem` pickWords -> Just (pickSha, T.unwords rest)
           _ -> Nothing
-        donePicks = mapMaybe pickOf (T.lines done)
-        todoPicks = mapMaybe pickOf (T.lines todo)
+        donePicks = Maybe.mapMaybe pickOf (T.lines done)
+        todoPicks = Maybe.mapMaybe pickOf (T.lines todo)
         (sha, subject) = case reverse donePicks of
           (p1 : _) -> p1
           [] -> ("", "")
@@ -627,9 +622,9 @@ rebaseStatus root = do
               , rebaseConflicted = conflicted
               }
 
-readFileOr :: Text -> FilePath -> IO Text
+readFileOr :: T.Text -> FilePath -> IO T.Text
 readFileOr fallback path =
-  catchIOError
+  IOError.catchIOError
     (fmap (TE.decodeUtf8With TEE.lenientDecode) (BS.readFile path))
     (const (pure fallback))
 
@@ -638,21 +633,21 @@ readFileOr fallback path =
 -- Just the message, for the buffer that edits it. commitMessage's
 -- decorated form belongs in the read-only popup; amending with it writes
 -- the sha, author and date into the new message.
-commitBody :: FilePath -> Text -> IO (Either Text Text)
+commitBody :: FilePath -> T.Text -> IO (Either T.Text T.Text)
 commitBody root ref = do
   (code, out, err) <-
-    readProcessWithExitCode
+    Process.readProcessWithExitCode
       "git"
       ["-C", root, "show", "-s", "--format=%B", T.unpack ref]
       ""
   pure $ case code of
-    ExitSuccess -> Right (T.stripEnd (T.pack out))
-    ExitFailure _ -> Left (T.strip (T.pack err))
+    Exit.ExitSuccess -> Right (T.stripEnd (T.pack out))
+    Exit.ExitFailure _ -> Left (T.strip (T.pack err))
 
-commitMessage :: FilePath -> Text -> IO (Either Text Text)
+commitMessage :: FilePath -> T.Text -> IO (Either T.Text T.Text)
 commitMessage root ref = do
   (code, out, err) <-
-    readProcessWithExitCode
+    Process.readProcessWithExitCode
       "git"
       [ "-C"
       , root
@@ -663,22 +658,22 @@ commitMessage root ref = do
       ]
       ""
   pure $ case code of
-    ExitSuccess -> Right (T.strip (T.pack out))
-    ExitFailure _ -> Left (T.strip (T.pack err))
+    Exit.ExitSuccess -> Right (T.strip (T.pack out))
+    Exit.ExitFailure _ -> Left (T.strip (T.pack err))
 
 -- The short sha and subject of HEAD — during a rebase stop, that is the
 -- commit under review, so verdicts can carry their commit.
 -- The branch HEAD points at, or Nothing when it is detached.
-currentBranch :: FilePath -> IO (Maybe Text)
+currentBranch :: FilePath -> IO (Maybe T.Text)
 currentBranch root = do
   (code, out, _) <-
-    readProcessWithExitCode
+    Process.readProcessWithExitCode
       "git"
       ["-C", root, "symbolic-ref", "--short", "-q", "HEAD"]
       ""
   pure $ case code of
-    ExitFailure _ -> Nothing
-    ExitSuccess ->
+    Exit.ExitFailure _ -> Nothing
+    Exit.ExitSuccess ->
       case T.strip (T.pack out) of
         b
           | T.null b -> Nothing
@@ -688,10 +683,10 @@ currentBranch root = do
 -- first, which is the order you tend to want them in. Carries each
 -- branch's tip so the picker can say what you would be moving to.
 --   (branch, how long ago, tip sha, subject)
-localBranches :: FilePath -> IO [(Text, Text, Text, Text)]
+localBranches :: FilePath -> IO [(T.Text, T.Text, T.Text, T.Text)]
 localBranches root = do
   (code, out, _) <-
-    readProcessWithExitCode
+    Process.readProcessWithExitCode
       "git"
       [ "-C"
       , root
@@ -702,8 +697,8 @@ localBranches root = do
       ]
       ""
   pure $ case code of
-    ExitFailure _ -> []
-    ExitSuccess -> mapMaybe fourFields (T.lines (T.pack out))
+    Exit.ExitFailure _ -> []
+    Exit.ExitSuccess -> Maybe.mapMaybe fourFields (T.lines (T.pack out))
 
 -- Recent history for the base picker: short sha, how long ago, subject.
 -- Newest first, which is the order the picker keeps when nothing is
@@ -718,10 +713,10 @@ localBranches root = do
 -- %D is git's own decoration -- "HEAD -> main, origin/main", empty when
 -- nothing points here -- which is how the picker answers "where is HEAD"
 -- and "which of these is a branch tip".
-recentCommits :: Int -> FilePath -> IO [(Text, Text, Text, Text)]
+recentCommits :: Int -> FilePath -> IO [(T.Text, T.Text, T.Text, T.Text)]
 recentCommits n root = do
   (code, out, _) <-
-    readProcessWithExitCode
+    Process.readProcessWithExitCode
       "git"
       [ "-C"
       , root
@@ -733,28 +728,28 @@ recentCommits n root = do
       ]
       ""
   pure $ case code of
-    ExitFailure _ -> []
-    ExitSuccess -> mapMaybe fourFields (T.lines (T.pack out))
+    Exit.ExitFailure _ -> []
+    Exit.ExitSuccess -> Maybe.mapMaybe fourFields (T.lines (T.pack out))
 
 -- Four tab-separated fields, the last keeping any tabs of its own --
 -- subjects are free text.
-fourFields :: Text -> Maybe (Text, Text, Text, Text)
+fourFields :: T.Text -> Maybe (T.Text, T.Text, T.Text, T.Text)
 fourFields line =
   case T.splitOn "\t" line of
     (a : b : c : rest)
       | not (T.null a) -> Just (a, b, c, T.intercalate "\t" rest)
     _ -> Nothing
 
-headCommit :: FilePath -> IO (Maybe (Text, Text))
+headCommit :: FilePath -> IO (Maybe (T.Text, T.Text))
 headCommit root = do
   (code, out, _) <-
-    readProcessWithExitCode
+    Process.readProcessWithExitCode
       "git"
       ["-C", root, "log", "-1", "--format=%h%x09%s"]
       ""
   pure $ case code of
-    ExitFailure _ -> Nothing
-    ExitSuccess ->
+    Exit.ExitFailure _ -> Nothing
+    Exit.ExitSuccess ->
       case T.breakOn "\t" (T.strip (T.pack out)) of
         (sha, rest)
           | T.null sha -> Nothing
@@ -766,18 +761,18 @@ headCommit root = do
 -- stderr so the UI can show it. GIT_EDITOR is forced non-interactive:
 -- these run underneath a live TUI, where an editor popping up would
 -- wedge the terminal.
-runGit :: FilePath -> [String] -> IO (Either Text ())
+runGit :: FilePath -> [String] -> IO (Either T.Text ())
 runGit root args = do
   environment <- Env.getEnvironment
   let
     p =
-      (proc "git" (["-C", root] ++ args))
-        { env = Just (("GIT_EDITOR", "true") : filter ((/= "GIT_EDITOR") . fst) environment)
+      (Process.proc "git" (["-C", root] ++ args))
+        { Process.env = Just (("GIT_EDITOR", "true") : filter ((/= "GIT_EDITOR") . fst) environment)
         }
-  (code, _, err) <- readCreateProcessWithExitCode p ""
+  (code, _, err) <- Process.readCreateProcessWithExitCode p ""
   pure $ case code of
-    ExitSuccess -> Right ()
-    ExitFailure _ ->
+    Exit.ExitSuccess -> Right ()
+    Exit.ExitFailure _ ->
       let
         msg = T.strip (T.pack err)
       in

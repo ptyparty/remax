@@ -15,31 +15,29 @@ module Remax.Theme
   , hasScope
   ) where
 
-import Control.Exception (IOException, try)
-import Data.Char (isHexDigit)
-import Data.FileEmbed (embedFile)
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, mapMaybe)
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
-import qualified Data.Text.IO as TIO
-import qualified Graphics.Vty as V
-import Numeric (readHex)
-import System.Directory (doesFileExist, getHomeDirectory)
-import System.Environment (lookupEnv)
+import Control.Exception qualified as Exception
+import Data.Char qualified as Char
+import Data.FileEmbed qualified as FileEmbed
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Data.Text.IO qualified as TIO
+import Graphics.Vty qualified as V
+import Numeric qualified as Numeric
+import System.Directory qualified as Directory
+import System.Environment qualified as Env
 import System.FilePath ((</>))
 
 data ScopeStyle = ScopeStyle
-  { ssFg :: Maybe Text
-  , ssBg :: Maybe Text
-  , ssMods :: [Text]
+  { ssFg :: Maybe T.Text
+  , ssBg :: Maybe T.Text
+  , ssMods :: [T.Text]
   }
 
 data HelixTheme = HelixTheme
-  { htScopes :: Map Text ScopeStyle
-  , htPalette :: Map Text Text
+  { htScopes :: Map.Map T.Text ScopeStyle
+  , htPalette :: Map.Map T.Text T.Text
   }
 
 -- ~/.config/helix/config.toml names the theme; the theme file is looked
@@ -49,20 +47,20 @@ data HelixTheme = HelixTheme
 -- (helix AppImages mount theirs only while helix runs).
 loadHelixTheme :: IO (Maybe HelixTheme)
 loadHelixTheme = do
-  home <- getHomeDirectory
+  home <- Directory.getHomeDirectory
   name <- themeName home
   case name of
     Nothing -> pure Nothing
     Just n -> loadChain home n 0
 
-themeName :: FilePath -> IO (Maybe Text)
+themeName :: FilePath -> IO (Maybe T.Text)
 themeName home = do
   got <- readMaybeFile (home </> ".config" </> "helix" </> "config.toml")
   pure $ do
     body <- got
     lookup "theme" (topLevelStrings body)
 
-loadChain :: FilePath -> Text -> Int -> IO (Maybe HelixTheme)
+loadChain :: FilePath -> T.Text -> Int -> IO (Maybe HelixTheme)
 loadChain home name depth
   | depth > 5 = pure Nothing
   | otherwise = do
@@ -86,21 +84,21 @@ loadChain home name depth
 
 -- The theme's text, from the first place that has it: a theme file on
 -- disk, or the vendored copy embedded in the binary.
-themeBody :: FilePath -> Text -> IO (Maybe Text)
+themeBody :: FilePath -> T.Text -> IO (Maybe T.Text)
 themeBody home name = do
   found <- findThemeFile home name
   case found of
     Just path -> readMaybeFile path
     Nothing -> pure (lookup name vendoredThemes)
 
-vendoredThemes :: [(Text, Text)]
+vendoredThemes :: [(T.Text, T.Text)]
 vendoredThemes =
-  [ ("jellybeans", TE.decodeUtf8 $(embedFile "vendor/themes/jellybeans.toml"))
+  [ ("jellybeans", TE.decodeUtf8 $(FileEmbed.embedFile "vendor/themes/jellybeans.toml"))
   ]
 
-findThemeFile :: FilePath -> Text -> IO (Maybe FilePath)
+findThemeFile :: FilePath -> T.Text -> IO (Maybe FilePath)
 findThemeFile home name = do
-  runtimeEnv <- lookupEnv "HELIX_RUNTIME"
+  runtimeEnv <- Env.lookupEnv "HELIX_RUNTIME"
   let
     file = T.unpack name ++ ".toml"
     envCandidates = case runtimeEnv of
@@ -115,19 +113,19 @@ findThemeFile home name = do
            ]
     go [] = pure Nothing
     go (p : ps) = do
-      ok <- doesFileExist p
+      ok <- Directory.doesFileExist p
       if ok then pure (Just p) else go ps
   go candidates
 
-readMaybeFile :: FilePath -> IO (Maybe Text)
+readMaybeFile :: FilePath -> IO (Maybe T.Text)
 readMaybeFile p = do
-  got <- try (TIO.readFile p) :: IO (Either IOException Text)
+  got <- Exception.try (TIO.readFile p) :: IO (Either Exception.IOException T.Text)
   pure (either (const Nothing) Just got)
 
 -- Parsing --------------------------------------------------------------
 
 -- (scopes, palette, inherits)
-parseTheme :: Text -> (Map Text ScopeStyle, Map Text Text, Maybe Text)
+parseTheme :: T.Text -> (Map.Map T.Text ScopeStyle, Map.Map T.Text T.Text, Maybe T.Text)
 parseTheme body =
   let
     go [] _ scopes pal inh = (scopes, pal, inh)
@@ -159,7 +157,7 @@ parseTheme body =
     go (T.lines body) False Map.empty Map.empty Nothing
 
 -- `"a.b" = rest` or `bare = rest`
-parseKeyValue :: Text -> Maybe (Text, Text)
+parseKeyValue :: T.Text -> Maybe (T.Text, T.Text)
 parseKeyValue t = do
   let
     (lhs, rhs) = T.breakOn "=" t
@@ -172,7 +170,7 @@ parseKeyValue t = do
 -- A bare color string, or an inline table with fg/bg/modifiers. The
 -- nested underline table holds no fg/bg keys, so scanning for those
 -- substrings inside the braces is safe for real theme files.
-parseStyle :: Text -> Maybe ScopeStyle
+parseStyle :: T.Text -> Maybe ScopeStyle
 parseStyle rest
   | "\"" `T.isPrefixOf` rest =
       fmap (\v -> ScopeStyle (Just v) Nothing []) (quotedString rest)
@@ -185,20 +183,20 @@ parseStyle rest
           }
   | otherwise = Nothing
 
-quotedString :: Text -> Maybe Text
+quotedString :: T.Text -> Maybe T.Text
 quotedString t =
   case T.splitOn "\"" t of
     (_ : v : _) -> Just v
     _ -> Nothing
 
-fieldString :: Text -> Text -> Maybe Text
+fieldString :: T.Text -> T.Text -> Maybe T.Text
 fieldString name t =
   case T.breakOn (name <> " ") (T.replace (name <> "=") (name <> " =") t) of
     (_, rest)
       | T.null rest -> Nothing
       | otherwise -> quotedString rest
 
-modifiers :: Text -> [Text]
+modifiers :: T.Text -> [T.Text]
 modifiers t =
   case T.breakOn "modifiers" t of
     (_, rest)
@@ -213,7 +211,7 @@ modifiers t =
             filter usable (T.splitOn "\"" inside)
 
 -- Only for config.toml's top-level `theme = "name"`.
-topLevelStrings :: Text -> [(Text, Text)]
+topLevelStrings :: T.Text -> [(T.Text, T.Text)]
 topLevelStrings body =
   let
     beforeSection =
@@ -223,21 +221,21 @@ topLevelStrings body =
       v <- quotedString rest
       pure (k, v)
   in
-    mapMaybe entry beforeSection
+    Maybe.mapMaybe entry beforeSection
 
 -- Color resolution -------------------------------------------------------
 
-resolveColor :: HelixTheme -> Text -> Maybe V.Color
+resolveColor :: HelixTheme -> T.Text -> Maybe V.Color
 resolveColor th raw =
-  hexOrNamed (fromMaybe raw (Map.lookup raw (htPalette th)))
+  hexOrNamed (Maybe.fromMaybe raw (Map.lookup raw (htPalette th)))
 
-hexOrNamed :: Text -> Maybe V.Color
+hexOrNamed :: T.Text -> Maybe V.Color
 hexOrNamed t
   | "#" `T.isPrefixOf` t
   , T.length t == 7
-  , T.all isHexDigit (T.drop 1 t) =
+  , T.all Char.isHexDigit (T.drop 1 t) =
       let
-        hex a b = case readHex [a, b] of
+        hex a b = case Numeric.readHex [a, b] of
           [(n, _)] -> n :: Int
           _ -> 0
       in
@@ -249,7 +247,7 @@ hexOrNamed t
           _ -> Nothing
   | otherwise = lookup t namedColors
 
-namedColors :: [(Text, V.Color)]
+namedColors :: [(T.Text, V.Color)]
 namedColors =
   [ ("black", V.black)
   , ("red", V.red)
@@ -273,7 +271,7 @@ namedColors =
 
 -- helix resolves "a.b.c" by dropping dotted segments until something
 -- matches; so does this.
-lookupScope :: HelixTheme -> Text -> Maybe ScopeStyle
+lookupScope :: HelixTheme -> T.Text -> Maybe ScopeStyle
 lookupScope th =
   let
     go name =
@@ -310,14 +308,14 @@ styleToAttr th s base =
     foldl applyMod (withBg (withFg base)) (ssMods s)
 
 -- Whether the theme resolves this scope (directly or via dotted fallback).
-hasScope :: HelixTheme -> Text -> Bool
+hasScope :: HelixTheme -> T.Text -> Bool
 hasScope th name =
   case lookupScope th name of
     Just _ -> True
     Nothing -> False
 
 -- The attr for a scope, or the fallback when the theme has nothing for it.
-scopeAttr :: Maybe HelixTheme -> Text -> V.Attr -> V.Attr
+scopeAttr :: Maybe HelixTheme -> T.Text -> V.Attr -> V.Attr
 scopeAttr mth name fallback =
   case mth of
     Nothing -> fallback
@@ -327,7 +325,7 @@ scopeAttr mth name fallback =
         Nothing -> fallback
 
 -- Like scopeAttr but building on a base attr (used for the default).
-scopeStyleAttr :: Maybe HelixTheme -> Text -> V.Attr -> V.Attr
+scopeStyleAttr :: Maybe HelixTheme -> T.Text -> V.Attr -> V.Attr
 scopeStyleAttr mth name base =
   case mth of
     Nothing -> base

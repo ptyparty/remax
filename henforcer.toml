@@ -1,4 +1,11 @@
+[[forPatternModules]]
+pattern = "Paths_*"
+[forPatternModules.rulesToIgnore]
+all = true
+
 [forAnyModule]
+allowedOpenUnaliasedImports = 1
+allowedAliasUniqueness = { allAliasesUniqueExcept = [] }
 encapsulatedTrees = ["Remax.UI"]
 treeDependencies = [
   { moduleTree = "Remax.UI", dependencies = ["Remax.Clipboard", "Remax.Config", "Remax.DiffModel", "Remax.Emacs", "Remax.Git", "Remax.Highlight", "Remax.Key", "Remax.Modal", "Remax.Punch", "Remax.Store", "Remax.Theme", "Remax.Tree", "Remax.TreeSitter", "Remax.Vi", "Remax.Zipper"], note = "the session modules sit above every other Remax module" },
@@ -7,3 +14,734 @@ treeDependencies = [
   { moduleTree = "Remax.UI.Draw", dependencies = ["Remax.UI.Core", "Remax.UI.Model", "Remax.UI.Action"], note = "drawing reads everything below it and nothing reads drawing" },
   { moduleTree = "Remax.UI.Events", dependencies = ["Remax.UI.Core", "Remax.UI.Model", "Remax.UI.Action", "Remax.UI.Draw"], note = "event dispatch is the top of the session" },
 ]
+
+[[forAnyModule.allowedQualifications]]
+module = "Prelude"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { unqualified = true }
+
+[[forAnyModule.allowedQualifications]]
+module = "Brick"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Brick"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { unqualified = true }
+
+[[forAnyModule.allowedQualifications]]
+module = "Brick.BChan"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "BChan"
+
+[[forAnyModule.allowedQualifications]]
+module = "Brick.Types"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "BrickTypes"
+
+[[forAnyModule.allowedQualifications]]
+module = "Brick.Util"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "BrickUtil"
+
+[[forAnyModule.allowedQualifications]]
+module = "Brick.Widgets.Border"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Border"
+
+[[forAnyModule.allowedQualifications]]
+module = "Brick.Widgets.Border.Style"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "BorderStyle"
+
+[[forAnyModule.allowedQualifications]]
+module = "Brick.Widgets.Center"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Center"
+
+[[forAnyModule.allowedQualifications]]
+module = "Control.Applicative"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Applicative"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { unqualified = true }
+
+[[forAnyModule.allowedQualifications]]
+module = "Control.Concurrent"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Concurrent"
+
+[[forAnyModule.allowedQualifications]]
+module = "Control.Exception"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Exception"
+
+[[forAnyModule.allowedQualifications]]
+module = "Control.Monad"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Monad"
+
+[[forAnyModule.allowedQualifications]]
+module = "Control.Monad.IO.Class"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "MonadIO"
+
+[[forAnyModule.allowedQualifications]]
+module = "Control.Monad.State"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "State"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Algorithm.Diff"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Diff"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Array"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Array"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { unqualified = true }
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Array.IO"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "IOArray"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Bits"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Bits"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { unqualified = true }
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.ByteString"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "BS"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.ByteString.Char8"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "BSC"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Char"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Char"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Containers.ListUtils"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "ListUtils"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Digest.Pure.SHA"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "SHA"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.FileEmbed"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "FileEmbed"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Foldable"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Foldable"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.IORef"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "IORef"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Int"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DataInt"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.List"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "List"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.List.NonEmpty"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "NEL"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { unqualified = true }
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Map.Strict"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Map"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Maybe"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Maybe"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Ord"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Ord"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Set"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Set"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Text"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "T"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Text.Encoding"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "TE"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Text.Encoding.Error"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "TEE"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Text.IO"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "TIO"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Text.Lazy"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "TL"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Text.Lazy.Encoding"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "TLE"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Text.Read"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "TR"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Time.Clock"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Clock"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Version"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Version"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Word"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DataWord"
+
+[[forAnyModule.allowedQualifications]]
+module = "Database.SQLite.Simple"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "SQLite"
+
+[[forAnyModule.allowedQualifications]]
+module = "Foreign.C.String"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "CString"
+
+[[forAnyModule.allowedQualifications]]
+module = "Foreign.C.Types"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "CTypes"
+
+[[forAnyModule.allowedQualifications]]
+module = "Foreign.Marshal.Alloc"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Alloc"
+
+[[forAnyModule.allowedQualifications]]
+module = "Foreign.Marshal.Array"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "MArray"
+
+[[forAnyModule.allowedQualifications]]
+module = "Foreign.Ptr"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Ptr"
+
+[[forAnyModule.allowedQualifications]]
+module = "Foreign.Storable"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Storable"
+
+[[forAnyModule.allowedQualifications]]
+module = "GHC.Clock"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "GHCClock"
+
+[[forAnyModule.allowedQualifications]]
+module = "Graphics.Vty"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "V"
+
+[[forAnyModule.allowedQualifications]]
+module = "Graphics.Vty.CrossPlatform"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "VtyPlatform"
+
+[[forAnyModule.allowedQualifications]]
+module = "Numeric"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Numeric"
+
+[[forAnyModule.allowedQualifications]]
+module = "Paths_remax"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Paths"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.Clipboard"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Clipboard"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.Config"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Config"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.DiffModel"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DiffModel"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.Emacs"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Emacs"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.Git"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Git"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.Highlight"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Highlight"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.Key"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Key"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.Modal"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Modal"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.Punch"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Punch"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.Store"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Store"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.Theme"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Theme"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.Tree"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Tree"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.TreeSitter"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "TS"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "UI"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Command"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Command"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Conversation"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Conversation"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Editor"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Editor"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Files"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "FileAction"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Fuzzy"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Fuzzy"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Menus"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Menus"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Notes"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "NoteAction"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Open"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Open"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Picker"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "PickerAction"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Rebase"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Rebase"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Repo"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Repo"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Search"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Search"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Settings"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Settings"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Tree"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "TreeAction"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.TreeKeys"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "TreeKeys"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Verdicts"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "VerdictAction"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Core.Attrs"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Attrs"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Core.Ink"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Ink"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Core.Jobs"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Jobs"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Core.Types"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Types"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Core.Verdict"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Verdict"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Core.View"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "View"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Core.Widgets"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Widgets"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Core.WordDiff"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "WordDiff"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Draw"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Draw"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Draw.Body"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DrawBody"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Draw.Header"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DrawHeader"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Draw.Help"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DrawHelp"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Draw.Notes"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DrawNotes"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Draw.Picker"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DrawPicker"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Draw.Prompt"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DrawPrompt"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Draw.Status"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DrawStatus"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Draw.Tray"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DrawTray"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Draw.Tree"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DrawTree"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Events"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Events"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Model.Load"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Load"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Model.Nav"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Nav"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Model.Tray"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "TrayModel"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Model.Watch"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Watch"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.Vi"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Vi"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.Zipper"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Z"
+
+[[forAnyModule.allowedQualifications]]
+module = "System.Directory"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Directory"
+
+[[forAnyModule.allowedQualifications]]
+module = "System.Environment"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Env"
+
+[[forAnyModule.allowedQualifications]]
+module = "System.Exit"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Exit"
+
+[[forAnyModule.allowedQualifications]]
+module = "System.FSNotify"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "FS"
+
+[[forAnyModule.allowedQualifications]]
+module = "System.FilePath"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "FilePath"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { unqualified = true }
+
+[[forAnyModule.allowedQualifications]]
+module = "System.IO"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "SysIO"
+
+[[forAnyModule.allowedQualifications]]
+module = "System.IO.Error"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "IOError"
+
+[[forAnyModule.allowedQualifications]]
+module = "System.Posix.Process"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Posix"
+
+[[forAnyModule.allowedQualifications]]
+module = "System.Process"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Process"
+
+[[forAnyModule.allowedQualifications]]
+module = "System.Timeout"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Timeout"

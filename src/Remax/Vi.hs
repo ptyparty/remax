@@ -26,14 +26,13 @@ module Remax.Vi
   , handleVi
   ) where
 
-import Data.Char (isDigit, isSpace, toLower, toUpper)
-import Data.Maybe (mapMaybe)
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Graphics.Vty as V
+import Data.Char qualified as Char
+import Data.Maybe qualified as Maybe
+import Data.Text qualified as T
+import Graphics.Vty qualified as V
 
-import Remax.Modal
-import qualified Remax.Zipper as Z
+import Remax.Modal qualified as Modal
+import Remax.Zipper qualified as Z
 
 -- Operators: everything that waits for a motion or a text object.
 data ViOp
@@ -79,11 +78,11 @@ data Span
   = Exclusive (Int, Int)
   | Inclusive (Int, Int)
   | Linewise Int
-  | AlreadySpan SelKind (Int, Int) (Int, Int)
+  | AlreadySpan Modal.SelKind (Int, Int) (Int, Int)
 
 data ViResult
   = ViPending ViKeys
-  | ViDone ViKeys EdState
+  | ViDone ViKeys Modal.EdState
   | ViUnhandled
 
 viIdle :: ViKeys
@@ -106,7 +105,7 @@ viBusy keys =
   viWait keys /= WaitNone || viCount keys /= Nothing || viOp keys /= Nothing
 
 -- What the status chip shows mid-command: "2d", "ci", "f", "g".
-viLabel :: ViKeys -> Maybe Text
+viLabel :: ViKeys -> Maybe T.Text
 viLabel keys =
   let
     countText = maybe "" tshow (viCount keys)
@@ -124,7 +123,7 @@ viLabel keys =
   in
     if T.null label then Nothing else Just label
 
-opChar :: ViOp -> Text
+opChar :: ViOp -> T.Text
 opChar op =
   case op of
     OpDelete -> "d"
@@ -136,7 +135,7 @@ opChar op =
     OpUpper -> "gU"
     OpSwapCase -> "g~"
 
-findChar :: FindDir -> Text
+findChar :: FindDir -> T.Text
 findChar dir =
   case dir of
     FindTo -> "f"
@@ -144,12 +143,12 @@ findChar dir =
     FindTill -> "t"
     FindTillBack -> "T"
 
-tshow :: Int -> Text
+tshow :: Int -> T.Text
 tshow = T.pack . show
 
 -- Dispatch ------------------------------------------------------------------------
 
-handleVi :: ViKeys -> V.Event -> EdState -> ViResult
+handleVi :: ViKeys -> V.Event -> Modal.EdState -> ViResult
 handleVi keys ev ed =
   let
     kept = keys {viKeep = ev : viKeep keys}
@@ -165,19 +164,19 @@ handleVi keys ev ed =
 -- A command is finished: reset everything transient, and remember it for
 -- `.` only if it actually changed the buffer (or opened an insert
 -- session, whose text `.` replays too). Bare motions leave `.` alone.
-finish :: ViKeys -> EdState -> EdState -> ViResult
+finish :: ViKeys -> Modal.EdState -> Modal.EdState -> ViResult
 finish keys before after =
   let
     changed =
-      bufferLines after /= bufferLines before || edMode after == Insert
+      Modal.bufferLines after /= Modal.bufferLines before || Modal.edMode after == Modal.Insert
     dot = if changed then reverse (viKeep keys) else viDot keys
   in
     ViDone viIdle {viFind = viFind keys, viDot = dot} after
 
 -- Abandon a half-typed command without touching the buffer.
-cancel :: ViKeys -> EdState -> ViResult
+cancel :: ViKeys -> Modal.EdState -> ViResult
 cancel keys ed =
-  ViDone viIdle {viFind = viFind keys, viDot = viDot keys} (collapse ed)
+  ViDone viIdle {viFind = viFind keys, viDot = viDot keys} (Modal.collapse ed)
 
 resolvedCount :: ViKeys -> Int
 resolvedCount keys =
@@ -202,7 +201,7 @@ pushDigit keys c =
 
 -- Normal mode ---------------------------------------------------------------------
 
-normalKey :: ViKeys -> V.Event -> EdState -> ViResult
+normalKey :: ViKeys -> V.Event -> Modal.EdState -> ViResult
 normalKey keys ev ed =
   let
     count = resolvedCount keys
@@ -210,14 +209,14 @@ normalKey keys ev ed =
     -- an operator typed while visual mode is on acts on the selection
     -- immediately; there is nothing left to wait for
     operator op =
-      if edExtend ed
+      if Modal.edExtend ed
         then finish keys ed (applyToSelection op ed)
         else withOp op
     done = finish keys ed
   in
     case ev of
       V.EvKey (V.KChar c) []
-        | isDigit c
+        | Char.isDigit c
         , c /= '0' || hasCount keys ->
             ViPending (pushDigit keys c)
       V.EvKey V.KEsc [] -> cancel keys ed
@@ -244,25 +243,25 @@ normalKey keys ev ed =
       V.EvKey (V.KChar 'Y') [] ->
         done (spanOp OpYank (Linewise (downBy (count - 1) ed)) ed)
       -- entering insert
-      V.EvKey (V.KChar 'i') [] -> done (enterInsert EntryI id ed)
-      V.EvKey (V.KChar 'a') [] -> done (enterInsert EntryAppend Z.moveRight ed)
-      V.EvKey (V.KChar 'I') [] -> done (enterInsert EntryBOL firstNonBlankZ ed)
-      V.EvKey (V.KChar 'A') [] -> done (enterInsert EntryEOL Z.gotoEOL ed)
-      V.EvKey (V.KChar 'o') [] -> done (openLine 1 ed)
-      V.EvKey (V.KChar 'O') [] -> done (openLine 0 ed)
+      V.EvKey (V.KChar 'i') [] -> done (Modal.enterInsert Modal.EntryI id ed)
+      V.EvKey (V.KChar 'a') [] -> done (Modal.enterInsert Modal.EntryAppend Z.moveRight ed)
+      V.EvKey (V.KChar 'I') [] -> done (Modal.enterInsert Modal.EntryBOL firstNonBlankZ ed)
+      V.EvKey (V.KChar 'A') [] -> done (Modal.enterInsert Modal.EntryEOL Z.gotoEOL ed)
+      V.EvKey (V.KChar 'o') [] -> done (Modal.openLine 1 ed)
+      V.EvKey (V.KChar 'O') [] -> done (Modal.openLine 0 ed)
       -- edits that need no motion
       V.EvKey (V.KChar 'r') [] -> ViPending keys {viWait = WaitReplace}
       V.EvKey (V.KChar '~') [] ->
-        done (plainMove Z.moveRight (toggleCase (collapse ed)))
+        done (Modal.plainMove Z.moveRight (Modal.toggleCase (Modal.collapse ed)))
       V.EvKey (V.KChar 'J') [] -> done (joinBy count ed)
-      V.EvKey (V.KChar 'p') [] -> done (repeatEdit count (pasteSel 1) ed)
-      V.EvKey (V.KChar 'P') [] -> done (repeatEdit count (pasteSel 0) ed)
-      V.EvKey (V.KChar 'u') [] -> done (repeatEdit count undo ed)
-      V.EvKey (V.KChar 'r') [V.MCtrl] -> done (repeatEdit count redo ed)
+      V.EvKey (V.KChar 'p') [] -> done (repeatEdit count (Modal.pasteSel 1) ed)
+      V.EvKey (V.KChar 'P') [] -> done (repeatEdit count (Modal.pasteSel 0) ed)
+      V.EvKey (V.KChar 'u') [] -> done (repeatEdit count Modal.undo ed)
+      V.EvKey (V.KChar 'r') [V.MCtrl] -> done (repeatEdit count Modal.redo ed)
       V.EvKey (V.KChar '.') [] -> replayDot keys ed
       -- visual mode
-      V.EvKey (V.KChar 'v') [] -> done (enterVisual CharSel ed)
-      V.EvKey (V.KChar 'V') [] -> done (enterVisual LineSel ed)
+      V.EvKey (V.KChar 'v') [] -> done (enterVisual Modal.CharSel ed)
+      V.EvKey (V.KChar 'V') [] -> done (enterVisual Modal.LineSel ed)
       -- find, and its repeats
       V.EvKey (V.KChar 'f') [] -> ViPending keys {viWait = WaitFind FindTo}
       V.EvKey (V.KChar 'F') [] -> ViPending keys {viWait = WaitFind FindBack}
@@ -275,7 +274,7 @@ normalKey keys ev ed =
 
 -- Waiting for an operator's motion ------------------------------------------------
 
-operatorKey :: ViKeys -> V.Event -> EdState -> ViResult
+operatorKey :: ViKeys -> V.Event -> Modal.EdState -> ViResult
 operatorKey keys ev ed =
   let
     count = resolvedCount keys
@@ -284,7 +283,7 @@ operatorKey keys ev ed =
   in
     case ev of
       V.EvKey (V.KChar c) []
-        | isDigit c
+        | Char.isDigit c
         , c /= '0' || hasCount keys ->
             ViPending (pushDigit keys c)
       V.EvKey V.KEsc [] -> cancel keys ed
@@ -322,12 +321,12 @@ doubleChar op =
 -- like `ce` (change the word, not the gap after it), and `dw` on the
 -- last word of a line stops at the line's end instead of dragging the
 -- next line up.
-clampForOp :: ViOp -> Int -> V.Event -> EdState -> Span -> Span
+clampForOp :: ViOp -> Int -> V.Event -> Modal.EdState -> Span -> Span
 clampForOp op count ev ed s =
   let
-    (row, col) = cursorRC ed
+    (row, col) = Modal.cursorRC ed
     line = currentLineText ed
-    onWord = col < T.length line && not (isSpace (T.index line col))
+    onWord = col < T.length line && not (Char.isSpace (T.index line col))
     adjust cls to =
       if op == OpChange && onWord
         then Inclusive (wordEndFrom cls count ed)
@@ -337,16 +336,16 @@ clampForOp op count ev ed s =
             else Exclusive to
   in
     case (ev, s) of
-      (V.EvKey (V.KChar 'w') [], Exclusive to) -> adjust SmallWord to
-      (V.EvKey (V.KChar 'W') [], Exclusive to) -> adjust BigWord to
+      (V.EvKey (V.KChar 'w') [], Exclusive to) -> adjust Modal.SmallWord to
+      (V.EvKey (V.KChar 'W') [], Exclusive to) -> adjust Modal.BigWord to
       _ -> s
 
 -- g-prefixed: gg and ge are motions, gu/gU/g~ are operators.
-gKey :: ViKeys -> V.Event -> EdState -> ViResult
+gKey :: ViKeys -> V.Event -> Modal.EdState -> ViResult
 gKey keys ev ed =
   let
     count = resolvedCount keys
-    row = fst (cursorRC ed)
+    row = fst (Modal.cursorRC ed)
     held = viOp keys
     -- gu with that same operator already held is the doubled form
     -- (`guu`, a whole line); with none held it starts one
@@ -368,20 +367,20 @@ gKey keys ev ed =
       V.EvKey (V.KChar 'g') [] ->
         motion (Linewise (maybe 0 (subtract 1) (viCount keys) - row))
       V.EvKey (V.KChar 'e') [] ->
-        motion (Inclusive (wordEndBackFrom SmallWord count ed))
+        motion (Inclusive (wordEndBackFrom Modal.SmallWord count ed))
       V.EvKey (V.KChar 'E') [] ->
-        motion (Inclusive (wordEndBackFrom BigWord count ed))
+        motion (Inclusive (wordEndBackFrom Modal.BigWord count ed))
       _ -> cancel keys ed
 
 -- f/F/t/T with their target, and the ; and , that repeat them.
-findKey :: ViKeys -> FindDir -> V.Event -> EdState -> ViResult
+findKey :: ViKeys -> FindDir -> V.Event -> Modal.EdState -> ViResult
 findKey keys dir ev ed =
   case ev of
     V.EvKey (V.KChar c) [] ->
       applyFindDir keys {viFind = Just (dir, c)} dir c ed
     _ -> cancel keys ed
 
-applyFindDir :: ViKeys -> FindDir -> Char -> EdState -> ViResult
+applyFindDir :: ViKeys -> FindDir -> Char -> Modal.EdState -> ViResult
 applyFindDir keys dir c ed =
   let
     count = resolvedCount keys
@@ -400,15 +399,15 @@ applyFindDir keys dir c ed =
             Nothing -> finish keys ed (moveOver s ed)
             Just op -> finish keys ed (spanOp op s ed)
 
-replaceKey :: ViKeys -> V.Event -> EdState -> ViResult
+replaceKey :: ViKeys -> V.Event -> Modal.EdState -> ViResult
 replaceKey keys ev ed =
   case ev of
-    V.EvKey (V.KChar c) [] -> finish keys ed (replaceSel c ed)
+    V.EvKey (V.KChar c) [] -> finish keys ed (Modal.replaceSel c ed)
     _ -> cancel keys ed
 
 -- Text objects --------------------------------------------------------------------
 
-objectKey :: ViKeys -> ObjKind -> V.Event -> EdState -> ViResult
+objectKey :: ViKeys -> ObjKind -> V.Event -> Modal.EdState -> ViResult
 objectKey keys kind ev ed =
   let
     op = maybe OpDelete id (viOp keys)
@@ -421,16 +420,16 @@ objectKey keys kind ev ed =
           Nothing -> cancel keys ed
       _ -> cancel keys ed
 
-objectSpan :: ObjKind -> Char -> EdState -> Maybe Span
+objectSpan :: ObjKind -> Char -> Modal.EdState -> Maybe Span
 objectSpan kind c ed =
   let
-    ls = bufferLines ed
-    pos = cursorRC ed
-    pair open close = fmap (pairSpan kind) (matchEnclosing open close ls pos)
+    ls = Modal.bufferLines ed
+    pos = Modal.cursorRC ed
+    pair open close = fmap (pairSpan kind) (Modal.matchEnclosing open close ls pos)
   in
     case c of
-      'w' -> Just (wordObject kind SmallWord ed)
-      'W' -> Just (wordObject kind BigWord ed)
+      'w' -> Just (wordObject kind Modal.SmallWord ed)
+      'W' -> Just (wordObject kind Modal.BigWord ed)
       'p' -> Just (paragraphObject kind ed)
       '(' -> pair '(' ')'
       ')' -> pair '(' ')'
@@ -452,8 +451,8 @@ objectSpan kind c ed =
 pairSpan :: ObjKind -> ((Int, Int), (Int, Int)) -> Span
 pairSpan kind (open, close) =
   case kind of
-    Around -> AlreadySpan CharSel open close
-    Inner -> AlreadySpan CharSel (stepForward open) (stepBackward close)
+    Around -> AlreadySpan Modal.CharSel open close
+    Inner -> AlreadySpan Modal.CharSel (stepForward open) (stepBackward close)
 
 -- Positions are compared and stepped in document order; these two only
 -- ever move within the enclosing span, so a row change is safe.
@@ -463,44 +462,44 @@ stepForward (r, c) = (r, c + 1)
 stepBackward :: (Int, Int) -> (Int, Int)
 stepBackward (r, c) = (r, c - 1)
 
-wordObject :: ObjKind -> WordClass -> EdState -> Span
+wordObject :: ObjKind -> Modal.WordClass -> Modal.EdState -> Span
 wordObject kind cls ed =
   let
-    ls = bufferLines ed
-    (row, col) = cursorRC ed
-    line = lineAt ls row
+    ls = Modal.bufferLines ed
+    (row, col) = Modal.cursorRC ed
+    line = Modal.lineAt ls row
     len = T.length line
-    classOf i = charClass cls (T.index line i)
-    here = if col < len then classOf col else ClsSpace
+    classOf i = Modal.charClass cls (T.index line i)
+    here = if col < len then classOf col else Modal.ClsSpace
     runFrom step i =
       if i >= 0 && i < len && classOf i == here then runFrom step (i + step) else i - step
     lo = if col < len then runFrom (-1) col else col
     hi = if col < len then runFrom 1 col else col
     trailing j =
-      if j + 1 < len && classOf (j + 1) == ClsSpace then trailing (j + 1) else j
+      if j + 1 < len && classOf (j + 1) == Modal.ClsSpace then trailing (j + 1) else j
     leading j =
-      if j - 1 >= 0 && classOf (j - 1) == ClsSpace then leading (j - 1) else j
+      if j - 1 >= 0 && classOf (j - 1) == Modal.ClsSpace then leading (j - 1) else j
     hiAround = trailing hi
     (loFinal, hiFinal) =
       case kind of
         Inner -> (lo, hi)
         Around ->
-          if hiAround > hi || here == ClsSpace
+          if hiAround > hi || here == Modal.ClsSpace
             then (lo, hiAround)
             else (leading lo, hi)
   in
-    AlreadySpan CharSel (row, loFinal) (row, max loFinal hiFinal)
+    AlreadySpan Modal.CharSel (row, loFinal) (row, max loFinal hiFinal)
 
 -- A paragraph is a run of lines all blank or all not; `ap` takes the run
 -- of the opposite kind that follows, which is what makes `dap` remove
 -- the gap after the paragraph as well.
-paragraphObject :: ObjKind -> EdState -> Span
+paragraphObject :: ObjKind -> Modal.EdState -> Span
 paragraphObject kind ed =
   let
-    ls = bufferLines ed
+    ls = Modal.bufferLines ed
     lastRow = max 0 (length ls - 1)
-    (row, _) = cursorRC ed
-    blank r = T.null (T.strip (lineAt ls r))
+    (row, _) = Modal.cursorRC ed
+    blank r = T.null (T.strip (Modal.lineAt ls r))
     here = blank row
     runUp r = if r > 0 && blank (r - 1) == here then runUp (r - 1) else r
     runDown r = if r < lastRow && blank (r + 1) == here then runDown (r + 1) else r
@@ -513,17 +512,17 @@ paragraphObject kind ed =
         Inner -> hi
         Around -> trailing hi
   in
-    AlreadySpan LineSel (runUp row, 0) (hiFinal, 0)
+    AlreadySpan Modal.LineSel (runUp row, 0) (hiFinal, 0)
 
 -- Quote objects stay on one line, the way vi treats them: pair the quotes
 -- off from the line's start and take the pair the cursor sits in, else
 -- the next pair along.
-quoteObject :: ObjKind -> Char -> EdState -> Maybe Span
+quoteObject :: ObjKind -> Char -> Modal.EdState -> Maybe Span
 quoteObject kind q ed =
   let
-    ls = bufferLines ed
-    (row, col) = cursorRC ed
-    line = lineAt ls row
+    ls = Modal.bufferLines ed
+    (row, col) = Modal.cursorRC ed
+    line = Modal.lineAt ls row
     pairUp idxs =
       case idxs of
         (a : b : rest) -> (a, b) : pairUp rest
@@ -535,11 +534,11 @@ quoteObject kind q ed =
     case inside ++ ahead of
       ((a, b) : _) ->
         case kind of
-          Around -> Just (AlreadySpan CharSel (row, a) (row, b))
+          Around -> Just (AlreadySpan Modal.CharSel (row, a) (row, b))
           Inner ->
             if b - a <= 1
               then Nothing
-              else Just (AlreadySpan CharSel (row, a + 1) (row, b - 1))
+              else Just (AlreadySpan Modal.CharSel (row, a + 1) (row, b - 1))
       [] -> Nothing
 
 -- The innermost open/close pair enclosing the cursor: walk back to the
@@ -547,10 +546,10 @@ quoteObject kind q ed =
 -- so a stray bracket in a huge file cannot turn into a full scan.
 -- Motions -------------------------------------------------------------------------
 
-motionFor :: ViKeys -> Int -> V.Event -> EdState -> Maybe Span
+motionFor :: ViKeys -> Int -> V.Event -> Modal.EdState -> Maybe Span
 motionFor keys count ev ed =
   let
-    (row, _) = cursorRC ed
+    (row, _) = Modal.cursorRC ed
   in
     case ev of
       V.EvKey (V.KChar 'h') [] -> Just (Exclusive (leftBy count ed))
@@ -569,21 +568,21 @@ motionFor keys count ev ed =
       V.EvKey (V.KChar '$') [] ->
         Just (Inclusive (endOfLineAt (downBy (count - 1) ed) ed))
       V.EvKey V.KEnd [] -> Just (Inclusive (endOfLine ed))
-      V.EvKey (V.KChar 'w') [] -> Just (Exclusive (wordStartFrom SmallWord count ed))
-      V.EvKey (V.KChar 'W') [] -> Just (Exclusive (wordStartFrom BigWord count ed))
-      V.EvKey (V.KChar 'b') [] -> Just (Exclusive (wordBackFrom SmallWord count ed))
-      V.EvKey (V.KChar 'B') [] -> Just (Exclusive (wordBackFrom BigWord count ed))
-      V.EvKey (V.KChar 'e') [] -> Just (Inclusive (wordEndFrom SmallWord count ed))
-      V.EvKey (V.KChar 'E') [] -> Just (Inclusive (wordEndFrom BigWord count ed))
+      V.EvKey (V.KChar 'w') [] -> Just (Exclusive (wordStartFrom Modal.SmallWord count ed))
+      V.EvKey (V.KChar 'W') [] -> Just (Exclusive (wordStartFrom Modal.BigWord count ed))
+      V.EvKey (V.KChar 'b') [] -> Just (Exclusive (wordBackFrom Modal.SmallWord count ed))
+      V.EvKey (V.KChar 'B') [] -> Just (Exclusive (wordBackFrom Modal.BigWord count ed))
+      V.EvKey (V.KChar 'e') [] -> Just (Inclusive (wordEndFrom Modal.SmallWord count ed))
+      V.EvKey (V.KChar 'E') [] -> Just (Inclusive (wordEndFrom Modal.BigWord count ed))
       V.EvKey (V.KChar 'G') [] ->
         Just (Linewise (maybe (lastRowOf ed) (subtract 1) (viCount keys) - row))
-      V.EvKey (V.KChar '%') [] -> fmap Inclusive (matchingBracket ed)
+      V.EvKey (V.KChar '%') [] -> fmap Inclusive (Modal.matchingBracket ed)
       V.EvKey (V.KChar ';') [] -> repeatFind keys count ed id
       V.EvKey (V.KChar ',') [] -> repeatFind keys count ed flipDir
       _ -> Nothing
 
 repeatFind ::
-  ViKeys -> Int -> EdState -> (FindDir -> FindDir) -> Maybe Span
+  ViKeys -> Int -> Modal.EdState -> (FindDir -> FindDir) -> Maybe Span
 repeatFind keys count ed rewrite =
   case viFind keys of
     Nothing -> Nothing
@@ -610,195 +609,195 @@ flipDir dir =
 
 -- Positions -----------------------------------------------------------------------
 
-currentLineText :: EdState -> Text
-currentLineText ed = lineAt (bufferLines ed) (fst (cursorRC ed))
+currentLineText :: Modal.EdState -> T.Text
+currentLineText ed = Modal.lineAt (Modal.bufferLines ed) (fst (Modal.cursorRC ed))
 
 -- Every column holding this character, left to right.
-charCols :: Char -> Text -> [Int]
+charCols :: Char -> T.Text -> [Int]
 charCols c line =
   let
     keep (i, ch) = if ch == c then Just i else Nothing
   in
-    mapMaybe keep (zip [0 ..] (T.unpack line))
+    Maybe.mapMaybe keep (zip [0 ..] (T.unpack line))
 
-lastRowOf :: EdState -> Int
-lastRowOf ed = max 0 (length (bufferLines ed) - 1)
+lastRowOf :: Modal.EdState -> Int
+lastRowOf ed = max 0 (length (Modal.bufferLines ed) - 1)
 
-leftBy :: Int -> EdState -> (Int, Int)
+leftBy :: Int -> Modal.EdState -> (Int, Int)
 leftBy n ed =
   let
-    (r, c) = cursorRC ed
+    (r, c) = Modal.cursorRC ed
   in
     (r, max 0 (c - n))
 
-rightBy :: Int -> EdState -> (Int, Int)
+rightBy :: Int -> Modal.EdState -> (Int, Int)
 rightBy n ed =
   let
-    (r, c) = cursorRC ed
+    (r, c) = Modal.cursorRC ed
   in
     (r, min (T.length (currentLineText ed)) (c + n))
 
-downBy :: Int -> EdState -> Int
+downBy :: Int -> Modal.EdState -> Int
 downBy n ed =
   let
-    (r, _) = cursorRC ed
+    (r, _) = Modal.cursorRC ed
   in
     max 0 (min (lastRowOf ed) (r + n)) - r
 
-endOfLine :: EdState -> (Int, Int)
+endOfLine :: Modal.EdState -> (Int, Int)
 endOfLine ed =
   let
-    (r, _) = cursorRC ed
+    (r, _) = Modal.cursorRC ed
   in
     (r, max 0 (T.length (currentLineText ed) - 1))
 
-endOfLineAt :: Int -> EdState -> (Int, Int)
+endOfLineAt :: Int -> Modal.EdState -> (Int, Int)
 endOfLineAt delta ed =
   let
-    (r, _) = cursorRC ed
+    (r, _) = Modal.cursorRC ed
     row = r + delta
   in
-    (row, max 0 (T.length (lineAt (bufferLines ed) row) - 1))
+    (row, max 0 (T.length (Modal.lineAt (Modal.bufferLines ed) row) - 1))
 
-firstNonBlankCol :: EdState -> Int -> Int
+firstNonBlankCol :: Modal.EdState -> Int -> Int
 firstNonBlankCol ed row =
-  T.length (T.takeWhile isSpace (lineAt (bufferLines ed) row))
+  T.length (T.takeWhile Char.isSpace (Modal.lineAt (Modal.bufferLines ed) row))
 
-firstNonBlankZ :: Z.TextZipper Text -> Z.TextZipper Text
+firstNonBlankZ :: Z.TextZipper T.Text -> Z.TextZipper T.Text
 firstNonBlankZ z =
   let
     (row, _) = Z.cursorPosition z
-    col = T.length (T.takeWhile isSpace (Z.currentLine z))
+    col = T.length (T.takeWhile Char.isSpace (Z.currentLine z))
   in
     Z.moveCursor (row, col) z
 
 -- Walking the buffer one cell at a time, so word motions cross lines the
 -- way vi's do.
 
-classAt :: WordClass -> [Text] -> (Int, Int) -> CharClass
+classAt :: Modal.WordClass -> [T.Text] -> (Int, Int) -> Modal.CharClass
 classAt cls ls (r, c) =
   let
-    l = lineAt ls r
+    l = Modal.lineAt ls r
   in
-    if c < T.length l then charClass cls (T.index l c) else ClsSpace
+    if c < T.length l then Modal.charClass cls (T.index l c) else Modal.ClsSpace
 
 -- w: forward to the start of the next word.
-wordStartFrom :: WordClass -> Int -> EdState -> (Int, Int)
+wordStartFrom :: Modal.WordClass -> Int -> Modal.EdState -> (Int, Int)
 wordStartFrom cls n ed =
   let
-    ls = bufferLines ed
+    ls = Modal.bufferLines ed
     step p =
       let
         start = classAt cls ls p
         skipSame q =
-          case nextPos ls q of
-            Just q2 | classAt cls ls q2 == start && start /= ClsSpace -> skipSame q2
+          case Modal.nextPos ls q of
+            Just q2 | classAt cls ls q2 == start && start /= Modal.ClsSpace -> skipSame q2
             _ -> q
-        afterWord = if start == ClsSpace then p else skipSame p
+        afterWord = if start == Modal.ClsSpace then p else skipSame p
         skipSpace q =
-          case nextPos ls q of
-            Just q2 | classAt cls ls q2 == ClsSpace -> skipSpace q2
+          case Modal.nextPos ls q of
+            Just q2 | classAt cls ls q2 == Modal.ClsSpace -> skipSpace q2
             _ -> q
       in
-        case nextPos ls (skipSpace afterWord) of
+        case Modal.nextPos ls (skipSpace afterWord) of
           Just q -> q
           Nothing -> endOfBuffer ls
   in
-    iterateN n step (cursorRC ed)
+    iterateN n step (Modal.cursorRC ed)
 
 -- b: back to the start of the current or previous word.
-wordBackFrom :: WordClass -> Int -> EdState -> (Int, Int)
+wordBackFrom :: Modal.WordClass -> Int -> Modal.EdState -> (Int, Int)
 wordBackFrom cls n ed =
   let
-    ls = bufferLines ed
+    ls = Modal.bufferLines ed
     step p =
       let
-        backOne = case prevPos ls p of
+        backOne = case Modal.prevPos ls p of
           Just q -> q
           Nothing -> p
         skipSpace q =
-          case prevPos ls q of
-            Just q2 | classAt cls ls q == ClsSpace -> skipSpace q2
+          case Modal.prevPos ls q of
+            Just q2 | classAt cls ls q == Modal.ClsSpace -> skipSpace q2
             _ -> q
         landed = skipSpace backOne
         cls0 = classAt cls ls landed
         toStart q =
-          case prevPos ls q of
-            Just q2 | classAt cls ls q2 == cls0 && cls0 /= ClsSpace -> toStart q2
+          case Modal.prevPos ls q of
+            Just q2 | classAt cls ls q2 == cls0 && cls0 /= Modal.ClsSpace -> toStart q2
             _ -> q
       in
         toStart landed
   in
-    iterateN n step (cursorRC ed)
+    iterateN n step (Modal.cursorRC ed)
 
 -- e: forward to the last character of the current or next word.
-wordEndFrom :: WordClass -> Int -> EdState -> (Int, Int)
+wordEndFrom :: Modal.WordClass -> Int -> Modal.EdState -> (Int, Int)
 wordEndFrom cls n ed =
   let
-    ls = bufferLines ed
+    ls = Modal.bufferLines ed
     step p =
       let
-        fwdOne = case nextPos ls p of
+        fwdOne = case Modal.nextPos ls p of
           Just q -> q
           Nothing -> p
         skipSpace q =
-          case nextPos ls q of
-            Just q2 | classAt cls ls q == ClsSpace -> skipSpace q2
+          case Modal.nextPos ls q of
+            Just q2 | classAt cls ls q == Modal.ClsSpace -> skipSpace q2
             _ -> q
         landed = skipSpace fwdOne
         cls0 = classAt cls ls landed
         toEnd q =
-          case nextPos ls q of
-            Just q2 | classAt cls ls q2 == cls0 && cls0 /= ClsSpace -> toEnd q2
+          case Modal.nextPos ls q of
+            Just q2 | classAt cls ls q2 == cls0 && cls0 /= Modal.ClsSpace -> toEnd q2
             _ -> q
       in
         toEnd landed
   in
-    iterateN n step (cursorRC ed)
+    iterateN n step (Modal.cursorRC ed)
 
 -- ge: back to the last character of the previous word.
-wordEndBackFrom :: WordClass -> Int -> EdState -> (Int, Int)
+wordEndBackFrom :: Modal.WordClass -> Int -> Modal.EdState -> (Int, Int)
 wordEndBackFrom cls n ed =
   let
-    ls = bufferLines ed
+    ls = Modal.bufferLines ed
     step p =
       let
-        backOne = case prevPos ls p of
+        backOne = case Modal.prevPos ls p of
           Just q -> q
           Nothing -> p
         skipOwn q =
-          case prevPos ls q of
+          case Modal.prevPos ls q of
             Just q2
-              | classAt cls ls q == classAt cls ls p && classAt cls ls q /= ClsSpace ->
+              | classAt cls ls q == classAt cls ls p && classAt cls ls q /= Modal.ClsSpace ->
                   skipOwn q2
             _ -> q
         afterOwn = skipOwn backOne
         skipSpace q =
-          case prevPos ls q of
-            Just q2 | classAt cls ls q == ClsSpace -> skipSpace q2
+          case Modal.prevPos ls q of
+            Just q2 | classAt cls ls q == Modal.ClsSpace -> skipSpace q2
             _ -> q
       in
         skipSpace afterOwn
   in
-    iterateN n step (cursorRC ed)
+    iterateN n step (Modal.cursorRC ed)
 
-endOfBuffer :: [Text] -> (Int, Int)
+endOfBuffer :: [T.Text] -> (Int, Int)
 endOfBuffer ls =
   let
     r = max 0 (length ls - 1)
   in
-    (r, max 0 (T.length (lineAt ls r) - 1))
+    (r, max 0 (T.length (Modal.lineAt ls r) - 1))
 
 iterateN :: Int -> (a -> a) -> a -> a
 iterateN n f x = if n <= 0 then x else iterateN (n - 1) f (f x)
 
 -- f/F/t/T's landing place, counted.
-findTarget :: FindDir -> Int -> Char -> EdState -> Maybe (Int, Int)
+findTarget :: FindDir -> Int -> Char -> Modal.EdState -> Maybe (Int, Int)
 findTarget dir n c ed =
   let
-    ls = bufferLines ed
-    (row, col) = cursorRC ed
-    line = lineAt ls row
+    ls = Modal.bufferLines ed
+    (row, col) = Modal.cursorRC ed
+    line = Modal.lineAt ls row
     forwards = filter (> col) (charCols c line)
     backwards = reverse (filter (< col) (charCols c line))
     nth xs = case drop (n - 1) xs of
@@ -817,58 +816,58 @@ findTarget dir n c ed =
 
 -- A bare motion: move, growing the selection when visual mode is on and
 -- collapsing it when it is not.
-moveOver :: Span -> EdState -> EdState
+moveOver :: Span -> Modal.EdState -> Modal.EdState
 moveOver s ed =
   let
     to = case s of
       Exclusive p -> p
       Inclusive p -> p
-      Linewise delta -> (fst (cursorRC ed) + delta, snd (cursorRC ed))
+      Linewise delta -> (fst (Modal.cursorRC ed) + delta, snd (Modal.cursorRC ed))
       AlreadySpan _ _ hi -> hi
     place = Z.moveCursor to
   in
-    if edExtend ed
-      then ed {edZipper = place (edZipper ed)}
-      else (collapse ed) {edZipper = place (edZipper ed)}
+    if Modal.edExtend ed
+      then ed {Modal.edZipper = place (Modal.edZipper ed)}
+      else (Modal.collapse ed) {Modal.edZipper = place (Modal.edZipper ed)}
 
 -- Turn the span into exactly the selection Modal's verbs consume, then
 -- run the verb. This is the whole trick: vi's grammar, helix's verbs.
-spanOp :: ViOp -> Span -> EdState -> EdState
+spanOp :: ViOp -> Span -> Modal.EdState -> Modal.EdState
 spanOp op s ed =
   case selectionFor s ed of
-    Nothing -> collapse ed
+    Nothing -> Modal.collapse ed
     Just selected -> applyToSelection op selected
 
 -- Where the cursor is now is one end of the span; the motion's target is
 -- the other. Exclusive motions give back the cell they landed on.
-selectionFor :: Span -> EdState -> Maybe EdState
+selectionFor :: Span -> Modal.EdState -> Maybe Modal.EdState
 selectionFor s ed =
   let
-    ls = bufferLines ed
-    from = cursorRC ed
+    ls = Modal.bufferLines ed
+    from = Modal.cursorRC ed
     charSpan lo hi =
       if hi < lo
         then Nothing
         else
           Just
             ed
-              { edZipper = Z.moveCursor hi (edZipper ed)
-              , edSelAnchor = Just lo
-              , edSelKind = CharSel
-              , edExtend = False
+              { Modal.edZipper = Z.moveCursor hi (Modal.edZipper ed)
+              , Modal.edSelAnchor = Just lo
+              , Modal.edSelKind = Modal.CharSel
+              , Modal.edExtend = False
               }
     lineSpan loRow hiRow =
       Just
         ed
-          { edZipper = Z.moveCursor (hiRow, 0) (edZipper ed)
-          , edSelAnchor = Just (loRow, 0)
-          , edSelKind = LineSel
-          , edExtend = False
+          { Modal.edZipper = Z.moveCursor (hiRow, 0) (Modal.edZipper ed)
+          , Modal.edSelAnchor = Just (loRow, 0)
+          , Modal.edSelKind = Modal.LineSel
+          , Modal.edExtend = False
           }
     -- an exclusive motion covers [lo, hi): the cell it landed on is not
     -- part of the span, so the inclusive selection stops one short
     shrink p =
-      case prevPos ls p of
+      case Modal.prevPos ls p of
         Just prev -> prev
         Nothing -> p
   in
@@ -880,8 +879,8 @@ selectionFor s ed =
         in
           lineSpan (min row other) (max row other)
       Inclusive to -> charSpan (min from to) (max from to)
-      AlreadySpan CharSel lo hi -> charSpan lo hi
-      AlreadySpan LineSel lo hi -> lineSpan (fst lo) (fst hi)
+      AlreadySpan Modal.CharSel lo hi -> charSpan lo hi
+      AlreadySpan Modal.LineSel lo hi -> lineSpan (fst lo) (fst hi)
       Exclusive to ->
         let
           lo = min from to
@@ -889,7 +888,7 @@ selectionFor s ed =
         in
           if lo == hi then Nothing else charSpan lo (shrink hi)
 
-applyToSelection :: ViOp -> EdState -> EdState
+applyToSelection :: ViOp -> Modal.EdState -> Modal.EdState
 applyToSelection op ed =
   case op of
     -- vi's delete and change fill the unnamed register on their way out,
@@ -897,51 +896,51 @@ applyToSelection op ed =
     -- so the yank has to happen here rather than in the shared verb —
     -- quietly, since removing a line is not a request to put it on the
     -- system clipboard.
-    OpDelete -> deleteSel (yankInto ed)
-    OpChange -> changeSel (yankInto ed)
+    OpDelete -> Modal.deleteSel (Modal.yankInto ed)
+    OpChange -> Modal.changeSel (Modal.yankInto ed)
     -- vi leaves the cursor at the start of a yank and drops the
     -- selection; helix's yankSel keeps it highlighted
     OpYank ->
       let
-        anchor = maybe (cursorRC ed) id (edSelAnchor ed)
-        home = min anchor (cursorRC ed)
-        yanked = yankSel ed
+        anchor = maybe (Modal.cursorRC ed) id (Modal.edSelAnchor ed)
+        home = min anchor (Modal.cursorRC ed)
+        yanked = Modal.yankSel ed
       in
-        (collapse yanked) {edZipper = Z.moveCursor home (edZipper yanked)}
-    OpIndent -> collapse (indentLines 1 ed)
-    OpUnindent -> collapse (indentLines (-1) ed)
-    OpLower -> collapse (mapSelChars toLower ed)
-    OpUpper -> collapse (mapSelChars toUpper ed)
-    OpSwapCase -> collapse (toggleCase ed)
+        (Modal.collapse yanked) {Modal.edZipper = Z.moveCursor home (Modal.edZipper yanked)}
+    OpIndent -> Modal.collapse (Modal.indentLines 1 ed)
+    OpUnindent -> Modal.collapse (Modal.indentLines (-1) ed)
+    OpLower -> Modal.collapse (Modal.mapSelChars Char.toLower ed)
+    OpUpper -> Modal.collapse (Modal.mapSelChars Char.toUpper ed)
+    OpSwapCase -> Modal.collapse (Modal.toggleCase ed)
 
 -- Visual, repeat, and the small edits ---------------------------------------------
 
-enterVisual :: SelKind -> EdState -> EdState
+enterVisual :: Modal.SelKind -> Modal.EdState -> Modal.EdState
 enterVisual kind ed =
-  if edExtend ed && edSelKind ed == kind
-    then collapse ed
+  if Modal.edExtend ed && Modal.edSelKind ed == kind
+    then Modal.collapse ed
     else
       ed
-        { edExtend = True
-        , edSelKind = kind
-        , edSelAnchor = Just (maybe (cursorRC ed) id (edSelAnchor ed))
+        { Modal.edExtend = True
+        , Modal.edSelKind = kind
+        , Modal.edSelAnchor = Just (maybe (Modal.cursorRC ed) id (Modal.edSelAnchor ed))
         }
 
 -- J with a count joins that many lines; bare J joins two, as vi does.
-joinBy :: Int -> EdState -> EdState
+joinBy :: Int -> Modal.EdState -> Modal.EdState
 joinBy count ed =
   let
     times = max 1 (count - 1)
   in
-    iterateN times joinLines (collapse ed)
+    iterateN times Modal.joinLines (Modal.collapse ed)
 
-repeatEdit :: Int -> (EdState -> EdState) -> EdState -> EdState
+repeatEdit :: Int -> (Modal.EdState -> Modal.EdState) -> Modal.EdState -> Modal.EdState
 repeatEdit count f ed = iterateN (max 1 count) f ed
 
 -- `.` replays the last command that changed something. When that command
 -- opened an insert session, the text typed into it comes back too — the
 -- recording Modal already keeps for its own `.`.
-replayDot :: ViKeys -> EdState -> ViResult
+replayDot :: ViKeys -> Modal.EdState -> ViResult
 replayDot keys ed =
   case viDot keys of
     [] -> ViDone viIdle {viFind = viFind keys, viDot = viDot keys} ed
@@ -954,21 +953,21 @@ replayDot keys ed =
             ViUnhandled -> (k, acc)
         start = viIdle {viFind = viFind keys}
         (_, afterCmd) = foldl replayOne (start, ed) evs
-        typed = case (edMode afterCmd, edLastInsert ed) of
-          (Insert, Just (_, typedEvs)) -> foldl replayInsert afterCmd typedEvs
+        typed = case (Modal.edMode afterCmd, Modal.edLastInsert ed) of
+          (Modal.Insert, Just (_, typedEvs)) -> foldl replayInsert afterCmd typedEvs
           _ -> afterCmd
         settled =
-          if edMode typed == Insert
-            then typed {edMode = Normal, edInsertEntry = Nothing}
+          if Modal.edMode typed == Modal.Insert
+            then typed {Modal.edMode = Modal.Normal, Modal.edInsertEntry = Nothing}
             else typed
       in
         ViDone
           viIdle {viFind = viFind keys, viDot = viDot keys}
-          settled {edLastInsert = edLastInsert ed}
+          settled {Modal.edLastInsert = Modal.edLastInsert ed}
 
-replayInsert :: EdState -> V.Event -> EdState
+replayInsert :: Modal.EdState -> V.Event -> Modal.EdState
 replayInsert acc ev =
-  case handleInsert ev acc of
-    InsertHandled next -> next
-    InsertExit next -> next
-    InsertUnhandled -> acc
+  case Modal.handleInsert ev acc of
+    Modal.InsertHandled next -> next
+    Modal.InsertExit next -> next
+    Modal.InsertUnhandled -> acc

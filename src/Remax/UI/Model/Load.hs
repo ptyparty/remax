@@ -14,103 +14,59 @@ module Remax.UI.Model.Load
   , forceGitRefresh
   ) where
 
-import Brick
-  ( EventM
-  , Viewport (..)
-  , ViewportScroll (..)
-  , lookupViewport
-  , viewportScroll
-  )
-import Brick.BChan
-  ( writeBChanNonBlocking
-  )
+import Brick qualified as Brick
+import Brick.BChan qualified as BChan
 import Control.Applicative ((<|>))
-import Control.Concurrent
-  ( forkIO
-  , threadDelay
-  )
-import Control.Exception
-  ( IOException
-  , evaluate
-  , try
-  )
-import Control.Monad
-  ( forM
-  , forM_
-  , unless
-  , void
-  , when
-  )
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.State (get, modify, put)
-import Data.List
-  ( find
-  , findIndex
-  )
-import qualified Data.Map.Strict as Map
-import Data.Maybe
-  ( catMaybes
-  , fromMaybe
-  , listToMaybe
-  , mapMaybe
-  )
-import qualified Data.Set as Set
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import Data.Time.Clock (UTCTime)
-import GHC.Clock (getMonotonicTime)
-import Remax.Config
-import Remax.DiffModel
-import Remax.Git
-  ( RebaseStatus
-  , ReviewMode (..)
-  , baseLines
-  , currentBranch
-  , headCommit
-  , looksBinary
-  , rebaseStatus
-  , reviewFiles
-  )
-import Remax.Highlight
-import Remax.Modal
-import qualified Remax.TreeSitter as TS
-import Remax.UI.Core.Jobs
-import Remax.UI.Core.Types
-import Remax.UI.Core.Verdict
-import Remax.UI.Core.View
-import Remax.UI.Core.WordDiff
-import Remax.UI.Model.Nav
-import Remax.UI.Model.Watch
-import qualified Remax.Zipper as Z
-import System.Directory
-  ( doesFileExist
-  , getModificationTime
-  )
-import System.FilePath
-  ( takeFileName
-  , (</>)
-  )
-import System.Timeout (timeout)
+import Control.Concurrent qualified as Concurrent
+import Control.Exception qualified as Exception
+import Control.Monad qualified as Monad
+import Control.Monad.IO.Class qualified as MonadIO
+import Control.Monad.State qualified as State
+import Data.List qualified as List
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Set qualified as Set
+import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import Data.Time.Clock qualified as Clock
+import GHC.Clock qualified as GHCClock
+import Remax.Config qualified as Config
+import Remax.DiffModel qualified as DiffModel
+import Remax.Git qualified as Git
+import Remax.Highlight qualified as Highlight
+import Remax.Modal qualified as Modal
+import Remax.TreeSitter qualified as TS
+import Remax.UI.Core.Jobs qualified as Jobs
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Verdict qualified as Verdict
+import Remax.UI.Core.View qualified as View
+import Remax.UI.Core.WordDiff qualified as WordDiff
+import Remax.UI.Model.Nav qualified as Nav
+import Remax.UI.Model.Watch qualified as Watch
+import Remax.Zipper qualified as Z
+import System.Directory qualified as Directory
+import System.FilePath ((</>))
+import System.FilePath qualified as FilePath
+import System.Timeout qualified as Timeout
 
-loadAll :: Config -> TS.HighlighterTable -> ReviewMode -> FilePath -> IO [FileView]
+loadAll :: Config.Config -> TS.HighlighterTable -> Git.ReviewMode -> FilePath -> IO [Types.FileView]
 loadAll cfg hls mode root = do
-  ignores <- loadIgnores root
+  ignores <- Config.loadIgnores root
   names <-
     fmap
-      (filter (not . ignoredPath ignores))
-      (reviewFiles mode (cfgUntracked cfg) root)
-  catMaybes <$> forMaybeBounded (loadOne cfg hls mode root) names
+      (filter (not . Config.ignoredPath ignores))
+      (Git.reviewFiles mode (Config.cfgUntracked cfg) root)
+  Maybe.catMaybes <$> Jobs.forMaybeBounded (loadOne cfg hls mode root) names
 
 loadOne ::
-  Config ->
+  Config.Config ->
   TS.HighlighterTable ->
-  ReviewMode ->
+  Git.ReviewMode ->
   FilePath ->
   FilePath ->
-  IO (Maybe FileView)
+  IO (Maybe Types.FileView)
 loadOne cfg hls mode root path = do
-  present <- doesFileExist (root </> path)
+  present <- Directory.doesFileExist (root </> path)
   if present
     then loadPresent cfg hls mode root path
     else loadRemoved cfg hls mode root path
@@ -119,61 +75,61 @@ loadOne cfg hls mode root path = do
 -- removed this file. It reviews as a file whose every line is a
 -- removal, so accepting those lines is accepting the deletion.
 -- Absent on both sides means there is nothing to say about it.
-loadRemoved :: Config -> TS.HighlighterTable -> ReviewMode -> FilePath -> FilePath -> IO (Maybe FileView)
+loadRemoved :: Config.Config -> TS.HighlighterTable -> Git.ReviewMode -> FilePath -> FilePath -> IO (Maybe Types.FileView)
 loadRemoved cfg hls mode root path = do
-  base <- baseLines mode root path
+  base <- Git.baseLines mode root path
   case base of
     [] -> pure Nothing
     _ -> fmap Just (buildView cfg hls root path True base [])
 
-loadPresent :: Config -> TS.HighlighterTable -> ReviewMode -> FilePath -> FilePath -> IO (Maybe FileView)
+loadPresent :: Config.Config -> TS.HighlighterTable -> Git.ReviewMode -> FilePath -> FilePath -> IO (Maybe Types.FileView)
 loadPresent cfg hls mode root path = do
-  readable <- try (looksBinary root path) :: IO (Either IOException Bool)
+  readable <- Exception.try (Git.looksBinary root path) :: IO (Either Exception.IOException Bool)
   case readable of
     Left _ -> pure Nothing
     Right True -> pure Nothing
     Right False -> do
-      base <- baseLines mode root path
-      gotNew <- try (TIO.readFile (root </> path)) :: IO (Either IOException Text)
+      base <- Git.baseLines mode root path
+      gotNew <- Exception.try (TIO.readFile (root </> path)) :: IO (Either Exception.IOException T.Text)
       case gotNew of
         Left _ -> pure Nothing
         Right newTxt -> do
           stamped <-
-            try (getModificationTime (root </> path)) :: IO (Either IOException UTCTime)
+            Exception.try (Directory.getModificationTime (root </> path)) :: IO (Either Exception.IOException Clock.UTCTime)
           fv <- buildView cfg hls root path False base (T.lines newTxt)
-          pure (Just fv {fvMtime = either (const Nothing) Just stamped})
+          pure (Just fv {Types.fvMtime = either (const Nothing) Just stamped})
 
-buildView :: Config -> TS.HighlighterTable -> FilePath -> FilePath -> Bool -> [Text] -> [Text] -> IO FileView
+buildView :: Config.Config -> TS.HighlighterTable -> FilePath -> FilePath -> Bool -> [T.Text] -> [T.Text] -> IO Types.FileView
 buildView cfg hls root path deleted base newLs = do
   (fv, _) <- rebuildFV cfg (T.pack root) (freshView hls path deleted base newLs)
   let
-    anchor = case fvRuns fv of
-      (r : _) -> runAnchor r
+    anchor = case Types.fvRuns fv of
+      (r : _) -> DiffModel.runAnchor r
       [] -> 0
-  pure fv {fvEd = newEdState anchor newLs}
+  pure fv {Types.fvEd = Modal.newEdState anchor newLs}
 
-freshView :: TS.HighlighterTable -> FilePath -> Bool -> [Text] -> [Text] -> FileView
+freshView :: TS.HighlighterTable -> FilePath -> Bool -> [T.Text] -> [T.Text] -> Types.FileView
 freshView hls path deleted base newLs =
-  FileView
-    { fvPath = path
-    , fvBase = base
-    , fvEd = newEdState 0 newLs
-    , fvRows = []
-    , fvEmph = []
-    , fvRowCount = 0
-    , fvOrigin = 0
-    , fvRuns = []
-    , fvToks = []
-    , fvStale = False
-    , fvDeleted = deleted
-    , fvHighlighted = False
+  Types.FileView
+    { Types.fvPath = path
+    , Types.fvBase = base
+    , Types.fvEd = Modal.newEdState 0 newLs
+    , Types.fvRows = []
+    , Types.fvEmph = []
+    , Types.fvRowCount = 0
+    , Types.fvOrigin = 0
+    , Types.fvRuns = []
+    , Types.fvToks = []
+    , Types.fvStale = False
+    , Types.fvDeleted = deleted
+    , Types.fvHighlighted = False
     , -- the shebang is the fallback for a file with no
       -- extension to go on, so the first line comes along
-      fvHl = TS.highlighterFor hls path (listToMaybe newLs)
-    , fvRunDecls = []
-    , fvRemarks = []
-    , fvPending = 0
-    , fvMtime = Nothing
+      Types.fvHl = TS.highlighterFor hls path (Maybe.listToMaybe newLs)
+    , Types.fvRunDecls = []
+    , Types.fvRemarks = []
+    , Types.fvPending = 0
+    , Types.fvMtime = Nothing
     }
 
 diffBudgetUs :: Int
@@ -183,57 +139,57 @@ diffBudgetUs = 400000
 -- everything else carries plain tokens until the cursor arrives. Shown
 -- files use the vendored tree-sitter grammar when one claims the file,
 -- and render plain when there is none or the parse blew its budget.
-rebuildFV :: Config -> Text -> FileView -> IO (FileView, Bool)
+rebuildFV :: Config.Config -> T.Text -> Types.FileView -> IO (Types.FileView, Bool)
 rebuildFV cfg repo fv = do
   let
-    sc = cfgSplit cfg
-    ws = if cfgIgnoreWs cfg then WhitespaceIgnored else WhitespaceMatters
+    sc = Config.cfgSplit cfg
+    ws = if Config.cfgIgnoreWs cfg then DiffModel.WhitespaceIgnored else DiffModel.WhitespaceMatters
   let
-    newLs = newSideLines fv
+    newLs = View.newSideLines fv
   toks <-
-    if fvHighlighted fv
+    if Types.fvHighlighted fv
       then tokensFor fv newLs
-      else pure (plainLines newLs)
-  (rows3, degraded) <- diffIO ws (fvBase fv) newLs
+      else pure (Highlight.plainLines newLs)
+  (rows3, degraded) <- diffIO ws (Types.fvBase fv) newLs
   let
-    (rows, runs) = assemble sc repo (T.pack (fvPath fv)) rows3 toks
-    decls = declsForAnchors newLs (map runAnchor runs)
+    (rows, runs) = DiffModel.assemble sc repo (T.pack (Types.fvPath fv)) rows3 toks
+    decls = View.declsForAnchors newLs (map DiffModel.runAnchor runs)
   pure
     ( fv
-        { fvRows = rows
-        , fvRowCount = length rows
-        , fvRuns = runs
-        , fvToks = toks
-        , fvStale = False
-        , fvRunDecls = decls
-        , fvEmph = emphFor cfg rows
+        { Types.fvRows = rows
+        , Types.fvRowCount = length rows
+        , Types.fvRuns = runs
+        , Types.fvToks = toks
+        , Types.fvStale = False
+        , Types.fvRunDecls = decls
+        , Types.fvEmph = emphFor cfg rows
         }
     , degraded
     )
 
-tokensFor :: FileView -> [Text] -> IO [[Seg]]
+tokensFor :: Types.FileView -> [T.Text] -> IO [[Highlight.Seg]]
 tokensFor fv newLs =
-  case fvHl fv of
-    Nothing -> pure (plainLines newLs)
+  case Types.fvHl fv of
+    Nothing -> pure (Highlight.plainLines newLs)
     Just hl -> do
       got <- TS.tsHighlight hl newLs
       case got of
-        Nothing -> pure (plainLines newLs)
+        Nothing -> pure (Highlight.plainLines newLs)
         Just scoped -> do
           let
-            segs = map (map (\(scope, t) -> (scopeSeg scope, t))) scoped
-          _ <- evaluate (forceTokLines segs `seq` segs)
+            segs = map (map (\(scope, t) -> (Highlight.scopeSeg scope, t))) scoped
+          _ <- Exception.evaluate (DiffModel.forceTokLines segs `seq` segs)
           pure segs
 
-threadTokens :: [RowR] -> [[Seg]] -> [RowR]
+threadTokens :: [DiffModel.RowR] -> [[Highlight.Seg]] -> [DiffModel.RowR]
 threadTokens rows ts =
   case rows of
     [] -> []
-    (row : rest) -> case rNewRow row of
+    (row : rest) -> case DiffModel.rNewRow row of
       Just _ -> case ts of
-        (tl : more) -> row {rToks = tl} : threadTokens rest more
-        [] -> row {rToks = []} : threadTokens rest []
-      Nothing -> row {rToks = []} : threadTokens rest ts
+        (tl : more) -> row {DiffModel.rToks = tl} : threadTokens rest more
+        [] -> row {DiffModel.rToks = []} : threadTokens rest []
+      Nothing -> row {DiffModel.rToks = []} : threadTokens rest ts
 
 -- Which columns the word diff marks on each of these rows, or nothing on
 -- any of them when the reader has turned the marks off.
@@ -242,110 +198,110 @@ threadTokens rows ts =
 -- forces only how long each block is, so the pairing itself is paid for
 -- by the blocks that actually have a row on screen — and paid once,
 -- because the answer stays on the FileView until the rows are rebuilt.
-emphFor :: Config -> [RowR] -> [[(Int, Int)]]
+emphFor :: Config.Config -> [DiffModel.RowR] -> [[(Int, Int)]]
 emphFor cfg rows =
-  if cfgWordDiff cfg
+  if Config.cfgWordDiff cfg
     then
-      intralineSpans
-        (if cfgIgnoreWs cfg then WhitespaceIgnored else WhitespaceMatters)
+      WordDiff.intralineSpans
+        (if Config.cfgIgnoreWs cfg then DiffModel.WhitespaceIgnored else DiffModel.WhitespaceMatters)
         rows
     else map (const []) rows
 
 diffIO ::
-  WhitespaceMode -> [Text] -> [Text] -> IO ([(Char, Maybe Int, Text)], Bool)
+  DiffModel.WhitespaceMode -> [T.Text] -> [T.Text] -> IO ([(Char, Maybe Int, T.Text)], Bool)
 diffIO mode old new = do
   let
-    parts = diffParts mode old new
+    parts = DiffModel.diffParts mode old new
   -- The clock belongs on the diff, not on the file: forcing every row
   -- under the same budget let a million-line file that differs by one
   -- line blow it. And the budget is wall-clock, so on a large heap a
   -- major GC pause can spend it on nobody's behalf — which is survivable
   -- only because giving up now costs about what the diff would have.
-  got <- timeout diffBudgetUs (evaluate (length (dpGrouped parts)))
+  got <- Timeout.timeout diffBudgetUs (Exception.evaluate (length (DiffModel.dpGrouped parts)))
   pure $ case got of
-    Just _ -> (dpRows parts, False)
-    Nothing -> (dpCoarse parts, True)
+    Just _ -> (DiffModel.dpRows parts, False)
+    Nothing -> (DiffModel.dpCoarse parts, True)
 
-patchLine :: Config -> Int -> Text -> FileView -> FileView
+patchLine :: Config.Config -> Int -> T.Text -> Types.FileView -> Types.FileView
 patchLine cfg row newText fv =
   let
-    lineToks = plainLine newText
-    isPatchedContext r = rMark r == ' ' && rNewRow r == Just row
-    touchedContext = any isPatchedContext (fvRows fv)
+    lineToks = Highlight.plainLine newText
+    isPatchedContext r = DiffModel.rMark r == ' ' && DiffModel.rNewRow r == Just row
+    touchedContext = any isPatchedContext (Types.fvRows fv)
     patchTok (i, tl) = if i == row then lineToks else tl
     patchRow r =
-      if rNewRow r == Just row
-        then r {rText = newText, rToks = lineToks}
+      if DiffModel.rNewRow r == Just row
+        then r {DiffModel.rText = newText, DiffModel.rToks = lineToks}
         else r
-    patched = map patchRow (fvRows fv)
+    patched = map patchRow (Types.fvRows fv)
   in
     fv
-      { fvToks = map patchTok (zip [0 ..] (fvToks fv))
-      , fvRows = patched
+      { Types.fvToks = map patchTok (zip [0 ..] (Types.fvToks fv))
+      , Types.fvRows = patched
       , -- the line just typed into is one of these rows, so the marks
         -- that were worked out against its old text no longer describe it
-        fvEmph = emphFor cfg patched
-      , fvStale = fvStale fv || touchedContext
+        Types.fvEmph = emphFor cfg patched
+      , Types.fvStale = Types.fvStale fv || touchedContext
       }
 
 -- Verdict helpers -------------------------------------------------------------
 
 -- Runs after every event (see the app wiring): if navigation just landed
 -- on a file still carrying plain tokens, give it its real colors now.
-ensureCurrentHighlighted :: EventM Name St ()
+ensureCurrentHighlighted :: Brick.EventM Types.Name Types.St ()
 ensureCurrentHighlighted = do
-  st <- get
+  st <- State.get
   let
-    i = stCurF st
+    i = Types.stCurF st
     withTokensOf toks current =
       current
-        { fvRows = threadTokens (fvRows current) toks
-        , fvToks = toks
-        , fvHighlighted = True
+        { Types.fvRows = threadTokens (Types.fvRows current) toks
+        , Types.fvToks = toks
+        , Types.fvHighlighted = True
         }
-  case safeIdx (stFiles st) i of
+  case Types.safeIdx (Types.stFiles st) i of
     Nothing -> pure ()
     Just fv
-      | fvHighlighted fv -> pure ()
-      | fvRowCount fv <= highlightInlineRows -> do
-          toks <- liftIO (tokensFor fv (newSideLines fv))
-          modify (updateFile i (withTokensOf toks))
-      | stHighlighting st == Just (fvPath fv) -> pure ()
+      | Types.fvHighlighted fv -> pure ()
+      | Types.fvRowCount fv <= highlightInlineRows -> do
+          toks <- MonadIO.liftIO (tokensFor fv (View.newSideLines fv))
+          State.modify (Verdict.updateFile i (withTokensOf toks))
+      | Types.stHighlighting st == Just (Types.fvPath fv) -> pure ()
       | otherwise -> do
-          modify (\s -> s {stHighlighting = Just (fvPath fv)})
+          State.modify (\s -> s {Types.stHighlighting = Just (Types.fvPath fv)})
           let
-            before = newSideLines fv
-            epoch = stEpoch st
-            label = "highlighting " <> T.pack (takeFileName (fvPath fv))
-          startJob label (withSlot (stWorkSlots st) (tokensFor fv before)) $ \outcome -> do
-            latest <- get
-            when (stEpoch latest == epoch) $ do
-              modify (\s -> s {stHighlighting = Nothing})
-              case (outcome, find ((== fvPath fv) . fvPath . snd) (zip [0 :: Int ..] (stFiles latest))) of
-                (Left err, _) -> jobFailed label err
+            before = View.newSideLines fv
+            epoch = Types.stEpoch st
+            label = "highlighting " <> T.pack (FilePath.takeFileName (Types.fvPath fv))
+          Jobs.startJob label (Jobs.withSlot (Types.stWorkSlots st) (tokensFor fv before)) $ \outcome -> do
+            latest <- State.get
+            Monad.when (Types.stEpoch latest == epoch) $ do
+              State.modify (\s -> s {Types.stHighlighting = Nothing})
+              case (outcome, List.find ((== Types.fvPath fv) . Types.fvPath . snd) (zip [0 :: Int ..] (Types.stFiles latest))) of
+                (Left err, _) -> Jobs.jobFailed label err
                 (Right toks, Just (j, current))
-                  | not (fvHighlighted current) && newSideLines current == before ->
-                      modify (updateFile j (withTokensOf toks))
+                  | not (Types.fvHighlighted current) && View.newSideLines current == before ->
+                      State.modify (Verdict.updateFile j (withTokensOf toks))
                 _ -> pure ()
 
 highlightInlineRows :: Int
 highlightInlineRows = 4000
 
-rebuildWith :: Int -> EdState -> EventM Name St ()
+rebuildWith :: Int -> Modal.EdState -> Brick.EventM Types.Name Types.St ()
 rebuildWith i ed = do
-  modify (\s -> s {stKill = edKill ed})
-  publishCopy ed
-  st <- get
+  State.modify (\s -> s {Types.stKill = Modal.edKill ed})
+  Nav.publishCopy ed
+  st <- State.get
   let
-    fv = (stFiles st !! i) {fvEd = ed}
+    fv = (Types.stFiles st !! i) {Types.fvEd = ed}
     oldCur =
-      if i == stCurF st then currentRunOf st i else Nothing
-  (rebuilt, degraded) <- liftIO (rebuildFV (stConfig st) (repoText st) fv)
-  modify (updateFile i (const rebuilt))
-  when (i == stCurF st) $
-    modify (\s -> s {stCurH = matchRun oldCur (fvRuns rebuilt)})
-  when degraded $
-    modify (\s -> s {stMsg = "diff too large — file shown as one hunk"})
+      if i == Types.stCurF st then Nav.currentRunOf st i else Nothing
+  (rebuilt, degraded) <- MonadIO.liftIO (rebuildFV (Types.stConfig st) (Types.repoText st) fv)
+  State.modify (Verdict.updateFile i (const rebuilt))
+  Monad.when (i == Types.stCurF st) $
+    State.modify (\s -> s {Types.stCurH = Nav.matchRun oldCur (Types.fvRuns rebuilt)})
+  Monad.when degraded $
+    State.modify (\s -> s {Types.stMsg = "diff too large — file shown as one hunk"})
 
 -- A file changed on disk. When the buffer holds no unapplied edits it is
 -- reloaded in place (cursor kept); mid-insert the local edit wins until
@@ -353,48 +309,48 @@ rebuildWith i ed = do
 data Reloaded
   = ReloadVanished
   | ReloadUnchanged
-  | ReloadReady FileView Int
+  | ReloadReady Types.FileView Int
 
 data ReloadPlan = ReloadPlan
   { rlPath :: FilePath
-  , rlOldLines :: [Text]
+  , rlOldLines :: [T.Text]
   , rlCursor :: (Int, Int)
-  , rlBase :: [Text]
+  , rlBase :: [T.Text]
   , rlEpoch :: Int
   }
 
-reloadFromDisk :: FilePath -> EventM Name St ()
+reloadFromDisk :: FilePath -> Brick.EventM Types.Name Types.St ()
 reloadFromDisk rel = do
-  st <- get
-  case find ((== rel) . fvPath) (stFiles st) of
+  st <- State.get
+  case List.find ((== rel) . Types.fvPath) (Types.stFiles st) of
     -- an unknown file changing may mean the change set just grew
     Nothing -> refreshGit
     Just fv
-      | Map.member rel (stReloading st) ->
-          modify (\s -> s {stReloading = Map.insert rel True (stReloading s)})
+      | Map.member rel (Types.stReloading st) ->
+          State.modify (\s -> s {Types.stReloading = Map.insert rel True (Types.stReloading s)})
       | otherwise -> do
-          modify (\s -> s {stReloading = Map.insert rel False (stReloading s)})
+          State.modify (\s -> s {Types.stReloading = Map.insert rel False (Types.stReloading s)})
           let
             plan =
               ReloadPlan
                 { rlPath = rel
-                , rlOldLines = bufferLines (fvEd fv)
-                , rlCursor = cursorRC (fvEd fv)
-                , rlBase = fvBase fv
-                , rlEpoch = stEpoch st
+                , rlOldLines = Modal.bufferLines (Types.fvEd fv)
+                , rlCursor = Modal.cursorRC (Types.fvEd fv)
+                , rlBase = Types.fvBase fv
+                , rlEpoch = Types.stEpoch st
                 }
-          startJob
+          Jobs.startJob
             ("reloading " <> T.pack rel)
-            (withSlot (stWorkSlots st) (reloadWork st fv plan))
+            (Jobs.withSlot (Types.stWorkSlots st) (reloadWork st fv plan))
             (finishReload plan)
 
-reloadWork :: St -> FileView -> ReloadPlan -> IO Reloaded
+reloadWork :: Types.St -> Types.FileView -> ReloadPlan -> IO Reloaded
 reloadWork st fv plan = do
   let
-    path = stRoot st </> rlPath plan
+    path = Types.stRoot st </> rlPath plan
     oldLs = rlOldLines plan
     (row, col) = rlCursor plan
-  got <- try (TIO.readFile path) :: IO (Either IOException Text)
+  got <- Exception.try (TIO.readFile path) :: IO (Either Exception.IOException T.Text)
   case got of
     Left _ -> pure ReloadVanished
     Right diskTxt
@@ -402,91 +358,91 @@ reloadWork st fv plan = do
       | otherwise -> do
           let
             diskLs = T.lines diskTxt
-          stamped <- try (getModificationTime path) :: IO (Either IOException UTCTime)
+          stamped <- Exception.try (Directory.getModificationTime path) :: IO (Either Exception.IOException Clock.UTCTime)
           newRow <- mapRowThroughEdit oldLs diskLs row
           let
-            newCol = min col (T.length (fromMaybe "" (safeIdx diskLs newRow)))
-            fresh = newEdState newRow diskLs
-            placed = fresh {edZipper = Z.moveCursor (newRow, newCol) (edZipper fresh)}
-          (rebuilt, _) <- rebuildFV (stConfig st) (repoText st) fv {fvEd = placed}
-          pure (ReloadReady rebuilt {fvMtime = either (const Nothing) Just stamped} newRow)
+            newCol = min col (T.length (Maybe.fromMaybe "" (Types.safeIdx diskLs newRow)))
+            fresh = Modal.newEdState newRow diskLs
+            placed = fresh {Modal.edZipper = Z.moveCursor (newRow, newCol) (Modal.edZipper fresh)}
+          (rebuilt, _) <- rebuildFV (Types.stConfig st) (Types.repoText st) fv {Types.fvEd = placed}
+          pure (ReloadReady rebuilt {Types.fvMtime = either (const Nothing) Just stamped} newRow)
 
-finishReload :: ReloadPlan -> Either Text Reloaded -> EventM Name St ()
+finishReload :: ReloadPlan -> Either T.Text Reloaded -> Brick.EventM Types.Name Types.St ()
 finishReload plan outcome = do
-  queued <- get
+  queued <- State.get
   let
     rel = rlPath plan
-  when (stEpoch queued == rlEpoch plan) $ do
+  Monad.when (Types.stEpoch queued == rlEpoch plan) $ do
     let
-      again = Map.findWithDefault False rel (stReloading queued)
-    modify (\s -> s {stReloading = Map.delete rel (stReloading s)})
-    latest <- get
-    case (outcome, find ((== rel) . fvPath . snd) (zip [0 ..] (stFiles latest))) of
-      (Left err, _) -> jobFailed "reloading" err
+      again = Map.findWithDefault False rel (Types.stReloading queued)
+    State.modify (\s -> s {Types.stReloading = Map.delete rel (Types.stReloading s)})
+    latest <- State.get
+    case (outcome, List.find ((== rel) . Types.fvPath . snd) (zip [0 ..] (Types.stFiles latest))) of
+      (Left err, _) -> Jobs.jobFailed "reloading" err
       (Right ReloadVanished, _) -> refreshGit
       (Right ReloadUnchanged, _) -> pure ()
       (Right (ReloadReady _ _), Nothing) -> pure ()
       (Right (ReloadReady rebuilt newRow), Just (i, current))
-        | edMode (fvEd current) == Insert ->
-            setMsg ("\9888 " <> T.pack rel <> " changed on disk; Esc applies your edit over it")
-        | bufferLines (fvEd current) /= rlOldLines plan || fvBase current /= rlBase plan ->
+        | Modal.edMode (Types.fvEd current) == Modal.Insert ->
+            Types.setMsg ("\9888 " <> T.pack rel <> " changed on disk; Esc applies your edit over it")
+        | Modal.bufferLines (Types.fvEd current) /= rlOldLines plan || Types.fvBase current /= rlBase plan ->
             reloadFromDisk rel
         | otherwise -> installReload plan i current rebuilt newRow
-    when again (reloadFromDisk rel)
+    Monad.when again (reloadFromDisk rel)
 
-installReload :: ReloadPlan -> Int -> FileView -> FileView -> Int -> EventM Name St ()
+installReload :: ReloadPlan -> Int -> Types.FileView -> Types.FileView -> Int -> Brick.EventM Types.Name Types.St ()
 installReload plan i current rebuilt newRow = do
-  latest <- get
+  latest <- State.get
   -- remember which screen row the cursor sat on, so the
   -- view doesn't jump when lines shift above it
-  mvp <- lookupViewport BodyVP
-  screenRows <- terminalRows
+  mvp <- Brick.lookupViewport Types.BodyVP
+  screenRows <- View.terminalRows
   let
-    (liveRow, liveCol) = cursorRC (fvEd current)
+    (liveRow, liveCol) = Modal.cursorRC (Types.fvEd current)
     moved = (liveRow, liveCol) /= rlCursor plan
     landing =
       if moved
-        then min liveRow (max 0 (bufferLineCount (fvEd rebuilt) - 1))
+        then min liveRow (max 0 (Modal.bufferLineCount (Types.fvEd rebuilt) - 1))
         else newRow
     installed =
       if moved
-        then rebuilt {fvEd = (fvEd rebuilt) {edZipper = Z.moveCursor (landing, liveCol) (edZipper (fvEd rebuilt))}}
+        then rebuilt {Types.fvEd = (Types.fvEd rebuilt) {Modal.edZipper = Z.moveCursor (landing, liveCol) (Modal.edZipper (Types.fvEd rebuilt))}}
         else rebuilt
-    oldOut = cursorDisplayRow (fvRows current) liveRow
+    oldOut = View.cursorDisplayRow (Types.fvRows current) liveRow
     screenOff = case mvp of
-      Just vp -> max 0 (oldOut - _vpTop vp)
+      Just vp -> max 0 (oldOut - Brick._vpTop vp)
       Nothing -> 0
-    oldCur = if i == stCurF latest then currentRunOf latest i else Nothing
-  modify (updateFile i (const installed))
-  when (i == stCurF latest) $
-    modify (\s -> s {stCurH = matchRun oldCur (fvRuns installed)})
-  reloaded <- get
+    oldCur = if i == Types.stCurF latest then Nav.currentRunOf latest i else Nothing
+  State.modify (Verdict.updateFile i (const installed))
+  Monad.when (i == Types.stCurF latest) $
+    State.modify (\s -> s {Types.stCurH = Nav.matchRun oldCur (Types.fvRuns installed)})
+  reloaded <- State.get
   let
-    newOut = cursorDisplayRow (fvRows installed) landing
-    origin = snd (bodyWindow screenRows reloaded installed)
-  modify (updateFile i (\f -> f {fvOrigin = origin}))
-  setTop (viewportScroll BodyVP) (max 0 (newOut - origin - screenOff))
-  setMsg ("\8635 reloaded " <> T.pack (rlPath plan))
+    newOut = View.cursorDisplayRow (Types.fvRows installed) landing
+    origin = snd (View.bodyWindow screenRows reloaded installed)
+  State.modify (Verdict.updateFile i (\f -> f {Types.fvOrigin = origin}))
+  Brick.setTop (Brick.viewportScroll Types.BodyVP) (max 0 (newOut - origin - screenOff))
+  Types.setMsg ("\8635 reloaded " <> T.pack (rlPath plan))
 
-pollCurrentFile :: EventM Name St ()
+pollCurrentFile :: Brick.EventM Types.Name Types.St ()
 pollCurrentFile = do
-  st <- get
-  when (stWatchMode st == PollingWatch) $
-    case currentFileMay st of
+  st <- State.get
+  Monad.when (Types.stWatchMode st == Types.PollingWatch) $
+    case Types.currentFileMay st of
       Nothing -> pure ()
       Just fv -> do
         got <-
-          liftIO
-            ( try (getModificationTime (stRoot st </> fvPath fv)) ::
-                IO (Either IOException UTCTime)
+          MonadIO.liftIO
+            ( Exception.try (Directory.getModificationTime (Types.stRoot st </> Types.fvPath fv)) ::
+                IO (Either Exception.IOException Clock.UTCTime)
             )
-        case (got, fvMtime fv) of
+        case (got, Types.fvMtime fv) of
           (Left _, _) -> pure ()
           (Right mtime, Nothing) ->
-            modify (updateFile (stCurF st) (\f -> f {fvMtime = Just mtime}))
+            State.modify (Verdict.updateFile (Types.stCurF st) (\f -> f {Types.fvMtime = Just mtime}))
           (Right mtime, Just seen)
-            | mtime /= seen && not (Map.member (fvPath fv) (stReloading st)) ->
-                reloadFromDisk (fvPath fv)
+            | mtime /= seen && not (Map.member (Types.fvPath fv) (Types.stReloading st)) ->
+                reloadFromDisk (Types.fvPath fv)
             | otherwise -> pure ()
 
 -- Where the cursor's line went: the old buffer is diffed against the new
@@ -494,19 +450,19 @@ pollCurrentFile = do
 -- when lines shift, and lands on the nearest surviving line when its own
 -- line was edited away. Best effort — a degraded (budget-blown) diff
 -- falls back toward the top.
-mapRowThroughEdit :: [Text] -> [Text] -> Int -> IO Int
+mapRowThroughEdit :: [T.Text] -> [T.Text] -> Int -> IO Int
 mapRowThroughEdit oldLs newLs target = do
   -- tracking where a line went, not what counts as a change: spacing
   -- is part of the line's identity here whatever the setting says
-  (rows, _) <- diffIO WhitespaceMatters oldLs newLs
+  (rows, _) <- diffIO DiffModel.WhitespaceMatters oldLs newLs
   let
     clamp r = max 0 (min r (length newLs - 1))
     bufferRowOf (_, mnr, _) = mnr
     nextSurviving rest lastNew =
-      case mapMaybe bufferRowOf rest of
+      case Maybe.mapMaybe bufferRowOf rest of
         (nr : _) -> nr
-        [] -> fromMaybe (max 0 (length newLs - 1)) lastNew
-    go _ lastNew [] = fromMaybe 0 lastNew
+        [] -> Maybe.fromMaybe (max 0 (length newLs - 1)) lastNew
+    go _ lastNew [] = Maybe.fromMaybe 0 lastNew
     go o lastNew ((m, mnr, _) : rest) =
       case m of
         '+' -> go o (mnr <|> lastNew) rest
@@ -526,65 +482,65 @@ mapRowThroughEdit oldLs newLs target = do
 data Refreshed
   = Dropped
   | Unchanged FilePath
-  | Replaced FileView
+  | Replaced Types.FileView
 
 data Refresh = Refresh
-  { rfRebase :: Maybe RebaseStatus
-  , rfBranch :: Maybe Text
-  , rfHead :: Maybe (Text, Text)
+  { rfRebase :: Maybe Git.RebaseStatus
+  , rfBranch :: Maybe T.Text
+  , rfHead :: Maybe (T.Text, T.Text)
   , rfResults :: [Refreshed]
   }
 
-refreshGit :: EventM Name St ()
+refreshGit :: Brick.EventM Types.Name Types.St ()
 refreshGit = do
-  st <- get
-  now <- liftIO getMonotonicTime
-  if stRefreshing st
-    then modify (\s -> s {stGitQueued = True})
+  st <- State.get
+  now <- MonadIO.liftIO GHCClock.getMonotonicTime
+  if Types.stRefreshing st
+    then State.modify (\s -> s {Types.stGitQueued = True})
     else
-      if now - stLastGit st <= 0.5
-        then unless (stGitQueued st) (queueRefresh st)
+      if now - Types.stLastGit st <= 0.5
+        then Monad.unless (Types.stGitQueued st) (queueRefresh st)
         else do
-          modify (\s -> s {stLastGit = now, stGitQueued = False, stRefreshing = True})
-          startJob "refreshing" (refreshWork st) (applyRefresh (stEpoch st))
+          State.modify (\s -> s {Types.stLastGit = now, Types.stGitQueued = False, Types.stRefreshing = True})
+          Jobs.startJob "refreshing" (refreshWork st) (applyRefresh (Types.stEpoch st))
 
-queueRefresh :: St -> EventM Name St ()
+queueRefresh :: Types.St -> Brick.EventM Types.Name Types.St ()
 queueRefresh st = do
-  modify (\s -> s {stGitQueued = True})
-  void . liftIO . forkIO $ do
-    threadDelay 700000
-    void (writeBChanNonBlocking (stChan st) GitStateChanged)
+  State.modify (\s -> s {Types.stGitQueued = True})
+  Monad.void . MonadIO.liftIO . Concurrent.forkIO $ do
+    Concurrent.threadDelay 700000
+    Monad.void (BChan.writeBChanNonBlocking (Types.stChan st) Types.GitStateChanged)
 
-refreshWork :: St -> IO Refresh
+refreshWork :: Types.St -> IO Refresh
 refreshWork st = do
   let
-    root = stRoot st
-    existing = Map.fromList (map (\fv -> (fvPath fv, fv)) (stFiles st))
-  rebaseNow <- rebaseStatus root
-  branchNow <- currentBranch root
-  headNow <- headCommit root
+    root = Types.stRoot st
+    existing = Map.fromList (map (\fv -> (Types.fvPath fv, fv)) (Types.stFiles st))
+  rebaseNow <- Git.rebaseStatus root
+  branchNow <- Git.currentBranch root
+  headNow <- Git.headCommit root
   let
-    mode = rebaseEffMode rebaseNow (stMode st)
+    mode = Types.rebaseEffMode rebaseNow (Types.stMode st)
     guarded name = do
-      got <- try (refreshOne st mode existing name)
+      got <- Exception.try (refreshOne st mode existing name)
       pure $ case got of
-        Left e -> let _ = (e :: IOException) in Dropped
+        Left e -> let _ = (e :: Exception.IOException) in Dropped
         Right r -> r
-  ignores <- loadIgnores root
+  ignores <- Config.loadIgnores root
   names <-
     fmap
-      (filter (not . ignoredPath ignores))
-      (reviewFiles mode (cfgUntracked (stConfig st)) root)
-  refreshed <- forBounded 8 guarded names
-  extras <- forM (filter (`notElem` names) (Set.toList (stOpened st))) (refreshOpened st mode existing)
+      (filter (not . Config.ignoredPath ignores))
+      (Git.reviewFiles mode (Config.cfgUntracked (Types.stConfig st)) root)
+  refreshed <- Jobs.forBounded 8 guarded names
+  extras <- Monad.forM (filter (`notElem` names) (Set.toList (Types.stOpened st))) (refreshOpened st mode existing)
   pure (Refresh rebaseNow branchNow headNow (refreshed ++ extras))
 
-refreshOne :: St -> ReviewMode -> Map.Map FilePath FileView -> FilePath -> IO Refreshed
+refreshOne :: Types.St -> Git.ReviewMode -> Map.Map FilePath Types.FileView -> FilePath -> IO Refreshed
 refreshOne st mode existing name =
   let
-    root = stRoot st
-    counted = recountIn st
-    reload = fmap (maybe Dropped (Replaced . counted)) (loadOne (stConfig st) (stHls st) mode root name)
+    root = Types.stRoot st
+    counted = Verdict.recountIn st
+    reload = fmap (maybe Dropped (Replaced . counted)) (loadOne (Types.stConfig st) (Types.stHls st) mode root name)
   in
     case Map.lookup name existing of
       Nothing -> reload
@@ -592,164 +548,164 @@ refreshOne st mode existing name =
         -- a file that has come or gone since it was loaded is a
         -- different kind of view than the one in hand, so it is
         -- read afresh rather than patched
-        present <- doesFileExist (root </> name)
-        if present == fvDeleted fv
+        present <- Directory.doesFileExist (root </> name)
+        if present == Types.fvDeleted fv
           then reload
           else do
-            base <- baseLines mode root name
-            if base == fvBase fv
+            base <- Git.baseLines mode root name
+            if base == Types.fvBase fv
               then pure (Unchanged name)
               else do
-                (rebuilt, _) <- rebuildFV (stConfig st) (repoText st) fv {fvBase = base}
+                (rebuilt, _) <- rebuildFV (Types.stConfig st) (Types.repoText st) fv {Types.fvBase = base}
                 pure (Replaced (counted rebuilt))
 
 -- hand-opened files stay in the session even when the change set
 -- doesn't claim them; once git stops seeing a difference (say the
 -- file was committed), the base honestly rebases to the buffer so
 -- stale hunks don't linger
-refreshOpened :: St -> ReviewMode -> Map.Map FilePath FileView -> FilePath -> IO Refreshed
+refreshOpened :: Types.St -> Git.ReviewMode -> Map.Map FilePath Types.FileView -> FilePath -> IO Refreshed
 refreshOpened st mode existing path =
   case Map.lookup path existing of
     Nothing -> pure Dropped
     Just fv -> do
-      base <- baseLines mode (stRoot st) path
+      base <- Git.baseLines mode (Types.stRoot st) path
       let
-        buf = bufferLines (fvEd fv)
-      if base == buf && fvBase fv /= buf
+        buf = Modal.bufferLines (Types.fvEd fv)
+      if base == buf && Types.fvBase fv /= buf
         then do
-          (rebuilt, _) <- rebuildFV (stConfig st) (repoText st) fv {fvBase = buf}
-          pure (Replaced (recountIn st rebuilt))
+          (rebuilt, _) <- rebuildFV (Types.stConfig st) (Types.repoText st) fv {Types.fvBase = buf}
+          pure (Replaced (Verdict.recountIn st rebuilt))
         else pure (Unchanged path)
 
-applyRefresh :: Int -> Either Text Refresh -> EventM Name St ()
+applyRefresh :: Int -> Either T.Text Refresh -> Brick.EventM Types.Name Types.St ()
 applyRefresh epoch outcome = do
-  before <- get
-  when (stEpoch before == epoch) $ do
-    modify (\s -> s {stRefreshing = False})
+  before <- State.get
+  Monad.when (Types.stEpoch before == epoch) $ do
+    State.modify (\s -> s {Types.stRefreshing = False})
     case outcome of
-      Left err -> jobFailed "refreshing" err
+      Left err -> Jobs.jobFailed "refreshing" err
       Right refresh -> installRefresh before refresh
-    after <- get
-    when (stGitQueued after) $ do
-      modify (\s -> s {stGitQueued = False})
+    after <- State.get
+    Monad.when (Types.stGitQueued after) $ do
+      State.modify (\s -> s {Types.stGitQueued = False})
       refreshGit
 
-installRefresh :: St -> Refresh -> EventM Name St ()
+installRefresh :: Types.St -> Refresh -> Brick.EventM Types.Name Types.St ()
 installRefresh before refresh = do
   let
     gitMoved =
-      rfHead refresh /= stHead before
-        || rfBranch refresh /= stBranch before
-        || rfRebase refresh /= stRebase before
-  modify $ \s ->
+      rfHead refresh /= Types.stHead before
+        || rfBranch refresh /= Types.stBranch before
+        || rfRebase refresh /= Types.stRebase before
+  State.modify $ \s ->
     s
-      { stRebase = rfRebase refresh
-      , stBranch = rfBranch refresh
-      , stHead = rfHead refresh
+      { Types.stRebase = rfRebase refresh
+      , Types.stBranch = rfBranch refresh
+      , Types.stHead = rfHead refresh
       }
-  latest <- get
+  latest <- State.get
   let
-    current = Map.fromList (map (\fv -> (fvPath fv, fv)) (stFiles latest))
+    current = Map.fromList (map (\fv -> (Types.fvPath fv, fv)) (Types.stFiles latest))
     resolve r = case r of
       Dropped -> Nothing
       Unchanged path -> Map.lookup path current
-      Replaced fv -> Just (recountIn latest (mergeLive current fv))
-    remaining = mapMaybe resolve (rfResults refresh)
-  forM_ remaining (liftIO . stWatch latest . fileDir (stRoot latest) . fvPath)
-  when gitMoved (liftIO (watchTracked (stWatch latest) (stRoot latest)))
+      Replaced fv -> Just (Verdict.recountIn latest (mergeLive current fv))
+    remaining = Maybe.mapMaybe resolve (rfResults refresh)
+  Monad.forM_ remaining (MonadIO.liftIO . Types.stWatch latest . Types.fileDir (Types.stRoot latest) . Types.fvPath)
+  Monad.when gitMoved (MonadIO.liftIO (Watch.watchTracked (Types.stWatch latest) (Types.stRoot latest)))
   applyChangeSet remaining
 
-mergeLive :: Map.Map FilePath FileView -> FileView -> FileView
+mergeLive :: Map.Map FilePath Types.FileView -> Types.FileView -> Types.FileView
 mergeLive current fv =
-  case Map.lookup (fvPath fv) current of
+  case Map.lookup (Types.fvPath fv) current of
     Nothing -> fv
     Just live
-      | bufferLines (fvEd live) == bufferLines (fvEd fv) ->
-          fv {fvEd = fvEd live, fvOrigin = fvOrigin live}
-      | otherwise -> live {fvBase = fvBase fv, fvStale = True}
+      | Modal.bufferLines (Types.fvEd live) == Modal.bufferLines (Types.fvEd fv) ->
+          fv {Types.fvEd = Types.fvEd live, Types.fvOrigin = Types.fvOrigin live}
+      | otherwise -> live {Types.fvBase = Types.fvBase fv, Types.fvStale = True}
 
-applyChangeSet :: [FileView] -> EventM Name St ()
+applyChangeSet :: [Types.FileView] -> Brick.EventM Types.Name Types.St ()
 applyChangeSet remaining = do
-  latest <- get
+  latest <- State.get
   let
-    wasEmpty = null (stFiles latest)
-    firstLoad = not (stLoadedOnce latest)
+    wasEmpty = null (Types.stFiles latest)
+    firstLoad = not (Types.stLoadedOnce latest)
     pendingCount =
-      length (filter (runPending (stVerdicts latest)) (concatMap fvRuns remaining))
-    totalCount = length (concatMap fvRuns remaining)
+      length (filter (Verdict.runPending (Types.stVerdicts latest)) (concatMap Types.fvRuns remaining))
+    totalCount = length (concatMap Types.fvRuns remaining)
   if null remaining
     -- the persistent session idles rather than exits: the watcher
     -- stays live and new work wakes the screen on its own
     then
-      put
+      State.put
         latest
-          { stFiles = []
-          , stCurF = 0
-          , stCurH = 0
-          , stLoadedOnce = True
+          { Types.stFiles = []
+          , Types.stCurF = 0
+          , Types.stCurH = 0
+          , Types.stLoadedOnce = True
           , -- only on the way in: a later refresh that finds the
             -- session still idle must not talk over whatever the
             -- action that emptied it had to say
-            stMsg =
-              if (wasEmpty && not firstLoad) || (firstLoad && stWatchMode latest == PollingWatch)
-                then stMsg latest
+            Types.stMsg =
+              if (wasEmpty && not firstLoad) || (firstLoad && Types.stWatchMode latest == Types.PollingWatch)
+                then Types.stMsg latest
                 else "change set is empty — watching for changes"
           }
     else do
       let
-        curPath = case currentFileMay latest of
-          Just fv -> fvPath fv
+        curPath = case Types.currentFileMay latest of
+          Just fv -> Types.fvPath fv
           Nothing -> ""
-        oldCur = currentRunOf latest (stCurF latest)
-        newF = fromMaybe 0 (findIndex ((== curPath) . fvPath) remaining)
-      put
+        oldCur = Nav.currentRunOf latest (Types.stCurF latest)
+        newF = Maybe.fromMaybe 0 (List.findIndex ((== curPath) . Types.fvPath) remaining)
+      State.put
         latest
-          { stFiles = remaining
-          , stCurF = newF
-          , stCurH = matchRun oldCur (fvRuns (remaining !! newF))
-          , stLoadedOnce = True
-          , stMsg =
-              if firstLoad && stWatchMode latest == NativeWatch
-                then tshow pendingCount <> " of " <> tshow totalCount <> " hunks pending"
-                else stMsg latest
+          { Types.stFiles = remaining
+          , Types.stCurF = newF
+          , Types.stCurH = Nav.matchRun oldCur (Types.fvRuns (remaining !! newF))
+          , Types.stLoadedOnce = True
+          , Types.stMsg =
+              if firstLoad && Types.stWatchMode latest == Types.NativeWatch
+                then Types.tshow pendingCount <> " of " <> Types.tshow totalCount <> " hunks pending"
+                else Types.stMsg latest
           }
-      when wasEmpty $ do
-        woken <- get
-        case firstUnrespondedOrPending woken of
-          Just (f, h) -> parkAnchor f h
-          Nothing -> parkAnchor 0 0
+      Monad.when wasEmpty $ do
+        woken <- State.get
+        case Verdict.firstUnrespondedOrPending woken of
+          Just (f, h) -> Nav.parkAnchor f h
+          Nothing -> Nav.parkAnchor 0 0
 
 -- The : command line ----------------------------------------------------------
 
 -- Split knobs reshape every file's hunks; rebuild them all (bounded
 -- workers) and keep the current hunk by content.
-rebuildAllFiles :: EventM Name St ()
+rebuildAllFiles :: Brick.EventM Types.Name Types.St ()
 rebuildAllFiles = do
-  st <- get
+  st <- State.get
   let
-    cfg = stConfig st
-    oldCur = currentRunOf st (stCurF st)
+    cfg = Types.stConfig st
+    oldCur = Nav.currentRunOf st (Types.stCurF st)
   rebuilt <-
-    liftIO
-      ( forMaybeBounded
-          (\fv -> fmap (Just . fst) (rebuildFV cfg (repoText st) fv))
-          (stFiles st)
+    MonadIO.liftIO
+      ( Jobs.forMaybeBounded
+          (\fv -> fmap (Just . fst) (rebuildFV cfg (Types.repoText st) fv))
+          (Types.stFiles st)
       )
   let
-    files = map (recountIn st) (catMaybes rebuilt)
-  unless (null files) $
-    modify $ \s ->
+    files = map (Verdict.recountIn st) (Maybe.catMaybes rebuilt)
+  Monad.unless (null files) $
+    State.modify $ \s ->
       s
-        { stFiles = files
-        , stCurH =
-            case safeIdx files (stCurF s) of
-              Just fv -> matchRun oldCur (fvRuns fv)
+        { Types.stFiles = files
+        , Types.stCurH =
+            case Types.safeIdx files (Types.stCurF s) of
+              Just fv -> Nav.matchRun oldCur (Types.fvRuns fv)
               Nothing -> 0
         }
 
 -- Reflect git state right now, bypassing the watcher throttle — for
 -- commands whose whole point is an immediate view change.
-forceGitRefresh :: EventM Name St ()
+forceGitRefresh :: Brick.EventM Types.Name Types.St ()
 forceGitRefresh = do
-  modify (\s -> s {stLastGit = 0, stGitQueued = False})
+  State.modify (\s -> s {Types.stLastGit = 0, Types.stGitQueued = False})
   refreshGit

@@ -5,167 +5,144 @@ module Remax.UI.Draw.Notes
   ( notePopupLayer
   ) where
 
-import Brick
-  ( Location (..)
-  , Padding (Max)
-  , Widget
-  , fill
-  , hLimit
-  , padRight
-  , showCursor
-  , txt
-  , vBox
-  , vLimit
-  , withAttr
-  , withDefAttr
-  , (<+>)
-  )
-import Brick.Types
-  ( Size (Greedy)
-  , Widget (Widget)
-  , availHeight
-  , availWidth
-  , getContext
-  , render
-  )
-import qualified Data.Map.Strict as Map
-import Data.Maybe
-  ( mapMaybe
-  )
-import Data.Text (Text)
-import qualified Data.Text as T
-import Remax.Modal
-import Remax.Store (Post)
-import Remax.UI.Action.Notes
-import Remax.UI.Action.Rebase
-import Remax.UI.Core.Attrs
-import Remax.UI.Core.Types
-import Remax.UI.Core.View
-import Remax.UI.Core.Widgets
+import Brick ((<+>))
+import Brick qualified as Brick
+import Brick.Types qualified as BrickTypes
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
+import Data.Text qualified as T
+import Remax.Modal qualified as Modal
+import Remax.Store qualified as Store
+import Remax.UI.Action.Notes qualified as NoteAction
+import Remax.UI.Action.Rebase qualified as Rebase
+import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.View qualified as View
+import Remax.UI.Core.Widgets qualified as Widgets
 
-notePopupLayer :: St -> NotePopup -> Widget Name
+notePopupLayer :: Types.St -> Types.NotePopup -> BrickTypes.Widget Types.Name
 notePopupLayer st np =
   let
-    ed = npEd np
-    ls = bufferLines ed
+    ed = Types.npEd np
+    ls = Modal.bufferLines ed
     thread = popupThread st np
-    title = popupTitle np thread <> " \183 " <> modeTag (edMode ed)
+    title = popupTitle np thread <> " \183 " <> modeTag (Modal.edMode ed)
     targetRows = popupTargetRows st np
-    bodyW = showCursor TheCursor (Location (snd (cursorRC ed), fst (cursorRC ed))) (noteBodyWidget ed)
+    bodyW = Brick.showCursor Types.TheCursor (Brick.Location (snd (Modal.cursorRC ed), fst (Modal.cursorRC ed))) (noteBodyWidget ed)
   in
-    Widget Greedy Greedy $ do
-      ctx <- getContext
+    BrickTypes.Widget BrickTypes.Greedy BrickTypes.Greedy $ do
+      ctx <- BrickTypes.getContext
       let
-        boxWidth = min 90 (max 50 (availWidth ctx - 20))
-        bodyRows = max 6 (availHeight ctx - 14)
+        boxWidth = min 90 (max 50 (BrickTypes.availWidth ctx - 20))
+        bodyRows = max 6 (BrickTypes.availHeight ctx - 14)
         -- the editor keeps its room first; the transcript takes what is
         -- left, and gives up its oldest posts to fit rather than
         -- squeezing the box you are typing in
         editorRows = max 3 (min 10 (length ls + 1))
         budget = bodyRows - editorRows - length targetRows - 1
-        transcript = transcriptRows (boxWidth - 2) budget (transcriptPosts thread)
-      render $
-        floatFrame title (popupHint np thread) $
-          hLimit boxWidth $
-            padRight Max $
-              vLimit bodyRows $
-                vBox (targetRows ++ transcript ++ [bodyW])
+        transcript = transcriptRows (boxWidth - 2) budget (NoteAction.transcriptPosts thread)
+      BrickTypes.render $
+        Widgets.floatFrame title (popupHint np thread) $
+          Brick.hLimit boxWidth $
+            Brick.padRight Brick.Max $
+              Brick.vLimit bodyRows $
+                Brick.vBox (targetRows ++ transcript ++ [bodyW])
 
-modeTag :: Mode -> Text
+modeTag :: Modal.Mode -> T.Text
 modeTag mode =
   case mode of
-    Insert -> "ins"
-    Normal -> "nor"
+    Modal.Insert -> "ins"
+    Modal.Normal -> "nor"
 
-popupThread :: St -> NotePopup -> [Post]
+popupThread :: Types.St -> Types.NotePopup -> [Store.Post]
 popupThread st np =
-  case npPurpose np of
-    AmendMessage _ -> []
-    NoteFor keys _ ->
-      case mapMaybe (`Map.lookup` stThreads st) keys of
+  case Types.npPurpose np of
+    Types.AmendMessage _ -> []
+    Types.NoteFor keys _ ->
+      case Maybe.mapMaybe (`Map.lookup` Types.stThreads st) keys of
         (t : _) -> t
         [] -> []
 
-popupTitle :: NotePopup -> [Post] -> Text
+popupTitle :: Types.NotePopup -> [Store.Post] -> T.Text
 popupTitle np thread =
-  case npPurpose np of
-    AmendMessage _ -> "amend"
-    NoteFor _ _ -> case noteAct thread of
-      NoteNew -> "note"
-      NoteEdit -> "note \183 editing yours"
-      NoteReply who -> "note \183 reply to " <> who
+  case Types.npPurpose np of
+    Types.AmendMessage _ -> "amend"
+    Types.NoteFor _ _ -> case NoteAction.noteAct thread of
+      NoteAction.NoteNew -> "note"
+      NoteAction.NoteEdit -> "note \183 editing yours"
+      NoteAction.NoteReply who -> "note \183 reply to " <> who
 
-popupHint :: NotePopup -> [Post] -> Text
+popupHint :: Types.NotePopup -> [Store.Post] -> T.Text
 popupHint np thread =
-  case npPurpose np of
-    AmendMessage _ -> "\9166 amend (nor) \183 C-c cancel"
+  case Types.npPurpose np of
+    Types.AmendMessage _ -> "\9166 amend (nor) \183 C-c cancel"
     -- what backing out costs is worth saying, since it differs: a note
     -- the mark opened takes the mark with it, one asked for does not
-    NoteFor _ (NoteFromMark _) ->
+    Types.NoteFor _ (Types.NoteFromMark _) ->
       "\9166 save (nor) \183 C-c cancels the mark \183 empty note clears"
-    NoteFor _ NoteAsked -> case noteAct thread of
-      NoteReply _ ->
+    Types.NoteFor _ Types.NoteAsked -> case NoteAction.noteAct thread of
+      NoteAction.NoteReply _ ->
         "\9166 post (nor) \183 C-c discard \183 empty clears the thread"
       _ -> "\9166 save (nor) \183 C-c discard \183 empty note clears"
 
 -- which line the conversation is about; the popup never used to say
-popupTargetRows :: St -> NotePopup -> [Widget Name]
+popupTargetRows :: Types.St -> Types.NotePopup -> [BrickTypes.Widget Types.Name]
 popupTargetRows st np =
-  case npPurpose np of
-    AmendMessage folding -> amendTargetRows st folding
-    NoteFor _ _ -> case currentFileMay st of
+  case Types.npPurpose np of
+    Types.AmendMessage folding -> amendTargetRows st folding
+    Types.NoteFor _ _ -> case Types.currentFileMay st of
       Nothing -> []
       Just fv ->
         let
-          cur = fst (cursorRC (fvEd fv))
-          decl = case declAt (bufferLines (fvEd fv)) cur of
-            Just d -> " \183 " <> declName d
+          cur = fst (Modal.cursorRC (Types.fvEd fv))
+          decl = case View.declAt (Modal.bufferLines (Types.fvEd fv)) cur of
+            Just d -> " \183 " <> View.declName d
             Nothing -> ""
         in
-          [ withAttr hintAttr (txt (T.pack (fvPath fv) <> ":" <> tshow (cur + 1) <> decl))
-          , txt " "
+          [ Brick.withAttr Attrs.hintAttr (Brick.txt (T.pack (Types.fvPath fv) <> ":" <> Types.tshow (cur + 1) <> decl))
+          , Brick.txt " "
           ]
 
 -- an amend that quietly stages files is the surprise this is here
 -- to remove: say what folds in before ⏎ does it
-amendTargetRows :: St -> [FilePath] -> [Widget Name]
+amendTargetRows :: Types.St -> [FilePath] -> [BrickTypes.Widget Types.Name]
 amendTargetRows st folding
   | null folding =
-      [ withAttr
-          hintAttr
-          ( txt
-              ( case stRebase st of
+      [ Brick.withAttr
+          Attrs.hintAttr
+          ( Brick.txt
+              ( case Types.stRebase st of
                   Just _ -> "message only \183 :continue folds in this stop's edits"
                   Nothing -> "message only \183 nothing else has changed"
               )
           )
-      , txt " "
+      , Brick.txt " "
       ]
   | otherwise =
-      withAttr hintAttr (txt ("folding in " <> fileCountLabel (length folding) <> ":"))
-        : map (\f -> withAttr noteInlineAttr (txt ("  " <> T.pack f))) (take 8 folding)
-        ++ [ withAttr hintAttr (txt ("  \8230 and " <> tshow (length folding - 8) <> " more"))
+      Brick.withAttr Attrs.hintAttr (Brick.txt ("folding in " <> Rebase.fileCountLabel (length folding) <> ":"))
+        : map (\f -> Brick.withAttr Attrs.noteInlineAttr (Brick.txt ("  " <> T.pack f))) (take 8 folding)
+        ++ [ Brick.withAttr Attrs.hintAttr (Brick.txt ("  \8230 and " <> Types.tshow (length folding - 8) <> " more"))
            | length folding > 8
            ]
-        ++ [txt " "]
+        ++ [Brick.txt " "]
 
 -- selections paint here the same way they do in the main buffer:
 -- whole rows for x, column spans for v
-noteBodyWidget :: EdState -> Widget Name
+noteBodyWidget :: Modal.EdState -> BrickTypes.Widget Types.Name
 noteBodyWidget ed =
   let
-    lineSel = selectionRows ed
-    charSel = charSelection ed
+    lineSel = Modal.selectionRows ed
+    charSel = Modal.charSelection ed
     inLineSel i = case lineSel of
       Just (a, b) -> i >= a && i <= b
       Nothing -> False
     bodyLine (i, l)
-      | inLineSel i = withDefAttr selAttr (txt (padT l))
+      | inLineSel i = Brick.withDefAttr Attrs.selAttr (Brick.txt (Widgets.padT l))
       | otherwise = case spanFor charSel i of
-          Nothing -> txt (padT l)
+          Nothing -> Brick.txt (Widgets.padT l)
           Just (start, mEnd) -> selectedLine l start mEnd
   in
-    vBox (map bodyLine (zip [0 ..] (bufferLines ed)))
+    Brick.vBox (map bodyLine (zip [0 ..] (Modal.bufferLines ed)))
 
 spanFor :: Maybe ((Int, Int), (Int, Int)) -> Int -> Maybe (Int, Maybe Int)
 spanFor charSel i = do
@@ -178,21 +155,21 @@ spanFor charSel i = do
         , if i == hr then Just hc else Nothing
         )
 
-selectedLine :: Text -> Int -> Maybe Int -> Widget Name
+selectedLine :: T.Text -> Int -> Maybe Int -> BrickTypes.Widget Types.Name
 selectedLine l start mEnd =
   let
     (pre, rest) = T.splitAt start l
     (mid, post) = case mEnd of
       Nothing -> (rest, T.empty)
       Just e -> T.splitAt (e + 1 - start) rest
-    midW = if T.null mid then txt " " else txt mid
+    midW = if T.null mid then Brick.txt " " else Brick.txt mid
   in
-    txt pre <+> withDefAttr selAttr midW <+> txt post
+    Brick.txt pre <+> Brick.withDefAttr Attrs.selAttr midW <+> Brick.txt post
 
-transcriptRows :: Int -> Int -> [Post] -> [Widget Name]
+transcriptRows :: Int -> Int -> [Store.Post] -> [BrickTypes.Widget Types.Name]
 transcriptRows width budget posts =
   let
-    rowsFor = concatMap (postRows width)
+    rowsFor = concatMap (NoteAction.postRows width)
     (shownRows, elided)
       | null posts = ([], 0 :: Int)
       | length (rowsFor posts) <= budget = (rowsFor posts, 0)
@@ -206,13 +183,13 @@ transcriptRows width budget posts =
           in
             drops posts
     markerRows =
-      [ withAttr
-          hintAttr
-          (txt ("\8230 " <> tshow elided <> " earlier post" <> (if elided == 1 then "" else "s")))
+      [ Brick.withAttr
+          Attrs.hintAttr
+          (Brick.txt ("\8230 " <> Types.tshow elided <> " earlier post" <> (if elided == 1 then "" else "s")))
       | elided > 0
       ]
     ruleRows =
-      [withAttr hairAttr (vLimit 1 (fill '\9472')) | not (null shownRows) || elided > 0]
+      [Brick.withAttr Attrs.hairAttr (Brick.vLimit 1 (Brick.fill '\9472')) | not (null shownRows) || elided > 0]
   in
     markerRows ++ shownRows ++ ruleRows
 

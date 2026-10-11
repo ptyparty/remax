@@ -18,19 +18,18 @@ module Remax.Config
   , ignoredPath
   ) where
 
-import Control.Exception (IOException, try)
-import Data.Maybe (mapMaybe)
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import qualified Data.Text.Read as TR
-import System.Directory (XdgDirectory (XdgConfig), createDirectoryIfMissing, getXdgDirectory)
-import System.FilePath (takeDirectory, (</>))
+import Control.Exception qualified as Exception
+import Data.Maybe qualified as Maybe
+import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import Data.Text.Read qualified as TR
+import System.Directory qualified as Directory
+import System.FilePath ((</>))
+import System.FilePath qualified as FilePath
 
-import Data.List (isPrefixOf)
-import System.FilePath (dropTrailingPathSeparator)
+import Data.List qualified as List
 
-import Remax.DiffModel (SplitConfig (..), defaultSplitConfig)
+import Remax.DiffModel qualified as DiffModel
 
 -- Which keybinding family drives the buffer: helix-style modal,
 -- vi-style modal, or modeless emacs chords.
@@ -40,7 +39,7 @@ data KeyMode = KeysHelix | KeysVi | KeysEmacs
 -- The one place the keymap names are spelled, so the config file, `:set
 -- keys`, and its completion cannot drift apart. Anything unrecognized
 -- reads as the default, matching how the rest of the file is parsed.
-keyModeFromText :: Text -> KeyMode
+keyModeFromText :: T.Text -> KeyMode
 keyModeFromText raw =
   case T.strip raw of
     "emacs" -> KeysEmacs
@@ -48,14 +47,14 @@ keyModeFromText raw =
     "vim" -> KeysVi
     _ -> KeysHelix
 
-keyModeToText :: KeyMode -> Text
+keyModeToText :: KeyMode -> T.Text
 keyModeToText mode =
   case mode of
     KeysHelix -> "helix"
     KeysVi -> "vi"
     KeysEmacs -> "emacs"
 
-keyModeNames :: [Text]
+keyModeNames :: [T.Text]
 keyModeNames = ["helix", "vi", "emacs"]
 
 data Config = Config
@@ -66,7 +65,7 @@ data Config = Config
   , cfgIgnoreWs :: Bool -- compare lines with their whitespace removed
   , cfgWordDiff :: Bool -- mark the words that differ within a changed line (on)
   , cfgUntracked :: Bool -- show files git does not track yet (on)
-  , cfgSplit :: SplitConfig
+  , cfgSplit :: DiffModel.SplitConfig
   }
 
 defaultConfig :: Config
@@ -79,24 +78,24 @@ defaultConfig =
     , cfgIgnoreWs = False
     , cfgWordDiff = True
     , cfgUntracked = True
-    , cfgSplit = defaultSplitConfig
+    , cfgSplit = DiffModel.defaultSplitConfig
     }
 
 configPath :: IO FilePath
 configPath = do
-  dir <- getXdgDirectory XdgConfig "remax"
+  dir <- Directory.getXdgDirectory Directory.XdgConfig "remax"
   pure (dir </> "config.toml")
 
 loadConfig :: IO Config
 loadConfig = do
   path <- configPath
-  got <- try (TIO.readFile path) :: IO (Either IOException Text)
+  got <- Exception.try (TIO.readFile path) :: IO (Either Exception.IOException T.Text)
   pure $ case got of
     Left _ -> defaultConfig
     Right body -> fromEntries (parseEntries body)
 
 -- Raw key/value pairs; values may be numbers or bare words.
-parseEntries :: Text -> [(Text, Text)]
+parseEntries :: T.Text -> [(T.Text, T.Text)]
 parseEntries body =
   let
     entry line = do
@@ -108,14 +107,14 @@ parseEntries body =
       _ <- if T.null rhs then Nothing else Just ()
       pure (T.strip lhs, T.strip (T.drop 1 rhs))
   in
-    mapMaybe entry (T.lines body)
+    Maybe.mapMaybe entry (T.lines body)
 
 -- Persist one setting: replace its line in the config file (create the
 -- file if needed), keeping everything else — comments included — as-is.
-persistSetting :: Text -> Text -> IO ()
+persistSetting :: T.Text -> T.Text -> IO ()
 persistSetting key value = do
   path <- configPath
-  got <- try (TIO.readFile path) :: IO (Either IOException Text)
+  got <- Exception.try (TIO.readFile path) :: IO (Either Exception.IOException T.Text)
   let
     body = either (const "") id got
     ls = T.lines body
@@ -127,7 +126,7 @@ persistSetting key value = do
       if any isKeyLine ls
         then map (\l -> if isKeyLine l then newLine else l) ls
         else ls ++ [newLine]
-  createDirectoryIfMissing True (takeDirectory path)
+  Directory.createDirectoryIfMissing True (FilePath.takeDirectory path)
   TIO.writeFile path (T.unlines replaced)
 
 -- Per-repository exclusions: .remaxignore at the repo root, one pattern
@@ -135,11 +134,11 @@ persistSetting key value = do
 -- component (`gen` covers gen/a.txt, not generated.hs), and `*suffix`
 -- for basename endings (`*.min.js`). Ignored files never enter the
 -- change set; :open still works on them.
-loadIgnores :: FilePath -> IO [Text]
+loadIgnores :: FilePath -> IO [T.Text]
 loadIgnores root = do
   got <-
-    try (TIO.readFile (root </> ".remaxignore")) ::
-      IO (Either IOException Text)
+    Exception.try (TIO.readFile (root </> ".remaxignore")) ::
+      IO (Either Exception.IOException T.Text)
   pure $ case got of
     Left _ -> []
     Right body ->
@@ -150,9 +149,9 @@ loadIgnores root = do
           in
             if T.null t || "#" `T.isPrefixOf` t then Nothing else Just t
       in
-        mapMaybe keep (T.lines body)
+        Maybe.mapMaybe keep (T.lines body)
 
-ignoredPath :: [Text] -> FilePath -> Bool
+ignoredPath :: [T.Text] -> FilePath -> Bool
 ignoredPath pats path =
   let
     matchOne pat =
@@ -160,13 +159,13 @@ ignoredPath pats path =
         Just suffix -> suffix `T.isSuffixOf` T.pack path
         Nothing ->
           let
-            p = dropTrailingPathSeparator (T.unpack pat)
+            p = FilePath.dropTrailingPathSeparator (T.unpack pat)
           in
-            path == p || (p ++ "/") `isPrefixOf` path
+            path == p || (p ++ "/") `List.isPrefixOf` path
   in
     any matchOne pats
 
-fromEntries :: [(Text, Text)] -> Config
+fromEntries :: [(T.Text, T.Text)] -> Config
 fromEntries entries =
   let
     getInt key fallback =
@@ -187,10 +186,10 @@ fromEntries entries =
       , cfgWordDiff = getInt "word-diff" (1 :: Int) /= 0
       , cfgUntracked = getInt "untracked" (1 :: Int) /= 0
       , cfgSplit =
-          SplitConfig
-            { splitThreshold =
-                max 1 (getInt "split-threshold" (splitThreshold baseSplit))
-            , pieceMin = max 1 (getInt "piece-min" (pieceMin baseSplit))
-            , pieceMax = max 2 (getInt "piece-max" (pieceMax baseSplit))
+          DiffModel.SplitConfig
+            { DiffModel.splitThreshold =
+                max 1 (getInt "split-threshold" (DiffModel.splitThreshold baseSplit))
+            , DiffModel.pieceMin = max 1 (getInt "piece-min" (DiffModel.pieceMin baseSplit))
+            , DiffModel.pieceMax = max 2 (getInt "piece-max" (DiffModel.pieceMax baseSplit))
             }
       }

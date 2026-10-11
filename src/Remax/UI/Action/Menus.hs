@@ -6,20 +6,18 @@ module Remax.UI.Action.Menus
   , spaceMenuEntries
   ) where
 
-import Brick
-  ( EventM
-  )
-import Data.Text (Text)
-import Remax.Config
-import Remax.Store
-import Remax.UI.Action.Editor
-import Remax.UI.Action.Notes
-import Remax.UI.Action.Open
-import Remax.UI.Action.Picker
-import Remax.UI.Action.Tree
-import Remax.UI.Action.Verdicts
-import Remax.UI.Core.Types
-import Remax.UI.Model.Nav
+import Brick qualified as Brick
+import Data.Text qualified as T
+import Remax.Config qualified as Config
+import Remax.Store qualified as Store
+import Remax.UI.Action.Editor qualified as Editor
+import Remax.UI.Action.Notes qualified as NoteAction
+import Remax.UI.Action.Open qualified as Open
+import Remax.UI.Action.Picker qualified as PickerAction
+import Remax.UI.Action.Tree qualified as TreeAction
+import Remax.UI.Action.Verdicts qualified as VerdictAction
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Model.Nav qualified as Nav
 
 -- The pending-space infobox, helix style: bottom-right, listing what the
 -- menu offers.
@@ -30,12 +28,12 @@ import Remax.UI.Model.Nav
 -- alphabetically.
 -- The keys differ by family, so the sheet does too — an emacs or vi
 -- session showing helix's keys would be worse than no sheet at all.
-helpGroups :: KeyMode -> [(Text, [(Text, Text)])]
+helpGroups :: Config.KeyMode -> [(T.Text, [(T.Text, T.Text)])]
 helpGroups mode =
   (reviewGroup mode : sayingGroup : editingGroups mode)
     ++ aroundGroups mode
 
-sayingGroup :: (Text, [(Text, Text)])
+sayingGroup :: (T.Text, [(T.Text, T.Text)])
 sayingGroup =
   ( "saying something"
   ,
@@ -45,7 +43,7 @@ sayingGroup =
     ]
   )
 
-aroundGroups :: KeyMode -> [(Text, [(Text, Text)])]
+aroundGroups :: Config.KeyMode -> [(T.Text, [(T.Text, T.Text)])]
 aroundGroups mode =
   [
     ( "getting around"
@@ -62,24 +60,24 @@ aroundGroups mode =
       , ("Tab", "collapse / expand the tray")
       , ("{ }", "scroll the tray")
       , -- vi wants E for the WORD motion, so the leader carries $EDITOR
-        (if mode == KeysVi then "\9251 e" else "E", "suspend into $EDITOR here")
+        (if mode == Config.KeysVi then "\9251 e" else "E", "suspend into $EDITOR here")
       , ("\9251 a", "the alternate file")
       ]
     )
   ,
-    ( "the " <> promptKeys mode <> " line"
+    ( "the " <> Types.promptKeys mode <> " line"
     ,
-      [ (promptKeys mode, "commands — a bare one lists them all")
+      [ (Types.promptKeys mode, "commands — a bare one lists them all")
       , (":base", "pick what to diff against")
       , (":rebase", "review commit by commit")
       , -- the command is :q whatever the keymap, but an emacs hand
         -- reaches for its own chord and should find it here
-        (quitKeys mode, "quit")
+        (Types.quitKeys mode, "quit")
       ]
     )
   ]
 
-reviewGroup :: KeyMode -> (Text, [(Text, Text)])
+reviewGroup :: Config.KeyMode -> (T.Text, [(T.Text, T.Text)])
 reviewGroup mode =
   let
     common =
@@ -92,14 +90,14 @@ reviewGroup mode =
   in
     ( "review"
     , case mode of
-        KeysVi ->
+        Config.KeysVi ->
           [ ("\9251 \9166", "accept the selection as reviewed")
           , ("\9251 !", "flag it — come back to this")
           , ("\9251 q", "question it — explain or fix")
           , ("\9251 x", "select the whole hunk")
           ]
             ++ common
-        KeysEmacs ->
+        Config.KeysEmacs ->
           [ ("C-c \9166", "accept the selection as reviewed")
           , ("C-c !", "flag it — come back to this")
           , ("C-c ?", "question it — explain or fix")
@@ -108,7 +106,7 @@ reviewGroup mode =
           , ("C-c p", "show only hunks still pending")
           , ("C-c k", "walk all / code / comment hunks")
           ]
-        KeysHelix ->
+        Config.KeysHelix ->
           [ ("\9166", "accept the selection as reviewed")
           , ("!", "flag it — come back to this")
           , ("?", "question it — explain or fix")
@@ -117,10 +115,10 @@ reviewGroup mode =
             ++ common
     )
 
-editingGroups :: KeyMode -> [(Text, [(Text, Text)])]
+editingGroups :: Config.KeyMode -> [(T.Text, [(T.Text, T.Text)])]
 editingGroups mode =
   case mode of
-    KeysVi ->
+    Config.KeysVi ->
       [
         ( "moving"
         ,
@@ -162,7 +160,7 @@ editingGroups mode =
           ]
         )
       ]
-    KeysEmacs ->
+    Config.KeysEmacs ->
       [
         ( "moving"
         ,
@@ -193,9 +191,9 @@ editingGroups mode =
           ]
         )
       ]
-    KeysHelix -> helixEditingGroups
+    Config.KeysHelix -> helixEditingGroups
 
-helixEditingGroups :: [(Text, [(Text, Text)])]
+helixEditingGroups :: [(T.Text, [(T.Text, T.Text)])]
 helixEditingGroups =
   [
     ( "moving"
@@ -246,26 +244,26 @@ helixEditingGroups =
 -- the infobox is rendered from it and the keystroke is dispatched through
 -- it, so a key cannot be bound without being listed. :tree arrived bound
 -- but invisible precisely because those used to be two lists.
-spaceMenuEntries :: [(Text, Text, EventM Name St ())]
+spaceMenuEntries :: [(T.Text, T.Text, Brick.EventM Types.Name Types.St ())]
 spaceMenuEntries =
-  [ ("\9166", "accept as reviewed", acceptSelection)
-  , ("!", "flag it", markThenNote Flagged)
-  , ("q", "question it", markThenNote Questioned)
-  , ("x", "select the hunk", selectCurrentHunk)
-  , ("f", "find a file", openFileFinder)
-  , ("b", "open files", openBufferPicker)
-  , ("t", "project tree", openTree)
-  , ("R", "switch repository", openRepoPicker)
-  , ("'", "last selector", reopenLastSelector)
-  , ("n", "note popup", openNotePopup NoteAsked)
-  , ("e", "$EDITOR here", editCurrent)
-  , ("p", "pending filter", togglePendingOnly)
-  , ("k", "code / comment filter", cycleRunFilter)
-  , ("u", "resolve note here", unnoteCmd)
-  , ("h", "make this hunk current", setCurrentHunkHere)
-  , ("r", "revert hunk to base", revertTarget)
-  , ("a", "alternate file", gotoAltFile)
-  , ("/", "project search", openGrepPicker "")
-  , ("c", "commit message", showCommitPopup)
-  , ("?", "keys", showHelp)
+  [ ("\9166", "accept as reviewed", VerdictAction.acceptSelection)
+  , ("!", "flag it", NoteAction.markThenNote Store.Flagged)
+  , ("q", "question it", NoteAction.markThenNote Store.Questioned)
+  , ("x", "select the hunk", Nav.selectCurrentHunk)
+  , ("f", "find a file", TreeAction.openFileFinder)
+  , ("b", "open files", PickerAction.openBufferPicker)
+  , ("t", "project tree", TreeAction.openTree)
+  , ("R", "switch repository", PickerAction.openRepoPicker)
+  , ("'", "last selector", PickerAction.reopenLastSelector)
+  , ("n", "note popup", NoteAction.openNotePopup Types.NoteAsked)
+  , ("e", "$EDITOR here", Editor.editCurrent)
+  , ("p", "pending filter", VerdictAction.togglePendingOnly)
+  , ("k", "code / comment filter", VerdictAction.cycleRunFilter)
+  , ("u", "resolve note here", NoteAction.unnoteCmd)
+  , ("h", "make this hunk current", Nav.setCurrentHunkHere)
+  , ("r", "revert hunk to base", VerdictAction.revertTarget)
+  , ("a", "alternate file", Open.gotoAltFile)
+  , ("/", "project search", PickerAction.openGrepPicker "")
+  , ("c", "commit message", VerdictAction.showCommitPopup)
+  , ("?", "keys", Types.showHelp)
   ]

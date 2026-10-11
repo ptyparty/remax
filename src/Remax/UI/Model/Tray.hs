@@ -8,17 +8,12 @@ module Remax.UI.Model.Tray
   , trayCurrentRow
   ) where
 
-import Data.List
-  ( findIndex
-  )
-import Data.Maybe
-  ( fromMaybe
-  )
-import Data.Text (Text)
-import qualified Data.Text as T
-import Remax.DiffModel
-import Remax.UI.Core.Types
-import Remax.UI.Core.Verdict
+import Data.List qualified as List
+import Data.Maybe qualified as Maybe
+import Data.Text qualified as T
+import Remax.DiffModel qualified as DiffModel
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Verdict qualified as Verdict
 
 -- A tray row together with what it needs to draw itself.
 --
@@ -29,31 +24,31 @@ import Remax.UI.Core.Verdict
 -- with a few thousand hunks put seconds between a keystroke and the
 -- screen; see allRunsInOrder for the other half of the same mistake.
 data TrayRow
-  = TrayRowFile Int Int FileView -- file index, hidden hunks, the file
-  | TrayRowHunk Int Int Run Text -- file, hunk, the run, its declaration
-  | TrayRowRemark Int Int Remark -- file, index among that file's remarks
+  = TrayRowFile Int Int Types.FileView -- file index, hidden hunks, the file
+  | TrayRowHunk Int Int DiffModel.Run T.Text -- file, hunk, the run, its declaration
+  | TrayRowRemark Int Int Types.Remark -- file, index among that file's remarks
 
 -- Which row this is, for the places that only need to point at one.
-trayEntryOf :: TrayRow -> TrayEntry
+trayEntryOf :: TrayRow -> Types.TrayEntry
 trayEntryOf row = case row of
-  TrayRowFile fi hidden _ -> TrayFile fi hidden
-  TrayRowHunk fi hi _ _ -> TrayHunk fi hi
-  TrayRowRemark fi ri _ -> TrayRemark fi ri
+  TrayRowFile fi hidden _ -> Types.TrayFile fi hidden
+  TrayRowHunk fi hi _ _ -> Types.TrayHunk fi hi
+  TrayRowRemark fi ri _ -> Types.TrayRemark fi ri
 
-trayEntries :: St -> [TrayEntry]
+trayEntries :: Types.St -> [Types.TrayEntry]
 trayEntries = map trayEntryOf . trayRows
 
-trayRows :: St -> [TrayRow]
+trayRows :: Types.St -> [TrayRow]
 trayRows st =
   let
-    curF = stCurF st
-    curH = clampH (fvRuns (currentFile st)) (stCurH st)
+    curF = Types.stCurF st
+    curH = Types.clampH (Types.fvRuns (Types.currentFile st)) (Types.stCurH st)
     hiddenHunk fi (hi, r, _) =
       let
-        mark = runMark (stVerdicts st) r
+        mark = Verdict.runMark (Types.stVerdicts st) r
         isCurrent = fi == curF && hi == curH
-        settled = stOnlyPending st && mark == '\10003'
-        wrongKind = not (runFilterAllows (stRunFilter st) r)
+        settled = Types.stOnlyPending st && mark == '\10003'
+        wrongKind = not (Types.runFilterAllows (Types.stRunFilter st) r)
       in
         not isCurrent && (settled || wrongKind)
     fileGroup (fi, fv) =
@@ -61,18 +56,18 @@ trayRows st =
         -- the declarations are a list parallel to the runs, and a file
         -- whose decls have not been worked out yet simply has none
         numbered =
-          zip3 [0 ..] (fvRuns fv) (fvRunDecls fv ++ repeat T.empty)
+          zip3 [0 ..] (Types.fvRuns fv) (Types.fvRunDecls fv ++ repeat T.empty)
         (hiddenOnes, shown) = splitHiddenShown fi numbered
       in
         TrayRowFile fi (length hiddenOnes) fv
           : map (\(hi, r, decl) -> TrayRowHunk fi hi r decl) shown
-          ++ zipWith (TrayRowRemark fi) [0 ..] (fvRemarks fv)
+          ++ zipWith (TrayRowRemark fi) [0 ..] (Types.fvRemarks fv)
     splitHiddenShown fi numbered =
       ( filter (hiddenHunk fi) numbered
       , filter (not . hiddenHunk fi) numbered
       )
   in
-    concatMap fileGroup (zip [0 ..] (stFiles st))
+    concatMap fileGroup (zip [0 ..] (Types.stFiles st))
 
 trayWidth :: Int
 trayWidth = 32
@@ -80,15 +75,15 @@ trayWidth = 32
 -- Which tray row the hunk under review is on. Where the tray is pointed
 -- when it follows, and — because that is where it will be pointed — part
 -- of deciding which rows are worth drawing.
-trayCurrentRow :: St -> Int
+trayCurrentRow :: Types.St -> Int
 trayCurrentRow st =
-  case currentFileMay st of
+  case Types.currentFileMay st of
     Nothing -> 0
     Just fv ->
       let
-        h = clampH (fvRuns fv) (stCurH st)
+        h = Types.clampH (Types.fvRuns fv) (Types.stCurH st)
         isCur entry = case entry of
-          TrayHunk f hh -> f == stCurF st && hh == h
+          Types.TrayHunk f hh -> f == Types.stCurF st && hh == h
           _ -> False
       in
-        fromMaybe 0 (findIndex isCur (trayEntries st))
+        Maybe.fromMaybe 0 (List.findIndex isCur (trayEntries st))

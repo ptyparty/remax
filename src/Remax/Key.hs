@@ -14,19 +14,18 @@ module Remax.Key
   , noteGroupId
   ) where
 
-import Data.Digest.Pure.SHA (sha256, showDigest)
-import Data.List (sort)
-import qualified Data.Map.Strict as Map
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Lazy as TL
-import qualified Data.Text.Lazy.Encoding as TLE
+import Data.Digest.Pure.SHA qualified as SHA
+import Data.List qualified as List
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Data.Text.Lazy qualified as TL
+import Data.Text.Lazy.Encoding qualified as TLE
 
 -- One key per marked changed line ("+text" or "-text"), in the order the
 -- lines appear in the file's decorations. The copy ordinal keeps twins
 -- apart: the second identical "+ foo" in a file is a different key from
 -- the first, so reviewing one leaves the other pending.
-lineKeys :: Text -> Text -> [Text] -> [Text]
+lineKeys :: T.Text -> T.Text -> [T.Text] -> [T.Text]
 lineKeys repo file markedLines =
   let
     lineId l =
@@ -55,10 +54,10 @@ lineKeys repo file markedLines =
 -- Derived from the keys rather than drawn at random so that noting the
 -- same lines again continues the group it continued before, and so that
 -- nothing here needs a source of entropy.
-noteGroupId :: Text -> [Text] -> Text
+noteGroupId :: T.Text -> [T.Text] -> T.Text
 noteGroupId repo keys =
-  sha256Hex (T.intercalate "\NUL" ("remax/group/1" : repo : sort keys))
+  sha256Hex (T.intercalate "\NUL" ("remax/group/1" : repo : List.sort keys))
 
-sha256Hex :: Text -> Text
+sha256Hex :: T.Text -> T.Text
 sha256Hex =
-  T.pack . showDigest . sha256 . TLE.encodeUtf8 . TL.fromStrict
+  T.pack . SHA.showDigest . SHA.sha256 . TLE.encodeUtf8 . TL.fromStrict

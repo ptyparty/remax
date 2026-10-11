@@ -5,145 +5,131 @@ module Remax.UI.Draw.Status
   ( statusBar
   ) where
 
-import Brick
-  ( AttrName
-  , Padding (Max)
-  , Widget
-  , hBox
-  , padLeft
-  , txt
-  , withAttr
-  , withDefAttr
-  , (<+>)
-  )
-import Data.List
-  ( find
-  )
-import Data.Text (Text)
-import qualified Data.Text as T
-import Remax.Config
-import Remax.Modal
-import Remax.UI.Core.Attrs
-import Remax.UI.Core.Ink
-import Remax.UI.Core.Types
-import Remax.UI.Core.View
-import Remax.UI.Core.Widgets
-import Remax.Vi
-  ( viLabel
-  )
+import Brick ((<+>))
+import Brick qualified as Brick
+import Data.List qualified as List
+import Data.Text qualified as T
+import Remax.Config qualified as Config
+import Remax.Modal qualified as Modal
+import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Ink qualified as Ink
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.View qualified as View
+import Remax.UI.Core.Widgets qualified as Widgets
+import Remax.Vi qualified as Vi
 
-statusBar :: St -> Widget Name
+statusBar :: Types.St -> Brick.Widget Types.Name
 statusBar st =
   let
-    middle = case stPrompt st of
-      Just (SearchPrompt input) ->
-        txt (searchSigil st <> input <> "\9612")
-      Just (CmdPrompt input) -> txt (":" <> input <> "\9612")
-      Nothing -> withAttr msgAttr (txt (padT (stMsg st)))
+    middle = case Types.stPrompt st of
+      Just (Types.SearchPrompt input) ->
+        Brick.txt (Types.searchSigil st <> input <> "\9612")
+      Just (Types.CmdPrompt input) -> Brick.txt (":" <> input <> "\9612")
+      Nothing -> Brick.withAttr Attrs.msgAttr (Brick.txt (Widgets.padT (Types.stMsg st)))
   in
-    withDefAttr statusAttr $
+    Brick.withDefAttr Attrs.statusAttr $
       modeChip st
         <+> pollChip st
         <+> declSeg st
         <+> meterSeg st
-        <+> txt "  "
+        <+> Brick.txt "  "
         <+> middle
-        <+> padLeft Max (withAttr hintAttr (txt (statusHint st)))
+        <+> Brick.padLeft Brick.Max (Brick.withAttr Attrs.hintAttr (Brick.txt (statusHint st)))
 
-chip :: AttrName -> Text -> Widget Name
+chip :: Brick.AttrName -> T.Text -> Brick.Widget Types.Name
 chip dotAttr label =
-  hBox
-    [ txt " "
-    , withAttr dotAttr (txt "\9679")
-    , withAttr statusAttr (txt (" " <> label <> " "))
+  Brick.hBox
+    [ Brick.txt " "
+    , Brick.withAttr dotAttr (Brick.txt "\9679")
+    , Brick.withAttr Attrs.statusAttr (Brick.txt (" " <> label <> " "))
     ]
 
 -- what the buffer is waiting for, most specific first: the space
 -- menu, an emacs chord, a half-typed vi command, insert, then plain
 -- normal — with vi's own resting label saying which keymap you are in
-modeChip :: St -> Widget Name
+modeChip :: Types.St -> Brick.Widget Types.Name
 modeChip st
-  | stSpace st = chip modeDotNorAttr "spc\8230"
-  | stIdleGo st = chip modeDotNorAttr "g\8230"
-  | otherwise = case stEmacsPrefix st of
-      Just pfx -> chip modeDotNorAttr ("C-" <> T.singleton pfx <> "\8230")
-      Nothing -> case cfgKeys (stConfig st) of
-        KeysEmacs -> chip modeDotNorAttr "emx"
-        KeysVi -> viChip st
-        KeysHelix -> helixChip st
+  | Types.stSpace st = chip Attrs.modeDotNorAttr "spc\8230"
+  | Types.stIdleGo st = chip Attrs.modeDotNorAttr "g\8230"
+  | otherwise = case Types.stEmacsPrefix st of
+      Just pfx -> chip Attrs.modeDotNorAttr ("C-" <> T.singleton pfx <> "\8230")
+      Nothing -> case Config.cfgKeys (Types.stConfig st) of
+        Config.KeysEmacs -> chip Attrs.modeDotNorAttr "emx"
+        Config.KeysVi -> viChip st
+        Config.KeysHelix -> helixChip st
 
-viChip :: St -> Widget Name
+viChip :: Types.St -> Brick.Widget Types.Name
 viChip st =
-  case currentFileMay st of
-    Nothing -> chip modeDotNorAttr "vi"
-    Just fv -> case edMode (fvEd fv) of
-      Insert -> chip modeDotInsAttr "ins"
-      Normal -> case viLabel (stVi st) of
-        Just p -> chip modeDotNorAttr (p <> "\8230")
+  case Types.currentFileMay st of
+    Nothing -> chip Attrs.modeDotNorAttr "vi"
+    Just fv -> case Modal.edMode (Types.fvEd fv) of
+      Modal.Insert -> chip Attrs.modeDotInsAttr "ins"
+      Modal.Normal -> case Vi.viLabel (Types.stVi st) of
+        Just p -> chip Attrs.modeDotNorAttr (p <> "\8230")
         Nothing
-          | edExtend (fvEd fv) -> chip modeDotNorAttr "vis"
-          | otherwise -> chip modeDotNorAttr "vi"
+          | Modal.edExtend (Types.fvEd fv) -> chip Attrs.modeDotNorAttr "vis"
+          | otherwise -> chip Attrs.modeDotNorAttr "vi"
 
-helixChip :: St -> Widget Name
+helixChip :: Types.St -> Brick.Widget Types.Name
 helixChip st =
-  case currentFileMay st of
-    Nothing -> chip modeDotNorAttr "nor"
-    Just fv -> case edMode (fvEd fv) of
-      Insert -> chip modeDotInsAttr "ins"
-      Normal -> case pendingLabel (fvEd fv) of
-        Just p -> chip modeDotNorAttr (p <> "\8230")
-        Nothing -> chip modeDotNorAttr "nor"
+  case Types.currentFileMay st of
+    Nothing -> chip Attrs.modeDotNorAttr "nor"
+    Just fv -> case Modal.edMode (Types.fvEd fv) of
+      Modal.Insert -> chip Attrs.modeDotInsAttr "ins"
+      Modal.Normal -> case Modal.pendingLabel (Types.fvEd fv) of
+        Just p -> chip Attrs.modeDotNorAttr (p <> "\8230")
+        Nothing -> chip Attrs.modeDotNorAttr "nor"
 
 -- the startup warning scrolls away with the next message; this keeps
 -- "the watcher is a second behind" on screen for the whole session
-pollChip :: St -> Widget Name
+pollChip :: Types.St -> Brick.Widget Types.Name
 pollChip st =
-  if stWatchMode st == PollingWatch
-    then withAttr watchPollAttr (txt " \9888 poll ")
-    else txt ""
+  if Types.stWatchMode st == Types.PollingWatch
+    then Brick.withAttr Attrs.watchPollAttr (Brick.txt " \9888 poll ")
+    else Brick.txt ""
 
-declSeg :: St -> Widget Name
+declSeg :: Types.St -> Brick.Widget Types.Name
 declSeg st =
-  case currentFileMay st of
+  case Types.currentFileMay st of
     Just fv ->
       -- nearest decl at or above the cursor, found by walking up
       -- from it rather than rebuilding the buffer every frame
-      case find isDeclLine (bufferUpward (fvEd fv)) of
+      case List.find View.isDeclLine (Modal.bufferUpward (Types.fvEd fv)) of
         Just d ->
-          withAttr trayDeclAttr (txt (" " <> T.take 32 (declName d) <> " \183"))
-        Nothing -> txt ""
-    Nothing -> txt ""
+          Brick.withAttr Attrs.trayDeclAttr (Brick.txt (" " <> T.take 32 (View.declName d) <> " \183"))
+        Nothing -> Brick.txt ""
+    Nothing -> Brick.txt ""
 
 -- in vi the verbs sit under the leader, so the hint has to say so
 -- Named for the keymap in use, all three of them. The verbs sit
 -- under a leader in vi and under C-c in emacs, and emacs has no
 -- space leader at all — so it has no space menu and no ␣? either,
 -- and reaches the sheet the way it reaches every other command.
-verbHint :: KeyMode -> Text
+verbHint :: Config.KeyMode -> T.Text
 verbHint keys =
   case keys of
-    KeysVi -> "\9251\9166 accept · \9251! flag · \9251q question · \9251? keys "
-    KeysEmacs ->
+    Config.KeysVi -> "\9251\9166 accept · \9251! flag · \9251q question · \9251? keys "
+    Config.KeysEmacs ->
       "C-c \9166 accept · C-c ! flag · C-c ? question · M-x help "
-    KeysHelix -> "\9166 accept · ! flag · ? question · \9251 menu · \9251? keys "
+    Config.KeysHelix -> "\9166 accept · ! flag · ? question · \9251 menu · \9251? keys "
 
-statusHint :: St -> Text
+statusHint :: Types.St -> T.Text
 statusHint st =
   let
-    keys = cfgKeys (stConfig st)
+    keys = Config.cfgKeys (Types.stConfig st)
   in
-    case currentFileMay st of
+    case Types.currentFileMay st of
       Nothing ->
-        promptKeys keys <> " command · \9251? keys · " <> quitKeys keys <> " quit "
+        Types.promptKeys keys <> " command · \9251? keys · " <> Types.quitKeys keys <> " quit "
       Just fv ->
-        (if fvStale fv then "hunks refresh on Esc · " else "") <> verbHint keys
+        (if Types.fvStale fv then "hunks refresh on Esc · " else "") <> verbHint keys
 
-meterSeg :: St -> Widget Name
+meterSeg :: Types.St -> Brick.Widget Types.Name
 meterSeg st =
   let
-    total = sum (map (length . fvRuns) (stFiles st))
-    pending = sum (map fvPending (stFiles st))
+    total = sum (map (length . Types.fvRuns) (Types.stFiles st))
+    pending = sum (map Types.fvPending (Types.stFiles st))
   in
     if total == 0
-      then txt ""
-      else txt "  " <+> meterW (total - pending) total
+      then Brick.txt ""
+      else Brick.txt "  " <+> Ink.meterW (total - pending) total

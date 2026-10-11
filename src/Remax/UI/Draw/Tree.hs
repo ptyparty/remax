@@ -6,79 +6,49 @@ module Remax.UI.Draw.Tree
   , treeLayer
   ) where
 
-import Brick
-  ( AttrName
-  , Padding (Max)
-  , Widget
-  , hBox
-  , hLimit
-  , padLeft
-  , padRight
-  , str
-  , txt
-  , vBox
-  , withAttr
-  , withDefAttr
-  )
-import Brick.Types
-  ( Size (Greedy)
-  , Widget (Widget)
-  , availHeight
-  , availWidth
-  , getContext
-  , render
-  )
-import Data.List
-  ( find
-  )
-import qualified Data.Set as Set
-import Data.Text (Text)
-import qualified Data.Text as T
-import Remax.Git
-  ( FileScope (..)
-  , PathChange (..)
-  , PathStat (..)
-  , pathChangeLetter
-  )
-import Remax.Tree
-import Remax.UI.Action.Files
-import Remax.UI.Action.Fuzzy
-import Remax.UI.Action.Tree
-import Remax.UI.Core.Attrs
-import Remax.UI.Core.Ink
-import Remax.UI.Core.Types
-import Remax.UI.Core.Verdict
-import Remax.UI.Core.Widgets
-import System.FilePath
-  ( takeFileName
-  )
+import Brick qualified as Brick
+import Brick.Types qualified as BrickTypes
+import Data.List qualified as List
+import Data.Set qualified as Set
+import Data.Text qualified as T
+import Remax.Git qualified as Git
+import Remax.Tree qualified as Tree
+import Remax.UI.Action.Files qualified as FileAction
+import Remax.UI.Action.Fuzzy qualified as Fuzzy
+import Remax.UI.Action.Tree qualified as TreeAction
+import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Ink qualified as Ink
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Verdict qualified as Verdict
+import Remax.UI.Core.Widgets qualified as Widgets
+import System.FilePath qualified as FilePath
 
 -- Ctrl-x's menu, drawn from the same table that dispatches it.
-fileMenuLayer :: TreeView -> Maybe (Widget Name)
+fileMenuLayer :: Types.TreeView -> Maybe (BrickTypes.Widget Types.Name)
 fileMenuLayer view =
-  case tvOp view of
-    Just OpMenu ->
+  case Types.tvOp view of
+    Just Types.OpMenu ->
       let
         item (key, label, _) =
-          hBox
-            [ withAttr noteInlineAttr (txt (" " <> key))
-            , withAttr statusAttr (txt ("  " <> label))
+          Brick.hBox
+            [ Brick.withAttr Attrs.noteInlineAttr (Brick.txt (" " <> key))
+            , Brick.withAttr Attrs.statusAttr (Brick.txt ("  " <> label))
             ]
       in
         Just
-          ( cornerFrame "file" "any other key cancels" . hLimit 24 . padRight Max $
-              vBox (map item fileMenuEntries)
+          ( Widgets.cornerFrame "file" "any other key cancels" . Brick.hLimit 24 . Brick.padRight Brick.Max $
+              Brick.vBox (map item FileAction.fileMenuEntries)
           )
     _ -> Nothing
 
 -- Fixed-width columns, so one long name cannot shove the numbers out of
 -- line. hLimit does what columnRow does for the pickers, but keeps the
 -- cells as widgets so they can carry their own colors.
-treeCell :: Int -> Widget Name -> Widget Name
-treeCell w = hLimit w . padRight Max
+treeCell :: Int -> BrickTypes.Widget Types.Name -> BrickTypes.Widget Types.Name
+treeCell w = Brick.hLimit w . Brick.padRight Brick.Max
 
-treeCellR :: Int -> Widget Name -> Widget Name
-treeCellR w = hLimit w . padLeft Max
+treeCellR :: Int -> BrickTypes.Widget Types.Name -> BrickTypes.Widget Types.Name
+treeCellR w = Brick.hLimit w . Brick.padLeft Brick.Max
 
 treeNameW, treeStatW, treeNumW, treeMeterW :: Int
 treeNameW = 34
@@ -86,24 +56,24 @@ treeStatW = 2
 treeNumW = 6
 treeMeterW = 13
 
-statusAttrFor :: PathChange -> AttrName
+statusAttrFor :: Git.PathChange -> Brick.AttrName
 statusAttrFor change =
   case change of
-    PathAdded -> addedMarkAttr
-    PathModified -> pendingMarkAttr
-    PathDeleted -> removedMarkAttr
-    PathRenamed _ -> questionMarkAttr
-    PathCopied _ -> questionMarkAttr
-    PathUntracked -> hintAttr
-    PathOtherChange -> hintAttr
+    Git.PathAdded -> Attrs.addedMarkAttr
+    Git.PathModified -> Attrs.pendingMarkAttr
+    Git.PathDeleted -> Attrs.removedMarkAttr
+    Git.PathRenamed _ -> Attrs.questionMarkAttr
+    Git.PathCopied _ -> Attrs.questionMarkAttr
+    Git.PathUntracked -> Attrs.hintAttr
+    Git.PathOtherChange -> Attrs.hintAttr
 
-verdictMarkAttr :: Char -> AttrName
+verdictMarkAttr :: Char -> Brick.AttrName
 verdictMarkAttr mark =
   case mark of
-    '!' -> flagMarkAttr
-    '?' -> questionMarkAttr
-    '\10003' -> doneMarkAttr
-    _ -> pendingMarkAttr
+    '!' -> Attrs.flagMarkAttr
+    '?' -> Attrs.questionMarkAttr
+    '\10003' -> Attrs.doneMarkAttr
+    _ -> Attrs.pendingMarkAttr
 
 -- Which characters of a row's own label the filter matched.
 --
@@ -114,37 +84,37 @@ verdictMarkAttr mark =
 -- of that query matches src/Remax alone, so asking the directory by
 -- itself finds nothing and lights nothing. Every row on the way down to
 -- a match now shows its share of it.
-rowMatchPositions :: Text -> TreeRow -> Set.Set Int
+rowMatchPositions :: T.Text -> Tree.TreeRow -> Set.Set Int
 rowMatchPositions query row
   | T.null query = Set.empty
   | otherwise =
       let
-        witness = T.pack (trWitness row)
-        label = T.dropWhileEnd (== '/') (trLabel row)
+        witness = T.pack (Tree.trWitness row)
+        label = T.dropWhileEnd (== '/') (Tree.trLabel row)
         -- the label is the tail of trPath, and trPath is a prefix of the
         -- witness, so this span is the same in both
-        offset = length (trPath row) - T.length label
+        offset = length (Tree.trPath row) - T.length label
         inLabel p = p >= offset && p < offset + T.length label
       in
-        case subseqPositions query witness of
+        case Fuzzy.subseqPositions query witness of
           Just ps -> Set.fromList (map (subtract offset) (filter inLabel ps))
           Nothing -> Set.empty
 
-treeRowWidget :: St -> Text -> Int -> Bool -> TreeRow -> Widget Name
+treeRowWidget :: Types.St -> T.Text -> Int -> Bool -> Tree.TreeRow -> BrickTypes.Widget Types.Name
 treeRowWidget st query rowWidth isSel row =
   let
     lead =
       if isSel
-        then withAttr floatSelBarAttr (txt "\9614")
-        else txt " "
+        then Brick.withAttr Attrs.floatSelBarAttr (Brick.txt "\9614")
+        else Brick.txt " "
     body =
-      case trKind row of
-        RowDir roll open -> treeDirRow query rowWidth row roll open
-        RowFile mStat hasHunks open -> treeFileRow st query rowWidth row mStat hasHunks open
-        RowHunk ix -> treeHunkRow st row ix
-    w = padRight Max (hBox [lead, txt " ", body])
+      case Tree.trKind row of
+        Tree.RowDir roll open -> treeDirRow query rowWidth row roll open
+        Tree.RowFile mStat hasHunks open -> treeFileRow st query rowWidth row mStat hasHunks open
+        Tree.RowHunk ix -> treeHunkRow st row ix
+    w = Brick.padRight Brick.Max (Brick.hBox [lead, Brick.txt " ", body])
   in
-    if isSel then withDefAttr floatSelAttr w else w
+    if isSel then Brick.withDefAttr Attrs.floatSelAttr w else w
 
 -- the prefix (indent and fold marker) is never part of the path, so
 -- it sits outside the highlighted span
@@ -152,210 +122,210 @@ treeRowWidget st query rowWidth isSel row =
 -- A row with nothing to say about git has no columns to line up
 -- with, so its name takes the whole row rather than being clipped at
 -- the width the decorated rows need.
-nameCellIn :: Text -> TreeRow -> Int -> AttrName -> Text -> Text -> Widget Name
+nameCellIn :: T.Text -> Tree.TreeRow -> Int -> Brick.AttrName -> T.Text -> T.Text -> BrickTypes.Widget Types.Name
 nameCellIn query row width attr prefix label =
   let
     room = max 1 (width - T.length prefix)
-    shown = clipT room label
+    shown = Widgets.clipT room label
   in
     treeCell
       width
-      ( hBox
-          [ withAttr attr (txt prefix)
-          , withAttr attr (highlightAt (rowMatchPositions query row) shown)
+      ( Brick.hBox
+          [ Brick.withAttr attr (Brick.txt prefix)
+          , Brick.withAttr attr (Fuzzy.highlightAt (rowMatchPositions query row) shown)
           ]
       )
 
-rowIndent :: TreeRow -> Text
-rowIndent row = T.replicate (trDepth row * 2) " "
+rowIndent :: Tree.TreeRow -> T.Text
+rowIndent row = T.replicate (Tree.trDepth row * 2) " "
 
-treeDirRow :: Text -> Int -> TreeRow -> Rollup -> Bool -> Widget Name
+treeDirRow :: T.Text -> Int -> Tree.TreeRow -> Tree.Rollup -> Bool -> BrickTypes.Widget Types.Name
 treeDirRow query rowWidth row roll open =
   let
     marker = if open then "\9662 " else "\9656 "
-    changed = ruChanged roll > 0
+    changed = Tree.ruChanged roll > 0
     cell = if changed then nameCellIn query row treeNameW else nameCellIn query row (max treeNameW rowWidth)
     tally =
-      [ treeCell treeStatW (txt " ")
-      , treeCellR treeNumW (withAttr addedMarkAttr (txt ("+" <> tshow (ruAdded roll))))
-      , treeCellR treeNumW (withAttr removedMarkAttr (txt ("\8722" <> tshow (ruRemoved roll))))
-      , txt "  "
+      [ treeCell treeStatW (Brick.txt " ")
+      , treeCellR treeNumW (Brick.withAttr Attrs.addedMarkAttr (Brick.txt ("+" <> Types.tshow (Tree.ruAdded roll))))
+      , treeCellR treeNumW (Brick.withAttr Attrs.removedMarkAttr (Brick.txt ("\8722" <> Types.tshow (Tree.ruRemoved roll))))
+      , Brick.txt "  "
       , treeCell
           treeMeterW
           ( if open
-              then txt " "
-              else withAttr hintAttr (txt (tshow (ruChanged roll) <> " chg"))
+              then Brick.txt " "
+              else Brick.withAttr Attrs.hintAttr (Brick.txt (Types.tshow (Tree.ruChanged roll) <> " chg"))
           )
       ]
   in
-    hBox (cell hintAttr (rowIndent row <> marker) (trLabel row <> "/") : (if changed then tally else []))
+    Brick.hBox (cell Attrs.hintAttr (rowIndent row <> marker) (Tree.trLabel row <> "/") : (if changed then tally else []))
 
-treeFileRow :: St -> Text -> Int -> TreeRow -> Maybe PathStat -> Bool -> Bool -> Widget Name
+treeFileRow :: Types.St -> T.Text -> Int -> Tree.TreeRow -> Maybe Git.PathStat -> Bool -> Bool -> BrickTypes.Widget Types.Name
 treeFileRow st query rowWidth row mStat hasHunks open =
   let
     marker
       | not hasHunks = "  "
       | open = "\9662 "
       | otherwise = "\9656 "
-    curPath = maybe "" fvPath (currentFileMay st)
-    nameAttr = if trPath row == curPath then trayFileCurAttr else trayFileAttr
-    letter = case fmap psChange mStat of
-      Just change -> withAttr (statusAttrFor change) (txt (pathChangeLetter change))
-      Nothing -> txt " "
+    curPath = maybe "" Types.fvPath (Types.currentFileMay st)
+    nameAttr = if Tree.trPath row == curPath then Attrs.trayFileCurAttr else Attrs.trayFileAttr
+    letter = case fmap Git.psChange mStat of
+      Just change -> Brick.withAttr (statusAttrFor change) (Brick.txt (Git.pathChangeLetter change))
+      Nothing -> Brick.txt " "
     -- untouched and not in the session: nothing to the right of
     -- the name, so the name gets the room
     bare = mStat == Nothing && not hasHunks
   in
     if bare
-      then nameCellIn query row (max treeNameW rowWidth) nameAttr (rowIndent row <> marker) (trLabel row)
+      then nameCellIn query row (max treeNameW rowWidth) nameAttr (rowIndent row <> marker) (Tree.trLabel row)
       else
-        hBox
-          ( [ nameCellIn query row treeNameW nameAttr (rowIndent row <> marker) (trLabel row)
+        Brick.hBox
+          ( [ nameCellIn query row treeNameW nameAttr (rowIndent row <> marker) (Tree.trLabel row)
             , treeCell treeStatW letter
             ]
               ++ countCells mStat
-              ++ [txt "  ", meterCell st (trPath row)]
+              ++ [Brick.txt "  ", meterCell st (Tree.trPath row)]
               ++ fromCell mStat
           )
 
-countCells :: Maybe PathStat -> [Widget Name]
+countCells :: Maybe Git.PathStat -> [BrickTypes.Widget Types.Name]
 countCells mStat =
-  case fmap psCounts mStat of
+  case fmap Git.psCounts mStat of
     Just (Just (a, r)) ->
-      [ treeCellR treeNumW (if a > 0 then withAttr addedMarkAttr (txt ("+" <> tshow a)) else txt " ")
-      , treeCellR treeNumW (if r > 0 then withAttr removedMarkAttr (txt ("\8722" <> tshow r)) else txt " ")
+      [ treeCellR treeNumW (if a > 0 then Brick.withAttr Attrs.addedMarkAttr (Brick.txt ("+" <> Types.tshow a)) else Brick.txt " ")
+      , treeCellR treeNumW (if r > 0 then Brick.withAttr Attrs.removedMarkAttr (Brick.txt ("\8722" <> Types.tshow r)) else Brick.txt " ")
       ]
     Just Nothing ->
-      case fmap psChange mStat of
-        Just PathUntracked -> [treeCell (treeNumW * 2) (txt " ")]
+      case fmap Git.psChange mStat of
+        Just Git.PathUntracked -> [treeCell (treeNumW * 2) (Brick.txt " ")]
         _ ->
-          [ treeCellR treeNumW (withAttr trayDeclAttr (txt "bin"))
-          , treeCell treeNumW (txt " ")
+          [ treeCellR treeNumW (Brick.withAttr Attrs.trayDeclAttr (Brick.txt "bin"))
+          , treeCell treeNumW (Brick.txt " ")
           ]
-    Nothing -> [treeCell (treeNumW * 2) (txt " ")]
+    Nothing -> [treeCell (treeNumW * 2) (Brick.txt " ")]
 
-meterCell :: St -> FilePath -> Widget Name
+meterCell :: Types.St -> FilePath -> BrickTypes.Widget Types.Name
 meterCell st path =
-  case find ((== path) . fvPath) (stFiles st) of
+  case List.find ((== path) . Types.fvPath) (Types.stFiles st) of
     Just fv
-      | not (null (fvRuns fv)) ->
+      | not (null (Types.fvRuns fv)) ->
           let
-            total = length (fvRuns fv)
-            done = length (filter (not . runPending (stVerdicts st)) (fvRuns fv))
+            total = length (Types.fvRuns fv)
+            done = length (filter (not . Verdict.runPending (Types.stVerdicts st)) (Types.fvRuns fv))
           in
-            treeCell treeMeterW (meterW done total)
-    _ -> treeCell treeMeterW (txt " ")
+            treeCell treeMeterW (Ink.meterW done total)
+    _ -> treeCell treeMeterW (Brick.txt " ")
 
-fromCell :: Maybe PathStat -> [Widget Name]
+fromCell :: Maybe Git.PathStat -> [BrickTypes.Widget Types.Name]
 fromCell mStat =
   let
-    renamedFrom from = withAttr hintAttr (txt (" \8592 " <> T.pack (takeFileName from)))
+    renamedFrom from = Brick.withAttr Attrs.hintAttr (Brick.txt (" \8592 " <> T.pack (FilePath.takeFileName from)))
   in
-    case fmap psChange mStat of
-      Just (PathRenamed from) -> [renamedFrom from]
-      Just (PathCopied from) -> [renamedFrom from]
+    case fmap Git.psChange mStat of
+      Just (Git.PathRenamed from) -> [renamedFrom from]
+      Just (Git.PathCopied from) -> [renamedFrom from]
       _ -> []
 
-treeHunkRow :: St -> TreeRow -> Int -> Widget Name
+treeHunkRow :: Types.St -> Tree.TreeRow -> Int -> BrickTypes.Widget Types.Name
 treeHunkRow st row ix =
-  case treeHunkInfo st (trPath row) ix of
-    Nothing -> txt " "
+  case TreeAction.treeHunkInfo st (Tree.trPath row) ix of
+    Nothing -> Brick.txt " "
     Just (mark, ln, decl, hasNote) ->
-      hBox
-        [ txt (rowIndent row <> "  ")
-        , withAttr (verdictMarkAttr mark) (str [mark])
-        , txt (" :" <> tshow ln)
-        , withAttr trayDeclAttr (txt decl)
-        , if hasNote then withAttr noteInlineAttr (txt " \8801") else txt ""
+      Brick.hBox
+        [ Brick.txt (rowIndent row <> "  ")
+        , Brick.withAttr (verdictMarkAttr mark) (Brick.str [mark])
+        , Brick.txt (" :" <> Types.tshow ln)
+        , Brick.withAttr Attrs.trayDeclAttr (Brick.txt decl)
+        , if hasNote then Brick.withAttr Attrs.noteInlineAttr (Brick.txt " \8801") else Brick.txt ""
         ]
 
-treeLayer :: St -> TreeView -> Widget Name
+treeLayer :: Types.St -> Types.TreeView -> BrickTypes.Widget Types.Name
 treeLayer st view =
-  Widget Greedy Greedy $ do
-    ctx <- getContext
+  BrickTypes.Widget BrickTypes.Greedy BrickTypes.Greedy $ do
+    ctx <- BrickTypes.getContext
     let
-      boxWidth = min 96 (max 60 (availWidth ctx - 16))
+      boxWidth = min 96 (max 60 (BrickTypes.availWidth ctx - 16))
       -- as tall as the tree needs and no taller: a folded tree should not
       -- open a full-height box of nothing
-      roomFor = max 6 (availHeight ctx - 14)
-      visible = treeVisible st view
+      roomFor = max 6 (BrickTypes.availHeight ctx - 14)
+      visible = TreeAction.treeVisible st view
       visibleCount = max 6 (min roomFor (length visible))
       -- what a row has to play with once the frame and the selection
       -- bar have taken theirs
       rowWidth = max treeNameW (boxWidth - 6)
       body = treeBodyRows st view visible visibleCount rowWidth
-      filler = replicate (visibleCount - length body) (txt " ")
-      title = if tvMode view == TreeFlat then "files" else "tree"
-    render $
-      floatFrame title (treeHint st view) $
-        hLimit boxWidth (vBox (treeInputRow st view visible : txt " " : (body ++ filler)))
+      filler = replicate (visibleCount - length body) (Brick.txt " ")
+      title = if Types.tvMode view == Types.TreeFlat then "files" else "tree"
+    BrickTypes.render $
+      Widgets.floatFrame title (treeHint st view) $
+        Brick.hLimit boxWidth (Brick.vBox (treeInputRow st view visible : Brick.txt " " : (body ++ filler)))
 
-treeBodyRows :: St -> TreeView -> [TreeRow] -> Int -> Int -> [Widget Name]
+treeBodyRows :: Types.St -> Types.TreeView -> [Tree.TreeRow] -> Int -> Int -> [BrickTypes.Widget Types.Name]
 treeBodyRows st view visible visibleCount rowWidth =
   let
-    query = tvInput view
-    sel = max 0 (min (length visible - 1) (tvSel view))
+    query = Types.tvInput view
+    sel = max 0 (min (length visible - 1) (Types.tvSel view))
     start =
       max 0 (min (sel - div visibleCount 2) (max 0 (length visible - visibleCount)))
     -- when the enclosing directory (or file, for a hunk) has scrolled
     -- off, pin it: otherwise a row loses all sense of whose it is
     shown = take visibleCount (drop start visible)
     sticky = do
-      top <- safeIdx shown 0
-      parent <- trParent top
-      find ((== parent) . trPath) (reverse (take start visible))
+      top <- Types.safeIdx shown 0
+      parent <- Tree.trParent top
+      List.find ((== parent) . Tree.trPath) (reverse (take start visible))
     row (i, r) = treeRowWidget st query rowWidth (i == sel) r
   in
     case sticky of
       Just parent ->
-        withDefAttr floatSelAttr (treeRowWidget st query rowWidth False parent)
+        Brick.withDefAttr Attrs.floatSelAttr (treeRowWidget st query rowWidth False parent)
           : map row (drop 1 (zip [start ..] shown))
       Nothing -> map row (zip [start ..] shown)
 
-treeInputRow :: St -> TreeView -> [TreeRow] -> Widget Name
+treeInputRow :: Types.St -> Types.TreeView -> [Tree.TreeRow] -> BrickTypes.Widget Types.Name
 treeInputRow st view visible =
   let
     -- the scope is worth saying outright: an empty-looking search is
     -- a different thing when the ignored files are in the haystack
-    scoped = case stFileScope st of
-      AllFiles -> " (all)"
-      VisibleFiles -> ""
+    scoped = case Types.stFileScope st of
+      Git.AllFiles -> " (all)"
+      Git.VisibleFiles -> ""
     counter =
-      ( if T.null (tvInput view)
-          then tshow (length (tvAll view)) <> " files"
+      ( if T.null (Types.tvInput view)
+          then Types.tshow (length (Types.tvAll view)) <> " files"
           else -- files that matched, not rows: the directories kept to
           -- hold them are structure, not results
-            tshow (treeFileCount visible) <> "/" <> tshow (length (tvAll view))
+            Types.tshow (TreeAction.treeFileCount visible) <> "/" <> Types.tshow (length (Types.tvAll view))
       )
         <> scoped
   in
-    case tvOp view of
-      Just (OpNaming action typed) ->
-        hBox
-          [ withAttr hintAttr (txt (" " <> namingLabel action <> " "))
-          , withAttr statusAttr (txt (typed <> "\9612"))
+    case Types.tvOp view of
+      Just (Types.OpNaming action typed) ->
+        Brick.hBox
+          [ Brick.withAttr Attrs.hintAttr (Brick.txt (" " <> FileAction.namingLabel action <> " "))
+          , Brick.withAttr Attrs.statusAttr (Brick.txt (typed <> "\9612"))
           ]
-      Just (OpConfirming path) ->
-        withAttr statusAttr (txt (" delete " <> T.pack path <> " ?"))
+      Just (Types.OpConfirming path) ->
+        Brick.withAttr Attrs.statusAttr (Brick.txt (" delete " <> T.pack path <> " ?"))
       _ ->
-        hBox
-          [ withAttr statusAttr (txt (" " <> tvInput view <> "\9612"))
-          , padLeft Max (withAttr hintAttr (txt (counter <> " ")))
+        Brick.hBox
+          [ Brick.withAttr Attrs.statusAttr (Brick.txt (" " <> Types.tvInput view <> "\9612"))
+          , Brick.padLeft Brick.Max (Brick.withAttr Attrs.hintAttr (Brick.txt (counter <> " ")))
           ]
 
-treeHint :: St -> TreeView -> Text
+treeHint :: Types.St -> Types.TreeView -> T.Text
 treeHint st view =
   let
-    flat = tvMode view == TreeFlat
+    flat = Types.tvMode view == Types.TreeFlat
     folding = if flat then "" else "\8594\8592 fold \183 "
     other = if flat then "tree" else "flat"
-    showing = case stFileScope st of
-      AllFiles -> "^a hide ignored \183 "
-      VisibleFiles -> "^a all \183 "
+    showing = case Types.stFileScope st of
+      Git.AllFiles -> "^a hide ignored \183 "
+      Git.VisibleFiles -> "^a all \183 "
   in
-    case tvOp view of
-      Just (OpNaming _ _) -> "\9166 does it \183 esc cancels"
-      Just (OpConfirming _) -> "y deletes it \183 any other key cancels"
+    case Types.tvOp view of
+      Just (Types.OpNaming _ _) -> "\9166 does it \183 esc cancels"
+      Just (Types.OpConfirming _) -> "y deletes it \183 any other key cancels"
       _ ->
         "\8593\8595 move \183 "
           <> folding

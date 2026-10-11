@@ -49,18 +49,13 @@ module Remax.UI.Core.Attrs
   , mkAttrMap
   ) where
 
-import Brick
-  ( AttrMap
-  , AttrName
-  , attrMap
-  , attrName
-  )
-import Brick.Util (fg)
-import qualified Brick.Widgets.Border as B
-import Data.Text (Text)
-import qualified Graphics.Vty as V
-import Remax.Highlight
-import Remax.Theme
+import Brick qualified as Brick
+import Brick.Util qualified as BrickUtil
+import Brick.Widgets.Border qualified as Border
+import Data.Text qualified as T
+import Graphics.Vty qualified as V
+import Remax.Highlight qualified as Highlight
+import Remax.Theme qualified as Theme
 
 headerAttr
   , headerFileAttr
@@ -108,53 +103,53 @@ headerAttr
   , meterOnAttr
   , meterOffAttr
   , hairAttr ::
-    AttrName
-headerAttr = attrName "header"
-headerFileAttr = headerAttr <> attrName "file"
-headerOkAttr = headerAttr <> attrName "ok"
-headerRebaseAttr = headerAttr <> attrName "rebase"
-trayDeclAttr = attrName "trayDecl"
-headerCountAttr = headerAttr <> attrName "count"
-rebaseShaAttr = attrName "rebaseSha"
-conflictAttr = attrName "conflict"
-watchPollAttr = attrName "watchPoll"
-modeDotNorAttr = attrName "modeDotNor"
-modeDotInsAttr = attrName "modeDotIns"
-noteInlineAttr = attrName "noteInline"
-replyInlineAttr = attrName "replyInline"
-floatAttr = attrName "float"
-floatSelAttr = floatAttr <> attrName "sel"
-floatSelBarAttr = floatAttr <> attrName "selBar"
-floatTitleAttr = floatAttr <> attrName "title"
-matchCharAttr = attrName "matchChar"
-meterOnAttr = attrName "meterOn"
-meterOffAttr = attrName "meterOff"
-hairAttr = attrName "hairline"
-cursorMarkAttr = attrName "cursorMark"
-addedMarkAttr = attrName "addedMark"
-removedMarkAttr = attrName "removedMark"
-ctxMarkAttr = attrName "ctxMark"
-removedTextAttr = attrName "removedText"
-watchingAttr = attrName "watching"
-wordChangeAttr = attrName "wordChange"
-selAttr = attrName "selection"
-dimAttr = attrName "dim"
-curRunAttr = attrName "currentRun"
-norAttr = attrName "modeNor"
-insAttr = attrName "modeIns"
-msgAttr = attrName "message"
-hintAttr = attrName "hint"
-statusAttr = attrName "statusBar"
-borderAttr = attrName "paneBorder"
-lineNrAttr = attrName "lineNr"
-lineNrCurAttr = lineNrAttr <> attrName "current"
-lineNrDoneAttr = lineNrAttr <> attrName "reviewed"
-trayFileAttr = attrName "trayFile"
-trayFileCurAttr = trayFileAttr <> attrName "current"
-flagMarkAttr = attrName "flagMark"
-questionMarkAttr = attrName "questionMark"
-doneMarkAttr = attrName "doneMark"
-pendingMarkAttr = attrName "pendingMark"
+    Brick.AttrName
+headerAttr = Brick.attrName "header"
+headerFileAttr = headerAttr <> Brick.attrName "file"
+headerOkAttr = headerAttr <> Brick.attrName "ok"
+headerRebaseAttr = headerAttr <> Brick.attrName "rebase"
+trayDeclAttr = Brick.attrName "trayDecl"
+headerCountAttr = headerAttr <> Brick.attrName "count"
+rebaseShaAttr = Brick.attrName "rebaseSha"
+conflictAttr = Brick.attrName "conflict"
+watchPollAttr = Brick.attrName "watchPoll"
+modeDotNorAttr = Brick.attrName "modeDotNor"
+modeDotInsAttr = Brick.attrName "modeDotIns"
+noteInlineAttr = Brick.attrName "noteInline"
+replyInlineAttr = Brick.attrName "replyInline"
+floatAttr = Brick.attrName "float"
+floatSelAttr = floatAttr <> Brick.attrName "sel"
+floatSelBarAttr = floatAttr <> Brick.attrName "selBar"
+floatTitleAttr = floatAttr <> Brick.attrName "title"
+matchCharAttr = Brick.attrName "matchChar"
+meterOnAttr = Brick.attrName "meterOn"
+meterOffAttr = Brick.attrName "meterOff"
+hairAttr = Brick.attrName "hairline"
+cursorMarkAttr = Brick.attrName "cursorMark"
+addedMarkAttr = Brick.attrName "addedMark"
+removedMarkAttr = Brick.attrName "removedMark"
+ctxMarkAttr = Brick.attrName "ctxMark"
+removedTextAttr = Brick.attrName "removedText"
+watchingAttr = Brick.attrName "watching"
+wordChangeAttr = Brick.attrName "wordChange"
+selAttr = Brick.attrName "selection"
+dimAttr = Brick.attrName "dim"
+curRunAttr = Brick.attrName "currentRun"
+norAttr = Brick.attrName "modeNor"
+insAttr = Brick.attrName "modeIns"
+msgAttr = Brick.attrName "message"
+hintAttr = Brick.attrName "hint"
+statusAttr = Brick.attrName "statusBar"
+borderAttr = Brick.attrName "paneBorder"
+lineNrAttr = Brick.attrName "lineNr"
+lineNrCurAttr = lineNrAttr <> Brick.attrName "current"
+lineNrDoneAttr = lineNrAttr <> Brick.attrName "reviewed"
+trayFileAttr = Brick.attrName "trayFile"
+trayFileCurAttr = trayFileAttr <> Brick.attrName "current"
+flagMarkAttr = Brick.attrName "flagMark"
+questionMarkAttr = Brick.attrName "questionMark"
+doneMarkAttr = Brick.attrName "doneMark"
+pendingMarkAttr = Brick.attrName "pendingMark"
 
 -- Nudge a colour up a little, for surfaces that should read as the same
 -- material under slightly more light. Only truecolor values can be
@@ -178,7 +173,7 @@ fgOnly a = a {V.attrBackColor = V.Default}
 -- built-in fallback colors so non-helix users get a sane palette, and
 -- theme users additionally get every deeper scope their theme resolves
 -- (brick's attribute hierarchy falls back through the dots on its own).
-tsTopScopes :: [(Text, V.Color)]
+tsTopScopes :: [(T.Text, V.Color)]
 tsTopScopes =
   [ ("keyword", V.magenta)
   , ("function", V.blue)
@@ -195,7 +190,7 @@ tsTopScopes =
   , ("tag", V.cyan)
   ]
 
-tsDeepScopes :: [Text]
+tsDeepScopes :: [T.Text]
 tsDeepScopes =
   [ "keyword.control"
   , "keyword.control.import"
@@ -234,21 +229,21 @@ tsDeepScopes =
   , "markup.raw"
   ]
 
-mkAttrMap :: Maybe HelixTheme -> AttrMap
+mkAttrMap :: Maybe Theme.HelixTheme -> Brick.AttrMap
 mkAttrMap mth =
   let
-    topPair (s, c) = (tsScopeAttr s, scopeAttr mth s (fg c))
+    topPair (s, c) = (Highlight.tsScopeAttr s, Theme.scopeAttr mth s (BrickUtil.fg c))
     deepPairs = case mth of
       Nothing -> []
       Just th ->
         map
-          (\s -> (tsScopeAttr s, scopeAttr mth s V.defAttr))
-          (filter (hasScope th) tsDeepScopes)
+          (\s -> (Highlight.tsScopeAttr s, Theme.scopeAttr mth s V.defAttr))
+          (filter (Theme.hasScope th) tsDeepScopes)
     tsPairs = map topPair tsTopScopes ++ deepPairs
-    bgA = scopeAttr mth "ui.background" V.defAttr
+    bgA = Theme.scopeAttr mth "ui.background" V.defAttr
     baseAttr =
       let
-        fgA = scopeAttr mth "ui.text" V.defAttr
+        fgA = Theme.scopeAttr mth "ui.text" V.defAttr
       in
         V.defAttr
           { V.attrForeColor = V.attrForeColor fgA
@@ -265,61 +260,61 @@ mkAttrMap mth =
       _ -> V.SetTo surfFloat
     onFloat a = a {V.attrBackColor = floatBack}
     selection =
-      scopeAttr mth "ui.selection.primary" (V.defAttr `V.withStyle` V.reverseVideo)
+      Theme.scopeAttr mth "ui.selection.primary" (V.defAttr `V.withStyle` V.reverseVideo)
     uiPairs =
-      [ (headerAttr, fg inkDim)
-      , (headerRebaseAttr, fg inkText)
-      , (headerCountAttr, fg inkText)
-      , (rebaseShaAttr, fg inkMidBlue)
-      , (conflictAttr, fg inkRose `V.withStyle` V.bold)
-      , (watchPollAttr, fg inkGold)
-      , (trayDeclAttr, fg inkMidBlue)
-      , (headerFileAttr, fg inkFileGold)
-      , (headerOkAttr, fg inkGreen)
+      [ (headerAttr, BrickUtil.fg inkDim)
+      , (headerRebaseAttr, BrickUtil.fg inkText)
+      , (headerCountAttr, BrickUtil.fg inkText)
+      , (rebaseShaAttr, BrickUtil.fg inkMidBlue)
+      , (conflictAttr, BrickUtil.fg inkRose `V.withStyle` V.bold)
+      , (watchPollAttr, BrickUtil.fg inkGold)
+      , (trayDeclAttr, BrickUtil.fg inkMidBlue)
+      , (headerFileAttr, BrickUtil.fg inkFileGold)
+      , (headerOkAttr, BrickUtil.fg inkGreen)
       , (cursorMarkAttr, V.defAttr `V.withBackColor` cursorWash)
-      , (addedMarkAttr, fg inkGreen)
-      , (removedMarkAttr, fg inkRose)
-      , (ctxMarkAttr, fg inkFaint)
-      , (removedTextAttr, fg inkRose)
-      , (watchingAttr, fg inkGreen)
+      , (addedMarkAttr, BrickUtil.fg inkGreen)
+      , (removedMarkAttr, BrickUtil.fg inkRose)
+      , (ctxMarkAttr, BrickUtil.fg inkFaint)
+      , (removedTextAttr, BrickUtil.fg inkRose)
+      , (watchingAttr, BrickUtil.fg inkGreen)
       , -- only a background, so the syntax colour underneath survives
         (wordChangeAttr, V.defAttr `V.withBackColor` wordWash)
       , (selAttr, selection)
-      , (dimAttr, fg inkDim)
-      , (curRunAttr, fg inkMidBlue)
-      , (norAttr, fg inkText)
-      , (insAttr, fg inkText)
-      , (modeDotNorAttr, fg inkLavender)
-      , (modeDotInsAttr, fg inkGreen)
-      , (msgAttr, fg inkText)
-      , (hintAttr, fg inkFaint)
-      , (statusAttr, fg inkText)
-      , (lineNrAttr, scopeAttr mth "ui.linenr" (fg V.brightBlack))
-      , (lineNrCurAttr, scopeAttr mth "ui.linenr.selected" (fg V.yellow))
-      , (lineNrDoneAttr, scopeAttr mth "ui.linenr" (fg V.brightBlack) `V.withStyle` V.dim)
-      , (borderAttr, fgOnly (scopeAttr mth "ui.linenr" (fg V.brightBlack)))
-      , (trayFileAttr, fg trayFileInk `V.withStyle` V.bold)
-      , (trayFileCurAttr, fg inkFileGold `V.withStyle` V.bold)
-      , (flagMarkAttr, fg inkFlag)
-      , (questionMarkAttr, fg inkGold)
-      , (doneMarkAttr, fg inkGreen)
-      , (pendingMarkAttr, fg inkBlue)
-      , (noteInlineAttr, fg inkLavender)
-      , (replyInlineAttr, fg inkMidBlue)
+      , (dimAttr, BrickUtil.fg inkDim)
+      , (curRunAttr, BrickUtil.fg inkMidBlue)
+      , (norAttr, BrickUtil.fg inkText)
+      , (insAttr, BrickUtil.fg inkText)
+      , (modeDotNorAttr, BrickUtil.fg inkLavender)
+      , (modeDotInsAttr, BrickUtil.fg inkGreen)
+      , (msgAttr, BrickUtil.fg inkText)
+      , (hintAttr, BrickUtil.fg inkFaint)
+      , (statusAttr, BrickUtil.fg inkText)
+      , (lineNrAttr, Theme.scopeAttr mth "ui.linenr" (BrickUtil.fg V.brightBlack))
+      , (lineNrCurAttr, Theme.scopeAttr mth "ui.linenr.selected" (BrickUtil.fg V.yellow))
+      , (lineNrDoneAttr, Theme.scopeAttr mth "ui.linenr" (BrickUtil.fg V.brightBlack) `V.withStyle` V.dim)
+      , (borderAttr, fgOnly (Theme.scopeAttr mth "ui.linenr" (BrickUtil.fg V.brightBlack)))
+      , (trayFileAttr, BrickUtil.fg trayFileInk `V.withStyle` V.bold)
+      , (trayFileCurAttr, BrickUtil.fg inkFileGold `V.withStyle` V.bold)
+      , (flagMarkAttr, BrickUtil.fg inkFlag)
+      , (questionMarkAttr, BrickUtil.fg inkGold)
+      , (doneMarkAttr, BrickUtil.fg inkGreen)
+      , (pendingMarkAttr, BrickUtil.fg inkBlue)
+      , (noteInlineAttr, BrickUtil.fg inkLavender)
+      , (replyInlineAttr, BrickUtil.fg inkMidBlue)
       , (floatAttr, onFloat V.defAttr)
       , (floatSelAttr, V.defAttr `V.withBackColor` surfSel)
-      , (floatSelBarAttr, fg inkLavender `V.withBackColor` surfSel)
-      , (floatTitleAttr, onFloat (fg inkLavender))
+      , (floatSelBarAttr, BrickUtil.fg inkLavender `V.withBackColor` surfSel)
+      , (floatTitleAttr, onFloat (BrickUtil.fg inkLavender))
       , -- every popup is framed in the same lavender as its title; floatFrame
         -- is the only bordered widget, so this reaches exactly the popups
-        (B.borderAttr, onFloat (fg inkLavender))
-      , (matchCharAttr, fg matchGold)
-      , (meterOnAttr, fg inkGreen)
-      , (meterOffAttr, fg meterRail)
-      , (hairAttr, fg hairInk)
+        (Border.borderAttr, onFloat (BrickUtil.fg inkLavender))
+      , (matchCharAttr, BrickUtil.fg matchGold)
+      , (meterOnAttr, BrickUtil.fg inkGreen)
+      , (meterOffAttr, BrickUtil.fg meterRail)
+      , (hairAttr, BrickUtil.fg hairInk)
       ]
   in
-    attrMap baseAttr (tsPairs ++ uiPairs)
+    Brick.attrMap baseAttr (tsPairs ++ uiPairs)
 
 -- The Quiet Ink · Tinted palette: jellybeans-adjacent literals, chosen
 -- in the temperaments mockups. linearColor keeps true 24-bit values;

@@ -9,61 +9,36 @@ module Remax.UI.Events
   , handleEvent
   ) where
 
-import Brick
-  ( BrickEvent (..)
-  , EventM
-  , Viewport (..)
-  , ViewportScroll (..)
-  , halt
-  , lookupViewport
-  , viewportScroll
-  )
-import Control.Monad
-  ( forM_
-  , unless
-  , when
-  )
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.State
-  ( get
-  , modify
-  )
-import Data.List
-  ( delete
-  , find
-  )
-import qualified Data.Text as T
-import qualified Graphics.Vty as V
-import Remax.Clipboard
-import Remax.Config
-import Remax.Emacs (handleEmacs)
-import Remax.Modal
-import Remax.Store
-import Remax.UI.Action.Command
-import Remax.UI.Action.Editor
-import Remax.UI.Action.Menus
-import Remax.UI.Action.Notes
-import Remax.UI.Action.Open
-import Remax.UI.Action.Picker
-import Remax.UI.Action.Search
-import Remax.UI.Action.Tree
-import Remax.UI.Action.TreeKeys
-import Remax.UI.Action.Verdicts
-import Remax.UI.Core.Types
-import Remax.UI.Core.Verdict
-import Remax.UI.Core.View
-import Remax.UI.Model.Load
-import Remax.UI.Model.Nav
-import Remax.Vi
-  ( ViResult (..)
-  , handleVi
-  , viBusy
-  )
-import System.FilePath
-  ( isAbsolute
-  , makeRelative
-  , (</>)
-  )
+import Brick qualified as Brick
+import Control.Monad qualified as Monad
+import Control.Monad.IO.Class qualified as MonadIO
+import Control.Monad.State qualified as State
+import Data.List qualified as List
+import Data.Text qualified as T
+import Graphics.Vty qualified as V
+import Remax.Clipboard qualified as Clipboard
+import Remax.Config qualified as Config
+import Remax.Emacs qualified as Emacs
+import Remax.Modal qualified as Modal
+import Remax.Store qualified as Store
+import Remax.UI.Action.Command qualified as Command
+import Remax.UI.Action.Editor qualified as Editor
+import Remax.UI.Action.Menus qualified as Menus
+import Remax.UI.Action.Notes qualified as NoteAction
+import Remax.UI.Action.Open qualified as Open
+import Remax.UI.Action.Picker qualified as PickerAction
+import Remax.UI.Action.Search qualified as Search
+import Remax.UI.Action.Tree qualified as TreeAction
+import Remax.UI.Action.TreeKeys qualified as TreeKeys
+import Remax.UI.Action.Verdicts qualified as VerdictAction
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Verdict qualified as Verdict
+import Remax.UI.Core.View qualified as View
+import Remax.UI.Model.Load qualified as Load
+import Remax.UI.Model.Nav qualified as Nav
+import Remax.Vi qualified as Vi
+import System.FilePath ((</>))
+import System.FilePath qualified as FilePath
 
 -- Tell the store whether a note is being written into this repository.
 --
@@ -77,20 +52,20 @@ import System.FilePath
 -- Driven off the state after every event rather than from the places a
 -- popup opens and closes, so a path that dismisses one some other way
 -- cannot leave the marker standing. Only transitions are written.
-syncComposing :: EventM Name St ()
+syncComposing :: Brick.EventM Types.Name Types.St ()
 syncComposing = do
-  st <- get
+  st <- State.get
   let
-    writing = case stNotePopup st of
+    writing = case Types.stNotePopup st of
       Just np
-        | NoteFor _ _ <- npPurpose np -> Just (repoText st)
+        | Types.NoteFor _ _ <- Types.npPurpose np -> Just (Types.repoText st)
       _ -> Nothing
-  unless (writing == stComposing st) $ do
+  Monad.unless (writing == Types.stComposing st) $ do
     -- cleared where it was set before being set anywhere else, so
     -- switching repositories cannot strand it on the old one
-    forM_ (stComposing st) (\was -> liftIO (setComposing (stConn st) was False))
-    forM_ writing (\now -> liftIO (setComposing (stConn st) now True))
-    modify (\s -> s {stComposing = writing})
+    Monad.forM_ (Types.stComposing st) (\was -> MonadIO.liftIO (Store.setComposing (Types.stConn st) was False))
+    Monad.forM_ writing (\now -> MonadIO.liftIO (Store.setComposing (Types.stConn st) now True))
+    State.modify (\s -> s {Types.stComposing = writing})
 
 -- Keep whichever selector is on screen, so ␣' can bring it back.
 --
@@ -101,27 +76,27 @@ syncComposing = do
 -- comes back, and the last event that had one open is the state it was
 -- left in: Escape and Enter both close without disturbing the query or
 -- the row, so what is remembered is what was on screen.
-rememberSelector :: EventM Name St ()
+rememberSelector :: Brick.EventM Types.Name Types.St ()
 rememberSelector = do
-  st <- get
+  st <- State.get
   let
-    onScreen = case (stTree st, stPicker st) of
-      (Just tv, _) -> Just (LastTree tv)
-      (_, Just pk) -> Just (LastPicker pk)
+    onScreen = case (Types.stTree st, Types.stPicker st) of
+      (Just tv, _) -> Just (Types.LastTree tv)
+      (_, Just pk) -> Just (Types.LastPicker pk)
       _ -> Nothing
-  forM_ onScreen (\sel -> modify (\s -> s {stLastSelector = Just sel}))
+  Monad.forM_ onScreen (\sel -> State.modify (\s -> s {Types.stLastSelector = Just sel}))
 
 -- Note where the tray is sitting, so the next frame knows which of its
 -- rows can be seen. Read after the event rather than during the draw
 -- because that is where brick will tell us; it is therefore one frame
 -- behind, which the margin in tray covers.
-noteTrayView :: EventM Name St ()
+noteTrayView :: Brick.EventM Types.Name Types.St ()
 noteTrayView = do
-  mvp <- lookupViewport TrayVP
-  forM_ mvp $ \vp -> do
+  mvp <- Brick.lookupViewport Types.TrayVP
+  Monad.forM_ mvp $ \vp -> do
     let
-      seen = (_vpTop vp, snd (_vpSize vp))
-    modify (\s -> s {stTraySeen = seen})
+      seen = (Brick._vpTop vp, snd (Brick._vpSize vp))
+    State.modify (\s -> s {Types.stTraySeen = seen})
 
 -- Write the window's origin back after an event, and move the viewport
 -- by the same amount so nothing jumps.
@@ -135,85 +110,85 @@ noteTrayView = do
 -- Deliberate jumps (a hunk, a reload) set the origin themselves before
 -- placing the viewport, so by the time this runs there is nothing left
 -- to reconcile and it does nothing.
-reanchorBody :: EventM Name St ()
+reanchorBody :: Brick.EventM Types.Name Types.St ()
 reanchorBody = do
-  st <- get
-  case currentFileMay st of
+  st <- State.get
+  case Types.currentFileMay st of
     Nothing -> pure ()
     Just fv -> do
-      screenRows <- terminalRows
+      screenRows <- View.terminalRows
       let
-        (_, origin) = bodyWindow screenRows st fv
-        moved = origin - fvOrigin fv
-      unless (moved == 0) $ do
-        modify (updateFile (stCurF st) (\f -> f {fvOrigin = origin}))
-        mvp <- lookupViewport BodyVP
+        (_, origin) = View.bodyWindow screenRows st fv
+        moved = origin - Types.fvOrigin fv
+      Monad.unless (moved == 0) $ do
+        State.modify (Verdict.updateFile (Types.stCurF st) (\f -> f {Types.fvOrigin = origin}))
+        mvp <- Brick.lookupViewport Types.BodyVP
         case mvp of
-          Just vp -> setTop (viewportScroll BodyVP) (max 0 (_vpTop vp - moved))
+          Just vp -> Brick.setTop (Brick.viewportScroll Types.BodyVP) (max 0 (Brick._vpTop vp - moved))
           Nothing -> pure ()
 
-handleEvent :: BrickEvent Name REvent -> EventM Name St ()
+handleEvent :: Brick.BrickEvent Types.Name Types.REvent -> Brick.EventM Types.Name Types.St ()
 handleEvent brickEvent =
   case brickEvent of
-    AppEvent (FileChangedOnDisk absolute) -> do
-      st <- get
+    Brick.AppEvent (Types.FileChangedOnDisk absolute) -> do
+      st <- State.get
       -- relativize here, against whichever repository is current now
       let
-        rel = makeRelative (stRoot st) absolute
-      unless (isAbsolute rel) (reloadFromDisk rel)
-    AppEvent GitStateChanged -> refreshGit
-    AppEvent StoreChanged -> do
-      st <- get
-      threads <- liftIO (loadThreads (stConn st) (repoText st))
-      groups <- liftIO (loadNoteGroups (stConn st) (repoText st))
-      modify (\s -> s {stThreads = threads, stNoteGroups = groups})
-    AppEvent (Attending seen) -> do
-      modify (\s -> s {stAttending = seen, stThrob = stThrob s + 1})
-      pollCurrentFile
-    AppEvent Tick -> scrollHunkIntoView
-    AppEvent Pulse -> modify (\s -> s {stThrob = stThrob s + 1})
-    AppEvent (JobDone label finish) -> do
-      modify (\s -> s {stBusy = delete label (stBusy s)})
+        rel = FilePath.makeRelative (Types.stRoot st) absolute
+      Monad.unless (FilePath.isAbsolute rel) (Load.reloadFromDisk rel)
+    Brick.AppEvent Types.GitStateChanged -> Load.refreshGit
+    Brick.AppEvent Types.StoreChanged -> do
+      st <- State.get
+      threads <- MonadIO.liftIO (Store.loadThreads (Types.stConn st) (Types.repoText st))
+      groups <- MonadIO.liftIO (Store.loadNoteGroups (Types.stConn st) (Types.repoText st))
+      State.modify (\s -> s {Types.stThreads = threads, Types.stNoteGroups = groups})
+    Brick.AppEvent (Types.Attending seen) -> do
+      State.modify (\s -> s {Types.stAttending = seen, Types.stThrob = Types.stThrob s + 1})
+      Load.pollCurrentFile
+    Brick.AppEvent Types.Tick -> Nav.scrollHunkIntoView
+    Brick.AppEvent Types.Pulse -> State.modify (\s -> s {Types.stThrob = Types.stThrob s + 1})
+    Brick.AppEvent (Types.JobDone label finish) -> do
+      State.modify (\s -> s {Types.stBusy = List.delete label (Types.stBusy s)})
       finish
-    VtyEvent ev -> do
-      st <- get
+    Brick.VtyEvent ev -> do
+      st <- State.get
       -- messages are transient: any keystroke clears the old one, and a
       -- handler that has something new to say sets it afresh
-      modify (\s -> s {stMsg = ""})
-      case (stNotePopup st, stPicker st, stPrompt st) of
+      State.modify (\s -> s {Types.stMsg = ""})
+      case (Types.stNotePopup st, Types.stPicker st, Types.stPrompt st) of
         _
-          | stHelp st -> modify (\s -> s {stHelp = False})
+          | Types.stHelp st -> State.modify (\s -> s {Types.stHelp = False})
         _
-          | stInfoPopup st /= Nothing ->
-              modify (\s -> s {stInfoPopup = Nothing})
-        (Just np, _, _) -> handleNotePopupKey ev np
+          | Types.stInfoPopup st /= Nothing ->
+              State.modify (\s -> s {Types.stInfoPopup = Nothing})
+        (Just np, _, _) -> NoteAction.handleNotePopupKey ev np
         _
-          | Just tv <- stTree st -> handleTreeKey ev tv
-        (_, Just pk, _) -> handlePickerKey ev pk
+          | Just tv <- Types.stTree st -> TreeKeys.handleTreeKey ev tv
+        (_, Just pk, _) -> PickerAction.handlePickerKey ev pk
         (_, _, Just p) -> handlePromptKey ev p
         _ ->
-          if stSpace st
+          if Types.stSpace st
             then handleSpaceKey ev
-            else case stEmacsPrefix st of
+            else case Types.stEmacsPrefix st of
               Just pfx -> do
-                modify (\s -> s {stEmacsPrefix = Nothing})
-                if null (stFiles st)
+                State.modify (\s -> s {Types.stEmacsPrefix = Nothing})
+                if null (Types.stFiles st)
                   then handleIdlePrefixed pfx ev
                   else handleEmacsPrefixed pfx ev
               Nothing
-                | stIdleGo st -> do
-                    modify (\s -> s {stIdleGo = False})
+                | Types.stIdleGo st -> do
+                    State.modify (\s -> s {Types.stIdleGo = False})
                     handleIdleGo ev
-                | null (stFiles st) -> handleIdleKey ev
+                | null (Types.stFiles st) -> handleIdleKey ev
                 | otherwise -> handleModalKey ev
     _ -> pure ()
 
 -- The helix-style space menu: Space, then one key; anything unlisted
 -- just cancels. Dispatch reads spaceMenuEntries, which is also what the
 -- infobox renders, so the menu and the bindings cannot disagree.
-handleSpaceKey :: V.Event -> EventM Name St ()
+handleSpaceKey :: V.Event -> Brick.EventM Types.Name Types.St ()
 handleSpaceKey ev = do
-  modify (\s -> s {stSpace = False})
+  State.modify (\s -> s {Types.stSpace = False})
   let
     -- the table is keyed by what the menu prints, so Enter has to become
     -- its own glyph to find its row
@@ -224,226 +199,226 @@ handleSpaceKey ev = do
   case typed of
     Nothing -> pure ()
     Just key ->
-      case find (\(k, _, _) -> k == key) spaceMenuEntries of
+      case List.find (\(k, _, _) -> k == key) Menus.spaceMenuEntries of
         Just (_, _, action) -> action
         Nothing -> pure ()
 
 -- With nothing on screen the only meaningful keys are quitting and the
 -- command line (to switch what the session is looking at).
-handleIdleKey :: V.Event -> EventM Name St ()
+handleIdleKey :: V.Event -> Brick.EventM Types.Name Types.St ()
 handleIdleKey ev =
   case ev of
-    V.EvKey (V.KChar ':') [] -> openCmdPrompt
-    V.EvKey (V.KChar 'p') [V.MCtrl] -> openFileFinder
-    V.EvKey (V.KChar 'g') [] -> modify (\s -> s {stIdleGo = True})
-    V.EvKey (V.KChar ' ') [] -> modify (\s -> s {stSpace = True})
-    V.EvKey (V.KChar 'x') [V.MMeta] -> openCmdPrompt
+    V.EvKey (V.KChar ':') [] -> Command.openCmdPrompt
+    V.EvKey (V.KChar 'p') [V.MCtrl] -> TreeAction.openFileFinder
+    V.EvKey (V.KChar 'g') [] -> State.modify (\s -> s {Types.stIdleGo = True})
+    V.EvKey (V.KChar ' ') [] -> State.modify (\s -> s {Types.stSpace = True})
+    V.EvKey (V.KChar 'x') [V.MMeta] -> Command.openCmdPrompt
     V.EvKey (V.KChar 'x') [V.MCtrl] ->
-      modify (\s -> s {stEmacsPrefix = Just 'x'})
+      State.modify (\s -> s {Types.stEmacsPrefix = Just 'x'})
     _ -> pure ()
 
 -- The g menu with nothing on screen. Only gr means anything here: there
 -- is no file to move around in, and switching repository is most of what
 -- an empty session is for — a story's first checkout being clean is
 -- exactly when the next one is wanted.
-handleIdleGo :: V.Event -> EventM Name St ()
+handleIdleGo :: V.Event -> Brick.EventM Types.Name Types.St ()
 handleIdleGo ev =
   case ev of
-    V.EvKey (V.KChar 'r') [] -> openRepoPicker
+    V.EvKey (V.KChar 'r') [] -> PickerAction.openRepoPicker
     _ -> pure ()
 
 -- With no files on screen, only the session chords mean anything.
-handleIdlePrefixed :: Char -> V.Event -> EventM Name St ()
+handleIdlePrefixed :: Char -> V.Event -> Brick.EventM Types.Name Types.St ()
 handleIdlePrefixed pfx ev =
   case (pfx, ev) of
-    ('x', V.EvKey (V.KChar 'c') [V.MCtrl]) -> halt
+    ('x', V.EvKey (V.KChar 'c') [V.MCtrl]) -> Brick.halt
     _ -> pure ()
 
-handlePromptKey :: V.Event -> Prompt -> EventM Name St ()
+handlePromptKey :: V.Event -> Types.Prompt -> Brick.EventM Types.Name Types.St ()
 handlePromptKey ev prompt =
   let
     input = case prompt of
-      SearchPrompt t -> t
-      CmdPrompt t -> t
+      Types.SearchPrompt t -> t
+      Types.CmdPrompt t -> t
     rewrap t = case prompt of
-      SearchPrompt _ -> SearchPrompt t
-      CmdPrompt _ -> CmdPrompt t
+      Types.SearchPrompt _ -> Types.SearchPrompt t
+      Types.CmdPrompt _ -> Types.CmdPrompt t
     isCmd = case prompt of
-      CmdPrompt _ -> True
-      SearchPrompt _ -> False
+      Types.CmdPrompt _ -> True
+      Types.SearchPrompt _ -> False
   in
     case ev of
       V.EvKey V.KEsc [] ->
-        modify (\s -> s {stPrompt = Nothing, stPromptCycle = Nothing})
+        State.modify (\s -> s {Types.stPrompt = Nothing, Types.stPromptCycle = Nothing})
       V.EvKey V.KEnter [] -> do
-        modify (\s -> s {stPrompt = Nothing, stPromptCycle = Nothing})
+        State.modify (\s -> s {Types.stPrompt = Nothing, Types.stPromptCycle = Nothing})
         case prompt of
-          SearchPrompt t -> do
-            modify (\s -> s {stLastSearch = t, stGrepNav = Nothing})
-            st <- get
-            unless (T.null t) (searchStep (stSearchDir st) t)
-          CmdPrompt t -> runCommand t
-      V.EvKey (V.KChar '\t') [] | isCmd -> promptComplete 1 input
-      V.EvKey V.KBackTab [] | isCmd -> promptComplete (-1) input
+          Types.SearchPrompt t -> do
+            State.modify (\s -> s {Types.stLastSearch = t, Types.stGrepNav = Nothing})
+            st <- State.get
+            Monad.unless (T.null t) (Search.searchStep (Types.stSearchDir st) t)
+          Types.CmdPrompt t -> Command.runCommand t
+      V.EvKey (V.KChar '\t') [] | isCmd -> Command.promptComplete 1 input
+      V.EvKey V.KBackTab [] | isCmd -> Command.promptComplete (-1) input
       V.EvKey V.KBS [] ->
-        modify
+        State.modify
           ( \s ->
               s
-                { stPrompt = Just (rewrap (T.dropEnd 1 input))
-                , stPromptCycle = Nothing
+                { Types.stPrompt = Just (rewrap (T.dropEnd 1 input))
+                , Types.stPromptCycle = Nothing
                 }
           )
       V.EvKey (V.KChar c) [] ->
-        modify
+        State.modify
           ( \s ->
               s
-                { stPrompt = Just (rewrap (T.snoc input c))
-                , stPromptCycle = Nothing
+                { Types.stPrompt = Just (rewrap (T.snoc input c))
+                , Types.stPromptCycle = Nothing
                 }
           )
       _ -> pure ()
 
-handleModalKey :: V.Event -> EventM Name St ()
+handleModalKey :: V.Event -> Brick.EventM Types.Name Types.St ()
 handleModalKey ev = do
-  st <- get
+  st <- State.get
   let
-    i = stCurF st
-    fv = stFiles st !! i
+    i = Types.stCurF st
+    fv = Types.stFiles st !! i
     -- the kill slot is session state: whatever was yanked anywhere is
     -- pasteable here
-    ed = (fvEd fv) {edKill = stKill st}
-  case cfgKeys (stConfig st) of
-    KeysEmacs -> handleEmacsKey i ed ev
-    KeysVi -> handleViKey i ed ev
-    KeysHelix -> handleHelixKey i fv ed ev
+    ed = (Types.fvEd fv) {Modal.edKill = Types.stKill st}
+  case Config.cfgKeys (Types.stConfig st) of
+    Config.KeysEmacs -> handleEmacsKey i ed ev
+    Config.KeysVi -> handleViKey i ed ev
+    Config.KeysHelix -> handleHelixKey i fv ed ev
 
 -- Emacs keymap: editing chords go to Remax.Emacs; M-x and C-s open the
 -- prompts; C-c prefixes the review verbs (same letters as the helix
 -- keys), C-x the session chords (C-x C-c quits, C-x C-s saves).
-handleEmacsKey :: Int -> EdState -> V.Event -> EventM Name St ()
+handleEmacsKey :: Int -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()
 handleEmacsKey i ed ev = do
-  st <- get
-  case stEmacsPrefix st of
+  st <- State.get
+  case Types.stEmacsPrefix st of
     Just pfx -> do
-      modify (\s -> s {stEmacsPrefix = Nothing})
+      State.modify (\s -> s {Types.stEmacsPrefix = Nothing})
       handleEmacsPrefixed pfx ev
     Nothing ->
       case ev of
-        V.EvKey (V.KChar 'x') [V.MMeta] -> openCmdPrompt
-        V.EvKey (V.KChar 's') [V.MCtrl] -> openSearchPrompt 1
+        V.EvKey (V.KChar 'x') [V.MMeta] -> Command.openCmdPrompt
+        V.EvKey (V.KChar 's') [V.MCtrl] -> Search.openSearchPrompt 1
         V.EvKey (V.KChar 'c') [V.MCtrl] ->
-          modify (\s -> s {stEmacsPrefix = Just 'c'})
+          State.modify (\s -> s {Types.stEmacsPrefix = Just 'c'})
         V.EvKey (V.KChar 'x') [V.MCtrl] ->
-          modify (\s -> s {stEmacsPrefix = Just 'x'})
+          State.modify (\s -> s {Types.stEmacsPrefix = Just 'x'})
         -- C-y is emacs's paste, so it consults the clipboard the way
         -- p does in the modal keymaps
         V.EvKey (V.KChar 'y') [V.MCtrl] -> do
-          pullClipboard
-          refreshed <- get
-          emacsEdit i ed {edKill = stKill refreshed} ev
+          Nav.pullClipboard
+          refreshed <- State.get
+          emacsEdit i ed {Modal.edKill = Types.stKill refreshed} ev
         _ -> emacsEdit i ed ev
 
-emacsEdit :: Int -> EdState -> V.Event -> EventM Name St ()
+emacsEdit :: Int -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()
 emacsEdit i ed ev =
-  case handleEmacs ev ed of
+  case Emacs.handleEmacs ev ed of
     Just edNext ->
-      if bufferLines edNext /= bufferLines ed
+      if Modal.bufferLines edNext /= Modal.bufferLines ed
         then do
-          rebuildWith i edNext
-          applyToDisk i
-        else setEd i edNext
+          Load.rebuildWith i edNext
+          VerdictAction.applyToDisk i
+        else Nav.setEd i edNext
     Nothing -> pure ()
 
-handleEmacsPrefixed :: Char -> V.Event -> EventM Name St ()
+handleEmacsPrefixed :: Char -> V.Event -> Brick.EventM Types.Name Types.St ()
 handleEmacsPrefixed pfx ev = do
-  st <- get
+  st <- State.get
   case pfx of
     'x' ->
       case ev of
-        V.EvKey (V.KChar 'c') [V.MCtrl] -> halt
-        V.EvKey (V.KChar 's') [V.MCtrl] -> applyToDisk (stCurF st)
+        V.EvKey (V.KChar 'c') [V.MCtrl] -> Brick.halt
+        V.EvKey (V.KChar 's') [V.MCtrl] -> VerdictAction.applyToDisk (Types.stCurF st)
         _ -> pure ()
     _ ->
       case ev of
-        V.EvKey V.KEnter [] -> acceptSelection
-        V.EvKey (V.KChar '!') [] -> markThenNote Flagged
-        V.EvKey (V.KChar '?') [] -> markThenNote Questioned
-        V.EvKey (V.KChar 'r') [] -> clearVerdictBySelection
-        V.EvKey (V.KChar 'R') [] -> clearVerdictBySelection
-        V.EvKey (V.KChar ']') [] -> switchRun 1
-        V.EvKey (V.KChar '[') [] -> switchRun (-1)
-        V.EvKey (V.KChar 'x') [] -> selectCurrentHunk
-        V.EvKey (V.KChar 'p') [] -> togglePendingOnly
-        V.EvKey (V.KChar 'k') [] -> cycleRunFilter
-        V.EvKey (V.KChar 'u') [] -> unnoteCmd
-        V.EvKey (V.KChar 'h') [] -> setCurrentHunkHere
-        V.EvKey (V.KChar 'v') [] -> revertTarget
-        V.EvKey (V.KChar 'a') [] -> gotoAltFile
-        V.EvKey (V.KChar '/') [] -> openGrepPicker ""
-        V.EvKey (V.KChar 'c') [] -> showCommitPopup
-        V.EvKey (V.KChar '\'') [] -> jumpToAnchor
-        V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
-        V.EvKey (V.KChar 'n') [] -> searchRepeat 1
-        V.EvKey (V.KChar 'N') [] -> searchRepeat (-1)
-        V.EvKey (V.KChar 'f') [] -> openFileFinder
-        V.EvKey (V.KChar 'b') [] -> openBufferPicker
-        V.EvKey (V.KChar 'e') [] -> editCurrent
-        V.EvKey (V.KChar ')') [] -> switchFile 1
-        V.EvKey (V.KChar '(') [] -> switchFile (-1)
+        V.EvKey V.KEnter [] -> VerdictAction.acceptSelection
+        V.EvKey (V.KChar '!') [] -> NoteAction.markThenNote Store.Flagged
+        V.EvKey (V.KChar '?') [] -> NoteAction.markThenNote Store.Questioned
+        V.EvKey (V.KChar 'r') [] -> VerdictAction.clearVerdictBySelection
+        V.EvKey (V.KChar 'R') [] -> VerdictAction.clearVerdictBySelection
+        V.EvKey (V.KChar ']') [] -> Nav.switchRun 1
+        V.EvKey (V.KChar '[') [] -> Nav.switchRun (-1)
+        V.EvKey (V.KChar 'x') [] -> Nav.selectCurrentHunk
+        V.EvKey (V.KChar 'p') [] -> VerdictAction.togglePendingOnly
+        V.EvKey (V.KChar 'k') [] -> VerdictAction.cycleRunFilter
+        V.EvKey (V.KChar 'u') [] -> NoteAction.unnoteCmd
+        V.EvKey (V.KChar 'h') [] -> Nav.setCurrentHunkHere
+        V.EvKey (V.KChar 'v') [] -> VerdictAction.revertTarget
+        V.EvKey (V.KChar 'a') [] -> Open.gotoAltFile
+        V.EvKey (V.KChar '/') [] -> PickerAction.openGrepPicker ""
+        V.EvKey (V.KChar 'c') [] -> VerdictAction.showCommitPopup
+        V.EvKey (V.KChar '\'') [] -> Nav.jumpToAnchor
+        V.EvKey (V.KChar '*') [] -> Search.searchWordUnderCursor
+        V.EvKey (V.KChar 'n') [] -> Search.searchRepeat 1
+        V.EvKey (V.KChar 'N') [] -> Search.searchRepeat (-1)
+        V.EvKey (V.KChar 'f') [] -> TreeAction.openFileFinder
+        V.EvKey (V.KChar 'b') [] -> PickerAction.openBufferPicker
+        V.EvKey (V.KChar 'e') [] -> Editor.editCurrent
+        V.EvKey (V.KChar ')') [] -> Open.switchFile 1
+        V.EvKey (V.KChar '(') [] -> Open.switchFile (-1)
         V.EvKey (V.KChar '\t') [] ->
-          modify (\s -> s {stTray = not (stTray s)})
+          State.modify (\s -> s {Types.stTray = not (Types.stTray s)})
         _ -> pure ()
 
 -- Insert mode is the same in every modal keymap: type, and land the
 -- result back in the file view as cheaply as the edit allows — a
 -- same-shape edit patches one line rather than rebuilding the diff.
-handleInsertKey :: Int -> EdState -> V.Event -> EventM Name St ()
+handleInsertKey :: Int -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()
 handleInsertKey i ed ev =
-  case handleInsert ev ed of
-    InsertHandled edNext -> do
+  case Modal.handleInsert ev ed of
+    Modal.InsertHandled edNext -> do
       let
-        oldLs = bufferLines ed
-        newLs = bufferLines edNext
+        oldLs = Modal.bufferLines ed
+        newLs = Modal.bufferLines edNext
       if newLs == oldLs
-        then setEd i edNext
+        then Nav.setEd i edNext
         else
           if length newLs == length oldLs
             then
-              modify
+              State.modify
                 ( \s ->
-                    updateFile
+                    Verdict.updateFile
                       i
-                      ( patchLine
-                          (stConfig s)
-                          (fst (cursorRC edNext))
-                          (currentLineOf edNext)
-                          . withEd edNext
+                      ( Load.patchLine
+                          (Types.stConfig s)
+                          (fst (Modal.cursorRC edNext))
+                          (View.currentLineOf edNext)
+                          . Nav.withEd edNext
                       )
                       s
                 )
-            else rebuildWith i edNext
-    InsertExit edNext -> do
-      rebuildWith i edNext
-      applyToDisk i
-    InsertUnhandled -> pure ()
+            else Load.rebuildWith i edNext
+    Modal.InsertExit edNext -> do
+      Load.rebuildWith i edNext
+      VerdictAction.applyToDisk i
+    Modal.InsertUnhandled -> pure ()
 
-handleHelixKey :: Int -> FileView -> EdState -> V.Event -> EventM Name St ()
+handleHelixKey :: Int -> Types.FileView -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()
 handleHelixKey i fv ed ev =
-  case edMode ed of
-    Insert -> handleInsertKey i ed ev
+  case Modal.edMode ed of
+    Modal.Insert -> handleInsertKey i ed ev
     -- a pending g/f/t prefix owns the next key outright; review keys
     -- must not steal its target character
     -- ga is review-level (goto alternate file), but the g prefix lives
     -- in the modal layer; catch it here and let the modal cancel its
     -- pending state
-    Normal
-      | pendingLabel ed == Just "g"
+    Modal.Normal
+      | Modal.pendingLabel ed == Just "g"
       , V.EvKey (V.KChar c) [] <- ev
       , Just go <- helixGoKey c -> do
           deferToModal i ed ev
           go
-    Normal | hasPending ed -> deferToModal i ed ev
-    Normal -> helixNormalKey i fv ed ev
+    Modal.Normal | Modal.hasPending ed -> deferToModal i ed ev
+    Modal.Normal -> helixNormalKey i fv ed ev
 
 -- The review-level g keys. gr: go to another repository — free in every
 -- keymap remax has, and the g menu is where going somewhere already
@@ -452,42 +427,42 @@ handleHelixKey i fv ed ev =
 -- buffers, and a file under review is what remax has instead of one, so
 -- they keep the meaning a reader arrives with. ) and ( are the same move
 -- in one keystroke; these are for the hand that already knows helix.
-helixGoKey :: Char -> Maybe (EventM Name St ())
+helixGoKey :: Char -> Maybe (Brick.EventM Types.Name Types.St ())
 helixGoKey c =
   case c of
-    'a' -> Just gotoAltFile
-    'r' -> Just openRepoPicker
-    'n' -> Just (switchFile 1)
-    'p' -> Just (switchFile (-1))
+    'a' -> Just Open.gotoAltFile
+    'r' -> Just PickerAction.openRepoPicker
+    'n' -> Just (Open.switchFile 1)
+    'p' -> Just (Open.switchFile (-1))
     _ -> Nothing
 
-helixNormalKey :: Int -> FileView -> EdState -> V.Event -> EventM Name St ()
+helixNormalKey :: Int -> Types.FileView -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()
 helixNormalKey i fv ed ev = do
-  st <- get
+  st <- State.get
   case ev of
-    V.EvKey (V.KChar '\t') [] -> modify (\s -> s {stTray = not (stTray s)})
-    V.EvKey V.KEnter [] -> acceptSelection
-    V.EvKey (V.KChar '!') [] -> markThenNote Flagged
-    V.EvKey (V.KChar '?') [] -> markThenNote Questioned
-    V.EvKey (V.KChar 'R') [] -> clearVerdictBySelection
-    V.EvKey (V.KChar ']') [] -> switchRun 1
-    V.EvKey (V.KChar '[') [] -> switchRun (-1)
-    V.EvKey (V.KChar '/') [] -> openSearchPrompt 1
-    V.EvKey (V.KChar ':') [] -> openCmdPrompt
-    V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
-    V.EvKey (V.KChar 'n') [] -> searchRepeat 1
-    V.EvKey (V.KChar 'N') [] -> searchRepeat (-1)
-    V.EvKey (V.KChar '\'') [] -> jumpToAnchor
-    V.EvKey (V.KChar 'X') [] -> selectCurrentHunk
+    V.EvKey (V.KChar '\t') [] -> State.modify (\s -> s {Types.stTray = not (Types.stTray s)})
+    V.EvKey V.KEnter [] -> VerdictAction.acceptSelection
+    V.EvKey (V.KChar '!') [] -> NoteAction.markThenNote Store.Flagged
+    V.EvKey (V.KChar '?') [] -> NoteAction.markThenNote Store.Questioned
+    V.EvKey (V.KChar 'R') [] -> VerdictAction.clearVerdictBySelection
+    V.EvKey (V.KChar ']') [] -> Nav.switchRun 1
+    V.EvKey (V.KChar '[') [] -> Nav.switchRun (-1)
+    V.EvKey (V.KChar '/') [] -> Search.openSearchPrompt 1
+    V.EvKey (V.KChar ':') [] -> Command.openCmdPrompt
+    V.EvKey (V.KChar '*') [] -> Search.searchWordUnderCursor
+    V.EvKey (V.KChar 'n') [] -> Search.searchRepeat 1
+    V.EvKey (V.KChar 'N') [] -> Search.searchRepeat (-1)
+    V.EvKey (V.KChar '\'') [] -> Nav.jumpToAnchor
+    V.EvKey (V.KChar 'X') [] -> Nav.selectCurrentHunk
     V.EvKey (V.KChar 'p') [] -> pasteKey deferToModal i ev
     V.EvKey (V.KChar 'P') [] -> pasteKey deferToModal i ev
-    V.EvKey (V.KChar ' ') [] -> modify (\s -> s {stSpace = True})
-    V.EvKey (V.KChar 'E') [] -> launchEditor (stRoot st </> fvPath fv) (fst (cursorRC ed) + 1)
-    V.EvKey (V.KChar ')') [] -> switchFile 1
-    V.EvKey (V.KChar '(') [] -> switchFile (-1)
-    V.EvKey (V.KChar 'p') [V.MCtrl] -> openFileFinder
-    V.EvKey (V.KChar '{') [] -> vScrollBy (viewportScroll TrayVP) (-8)
-    V.EvKey (V.KChar '}') [] -> vScrollBy (viewportScroll TrayVP) 8
+    V.EvKey (V.KChar ' ') [] -> State.modify (\s -> s {Types.stSpace = True})
+    V.EvKey (V.KChar 'E') [] -> Editor.launchEditor (Types.stRoot st </> Types.fvPath fv) (fst (Modal.cursorRC ed) + 1)
+    V.EvKey (V.KChar ')') [] -> Open.switchFile 1
+    V.EvKey (V.KChar '(') [] -> Open.switchFile (-1)
+    V.EvKey (V.KChar 'p') [V.MCtrl] -> TreeAction.openFileFinder
+    V.EvKey (V.KChar '{') [] -> Brick.vScrollBy (Brick.viewportScroll Types.TrayVP) (-8)
+    V.EvKey (V.KChar '}') [] -> Brick.vScrollBy (Brick.viewportScroll Types.TrayVP) 8
     _ -> deferToModal i ed ev
 
 -- Vi keymap: the buffer belongs to vi, and the review verbs live behind
@@ -498,88 +473,88 @@ helixNormalKey i fv ed ev = do
 -- paragraph motions are a small price for it. Everything else is vi's:
 -- `?` searches backward, `X` deletes leftward, `E` is the WORD motion
 -- (Space e still opens $EDITOR here).
-handleViKey :: Int -> EdState -> V.Event -> EventM Name St ()
+handleViKey :: Int -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()
 handleViKey i ed ev = do
-  st <- get
-  case edMode ed of
-    Insert -> handleInsertKey i ed ev
+  st <- State.get
+  case Modal.edMode ed of
+    Modal.Insert -> handleInsertKey i ed ev
     -- a half-typed vi command owns the next keystroke outright, so `f]`
     -- finds a bracket instead of walking to the next hunk, and `2` then
     -- `}` counts rather than scrolling the tray
-    Normal | viBusy (stVi st) -> deferToVi i ed ev
-    Normal ->
+    Modal.Normal | Vi.viBusy (Types.stVi st) -> deferToVi i ed ev
+    Modal.Normal ->
       case ev of
         V.EvKey (V.KChar '\t') [] ->
-          modify (\s -> s {stTray = not (stTray s)})
-        V.EvKey (V.KChar ']') [] -> switchRun 1
-        V.EvKey (V.KChar '[') [] -> switchRun (-1)
-        V.EvKey (V.KChar ')') [] -> switchFile 1
-        V.EvKey (V.KChar '(') [] -> switchFile (-1)
+          State.modify (\s -> s {Types.stTray = not (Types.stTray s)})
+        V.EvKey (V.KChar ']') [] -> Nav.switchRun 1
+        V.EvKey (V.KChar '[') [] -> Nav.switchRun (-1)
+        V.EvKey (V.KChar ')') [] -> Open.switchFile 1
+        V.EvKey (V.KChar '(') [] -> Open.switchFile (-1)
         V.EvKey (V.KChar '{') [] ->
-          vScrollBy (viewportScroll TrayVP) (-8)
+          Brick.vScrollBy (Brick.viewportScroll Types.TrayVP) (-8)
         V.EvKey (V.KChar '}') [] ->
-          vScrollBy (viewportScroll TrayVP) 8
-        V.EvKey (V.KChar '\'') [] -> jumpToAnchor
-        V.EvKey (V.KChar ':') [] -> openCmdPrompt
-        V.EvKey (V.KChar '/') [] -> openSearchPrompt 1
-        V.EvKey (V.KChar '?') [] -> openSearchPrompt (-1)
-        V.EvKey (V.KChar 'n') [] -> searchRepeat 1
-        V.EvKey (V.KChar 'N') [] -> searchRepeat (-1)
-        V.EvKey (V.KChar '*') [] -> searchWordUnderCursor
-        V.EvKey (V.KChar '#') [] -> searchWordBackward
-        V.EvKey (V.KChar 'p') [V.MCtrl] -> openFileFinder
+          Brick.vScrollBy (Brick.viewportScroll Types.TrayVP) 8
+        V.EvKey (V.KChar '\'') [] -> Nav.jumpToAnchor
+        V.EvKey (V.KChar ':') [] -> Command.openCmdPrompt
+        V.EvKey (V.KChar '/') [] -> Search.openSearchPrompt 1
+        V.EvKey (V.KChar '?') [] -> Search.openSearchPrompt (-1)
+        V.EvKey (V.KChar 'n') [] -> Search.searchRepeat 1
+        V.EvKey (V.KChar 'N') [] -> Search.searchRepeat (-1)
+        V.EvKey (V.KChar '*') [] -> Search.searchWordUnderCursor
+        V.EvKey (V.KChar '#') [] -> Search.searchWordBackward
+        V.EvKey (V.KChar 'p') [V.MCtrl] -> TreeAction.openFileFinder
         V.EvKey (V.KChar ' ') [] ->
-          modify (\s -> s {stSpace = True})
+          State.modify (\s -> s {Types.stSpace = True})
         V.EvKey (V.KChar 'p') [] -> pasteKey deferToVi i ev
         V.EvKey (V.KChar 'P') [] -> pasteKey deferToVi i ev
         _ -> deferToVi i ed ev
 
 -- The vi layer's own state lives in St, so the result carries both a new
 -- key state and (when the command completed) a new buffer.
-deferToVi :: Int -> EdState -> V.Event -> EventM Name St ()
+deferToVi :: Int -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()
 deferToVi i ed ev = do
-  st <- get
-  case handleVi (stVi st) ev ed of
-    ViUnhandled -> pure ()
-    ViPending keys -> modify (\s -> s {stVi = keys})
-    ViDone keys edNext -> do
-      modify (\s -> s {stVi = keys})
-      if bufferLines edNext /= bufferLines ed
+  st <- State.get
+  case Vi.handleVi (Types.stVi st) ev ed of
+    Vi.ViUnhandled -> pure ()
+    Vi.ViPending keys -> State.modify (\s -> s {Types.stVi = keys})
+    Vi.ViDone keys edNext -> do
+      State.modify (\s -> s {Types.stVi = keys})
+      if Modal.bufferLines edNext /= Modal.bufferLines ed
         then do
-          rebuildWith i edNext
-          when (edMode edNext == Normal) (applyToDisk i)
-        else setEd i edNext
+          Load.rebuildWith i edNext
+          Monad.when (Modal.edMode edNext == Modal.Normal) (VerdictAction.applyToDisk i)
+        else Nav.setEd i edNext
 
 -- A paste key, whichever keymap asked: consult the system clipboard,
 -- then hand the key to the editor with the slot already refreshed. An
 -- empty slot after that really is empty, and the message says which of
 -- the two reasons applies.
 pasteKey ::
-  (Int -> EdState -> V.Event -> EventM Name St ()) ->
+  (Int -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()) ->
   Int ->
   V.Event ->
-  EventM Name St ()
+  Brick.EventM Types.Name Types.St ()
 pasteKey deliver i ev = do
-  pullClipboard
-  st <- get
+  Nav.pullClipboard
+  st <- State.get
   let
-    ed = (fvEd (stFiles st !! i)) {edKill = stKill st}
-  if T.null (edKill ed)
+    ed = (Types.fvEd (Types.stFiles st !! i)) {Modal.edKill = Types.stKill st}
+  if T.null (Modal.edKill ed)
     then
-      setMsg
-        ( if clipboardReadable (stClip st)
+      Types.setMsg
+        ( if Clipboard.clipboardReadable (Types.stClip st)
             then "nothing to paste — y yanks (the pending filter is Space p)"
             else "nothing to paste — no clipboard helper here (wl-copy, xclip, xsel, pbcopy)"
         )
     else deliver i ed ev
 
-deferToModal :: Int -> EdState -> V.Event -> EventM Name St ()
+deferToModal :: Int -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()
 deferToModal i ed ev =
-  case handleNormal ev ed of
+  case Modal.handleNormal ev ed of
     Just edNext ->
-      if bufferLines edNext /= bufferLines ed
+      if Modal.bufferLines edNext /= Modal.bufferLines ed
         then do
-          rebuildWith i edNext
-          when (edMode edNext == Normal) (applyToDisk i)
-        else setEd i edNext
+          Load.rebuildWith i edNext
+          Monad.when (Modal.edMode edNext == Modal.Normal) (VerdictAction.applyToDisk i)
+        else Nav.setEd i edNext
     Nothing -> pure ()

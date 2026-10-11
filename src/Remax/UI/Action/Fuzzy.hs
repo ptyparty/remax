@@ -12,29 +12,15 @@ module Remax.UI.Action.Fuzzy
   , highlightAt
   ) where
 
-import Brick
-  ( Widget
-  , hBox
-  , txt
-  , withAttr
-  )
-import Data.Char
-  ( chr
-  , ord
-  , toLower
-  )
-import Data.List
-  ( groupBy
-  )
-import qualified Data.Set as Set
-import Data.Text (Text)
-import qualified Data.Text as T
-import Remax.UI.Core.Attrs
-import Remax.UI.Core.Types
-import Remax.UI.Core.Widgets
-import System.FilePath
-  ( isPathSeparator
-  )
+import Brick qualified as Brick
+import Data.Char qualified as Char
+import Data.List qualified as List
+import Data.Set qualified as Set
+import Data.Text qualified as T
+import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.Widgets qualified as Widgets
+import System.FilePath qualified as FilePath
 
 -- Case-insensitive subsequence match; lower scores first. Prefers
 -- matches inside the file name, then tight spans, then short paths.
@@ -46,7 +32,7 @@ data Needle = Needle
   , ndBlank :: !Bool
   }
 
-needleFor :: Text -> Needle
+needleFor :: T.Text -> Needle
 needleFor q =
   let
     cs = map lowerFast (T.unpack q)
@@ -62,11 +48,11 @@ needleFor q =
 -- ASCII still goes the long way round.
 lowerFast :: Char -> Char
 lowerFast c
-  | c >= 'A' && c <= 'Z' = chr (ord c + 32)
+  | c >= 'A' && c <= 'Z' = Char.chr (Char.ord c + 32)
   | c < '\128' = c
-  | otherwise = toLower c
+  | otherwise = Char.toLower c
 
-fuzzyScore :: Text -> FilePath -> Maybe (Int, Int, Int)
+fuzzyScore :: T.Text -> FilePath -> Maybe (Int, Int, Int)
 fuzzyScore q = fuzzyScoreOn (needleFor q)
 
 -- How well a path matches, or Nothing if it does not.
@@ -98,7 +84,7 @@ fuzzyScoreOn nd path
             [] -> (needle, i, firstAt, lastAt, tailAfterSep)
             (h : hs) ->
               let
-                nextTail = if isPathSeparator h then hs else tailAfterSep
+                nextTail = if FilePath.isPathSeparator h then hs else tailAfterSep
               in
                 case needle of
                   (c : cs)
@@ -136,7 +122,7 @@ subsequenceLower needle hay =
 -- Where each query character lands in the shown text (greedy,
 -- case-insensitive); Nothing when the text no longer contains the
 -- subsequence, as with an elided path.
-subseqPositions :: Text -> Text -> Maybe [Int]
+subseqPositions :: T.Text -> T.Text -> Maybe [Int]
 subseqPositions q t =
   let
     walk needle hay acc =
@@ -144,48 +130,48 @@ subseqPositions q t =
         ([], _) -> Just (reverse acc)
         (_, []) -> Nothing
         (c : cs, (i, h) : hs) ->
-          if toLower c == toLower h
+          if Char.toLower c == Char.toLower h
             then walk cs hs (i : acc)
             else walk (c : cs) hs acc
   in
     walk (T.unpack q) (zip [0 ..] (T.unpack t)) []
 
-highlightSubseq :: Text -> Text -> Widget Name
+highlightSubseq :: T.Text -> T.Text -> Brick.Widget Types.Name
 highlightSubseq q t =
   case subseqPositions q t of
     Just ps
       | not (null ps) -> highlightAt (Set.fromList ps) t
-    _ -> txt (padT t)
+    _ -> Brick.txt (Widgets.padT t)
 
-highlightInfix :: Text -> Text -> Widget Name
+highlightInfix :: T.Text -> T.Text -> Brick.Widget Types.Name
 highlightInfix q t =
   let
     (pre, rest) = T.breakOn q t
   in
     if T.null q || T.null rest
-      then txt (padT t)
+      then Brick.txt (Widgets.padT t)
       else
-        hBox
-          [ txt pre
-          , withAttr matchCharAttr (txt (T.take (T.length q) rest))
-          , txt (T.drop (T.length q) rest)
+        Brick.hBox
+          [ Brick.txt pre
+          , Brick.withAttr Attrs.matchCharAttr (Brick.txt (T.take (T.length q) rest))
+          , Brick.txt (T.drop (T.length q) rest)
           ]
 
-highlightAt :: Set.Set Int -> Text -> Widget Name
+highlightAt :: Set.Set Int -> T.Text -> Brick.Widget Types.Name
 highlightAt ps t =
   let
     marked = zipWith (\i c -> (Set.member i ps, c)) [0 ..] (T.unpack t)
-    groups = groupBy (\a b -> fst a == fst b) marked
+    groups = List.groupBy (\a b -> fst a == fst b) marked
     seg g = case g of
-      [] -> txt ""
+      [] -> Brick.txt ""
       ((hit, _) : _) ->
         let
           segText = T.pack (map snd g)
         in
           if hit
-            then withAttr matchCharAttr (txt segText)
-            else txt segText
+            then Brick.withAttr Attrs.matchCharAttr (Brick.txt segText)
+            else Brick.txt segText
   in
-    hBox (map seg groups)
+    Brick.hBox (map seg groups)
 
 -- The editor escape hatch -----------------------------------------------------------

@@ -18,26 +18,26 @@ module Remax.DiffModel
   , forceTokLines
   ) where
 
-import Brick (AttrName)
-import Data.Algorithm.Diff (Diff, PolyDiff (..), getGroupedDiff)
-import Data.Array (Array, listArray, (!))
-import Data.Char (isSpace)
-import Data.Maybe (fromMaybe, mapMaybe)
-import Data.Text (Text)
-import qualified Data.Text as T
+import Brick qualified as Brick
+import Data.Algorithm.Diff qualified as Diff
+import Data.Array ((!))
+import Data.Array qualified as Array
+import Data.Char qualified as Char
+import Data.Maybe qualified as Maybe
+import Data.Text qualified as T
 
-import Remax.Key (lineKeys)
+import Remax.Key qualified as Key
 
 data RowR = RowR
   { rMark :: !Char
   , rNewRow :: !(Maybe Int) -- buffer row this display row shows, if any
-  , rText :: !Text -- old text for '-' rows, buffer text otherwise
-  , rToks :: [(AttrName, Text)] -- [] for old-side rows
+  , rText :: !T.Text -- old text for '-' rows, buffer text otherwise
+  , rToks :: [(Brick.AttrName, T.Text)] -- [] for old-side rows
   , rRunIx :: !(Maybe Int)
-  , rKey :: !(Maybe Text) -- content key for changed rows
+  , rKey :: !(Maybe T.Text) -- content key for changed rows
   , -- content key for rows that exist on the base side (context and
     -- removed), which is what a remark on unchanged code is keyed by
-    rRemarkKey :: !(Maybe Text)
+    rRemarkKey :: !(Maybe T.Text)
   }
 
 -- One group of consecutive +/- display rows. A maximal group bigger than
@@ -47,8 +47,8 @@ data RowR = RowR
 -- verdicts are unaffected by how the grouping falls.
 data Run = Run
   { runAnchor :: !Int -- buffer row to park the cursor on
-  , runKeys :: [Text] -- one key per changed line, in display order
-  , runLines :: [Text] -- the marked lines themselves, aligned with runKeys
+  , runKeys :: [T.Text] -- one key per changed line, in display order
+  , runLines :: [T.Text] -- the marked lines themselves, aligned with runKeys
   , runKind :: !RunKind -- prose or code, for the code/comment filter
   }
 
@@ -63,16 +63,16 @@ data RunKind = RunCode | RunComment
 -- The line comment leaders trusted by both the splitter and the
 -- code/comment filter. Deliberately short: a leader that fires on
 -- ordinary code would quietly hide real changes.
-lineCommentLeaders :: [Text]
+lineCommentLeaders :: [T.Text]
 lineCommentLeaders = ["--", "//", "#", ";"]
 
-blockCommentOpeners :: [Text]
+blockCommentOpeners :: [T.Text]
 blockCommentOpeners = ["{-", "/*", "<!--"]
 
 -- A hunk is prose when every non-blank line it changes is one: a line
 -- comment, the opening of a block comment, or a line already inside one.
 -- An all-blank hunk is code, since there is no prose in it to read.
-runKindOf :: [(Text, Bool)] -> RunKind
+runKindOf :: [(T.Text, Bool)] -> RunKind
 runKindOf ls =
   let
     meaningful = filter (not . T.null . T.strip . fst) ls
@@ -88,7 +88,7 @@ runKindOf ls =
 
 -- One display row per diff row, with equal prefix/suffix trimmed off
 -- before Myers so ordinary edits diff only the touched region.
-diffRows :: WhitespaceMode -> [Text] -> [Text] -> [(Char, Maybe Int, Text)]
+diffRows :: WhitespaceMode -> [T.Text] -> [T.Text] -> [(Char, Maybe Int, T.Text)]
 diffRows mode old new = dpRows (diffParts mode old new)
 
 -- A diff taken apart, so a caller can put a clock on the only part that
@@ -101,9 +101,9 @@ diffRows mode old new = dpRows (diffParts mode old new)
 -- reported as wholly rewritten, so giving up stays proportional to what
 -- actually differs.
 data DiffParts = DiffParts
-  { dpGrouped :: [Diff [DiffLine]]
-  , dpRows :: [(Char, Maybe Int, Text)]
-  , dpCoarse :: [(Char, Maybe Int, Text)]
+  { dpGrouped :: [Diff.Diff [DiffLine]]
+  , dpRows :: [(Char, Maybe Int, T.Text)]
+  , dpCoarse :: [(Char, Maybe Int, T.Text)]
   }
 
 -- Whether spacing is part of what makes two lines different. Under
@@ -117,23 +117,23 @@ data WhitespaceMode = WhitespaceMatters | WhitespaceIgnored
 -- while every row that comes out carries dlText, so what is displayed and
 -- what is content-keyed are always the file's own bytes.
 data DiffLine = DiffLine
-  { dlKey :: !Text
-  , dlText :: !Text
+  { dlKey :: !T.Text
+  , dlText :: !T.Text
   }
 
 instance Eq DiffLine where
   a == b = dlKey a == dlKey b
 
-diffLine :: WhitespaceMode -> Text -> DiffLine
+diffLine :: WhitespaceMode -> T.Text -> DiffLine
 diffLine mode t =
   DiffLine
     { dlKey = case mode of
         WhitespaceMatters -> t
-        WhitespaceIgnored -> T.filter (not . isSpace) t
+        WhitespaceIgnored -> T.filter (not . Char.isSpace) t
     , dlText = t
     }
 
-diffParts :: WhitespaceMode -> [Text] -> [Text] -> DiffParts
+diffParts :: WhitespaceMode -> [T.Text] -> [T.Text] -> DiffParts
 diffParts mode oldRaw newRaw =
   let
     old = map (diffLine mode) oldRaw
@@ -145,24 +145,24 @@ diffParts mode oldRaw newRaw =
       length (takeWhile id (zipWith (==) (reverse oldTail) (reverse newTail)))
     oldMid = take (length oldTail - suf) oldTail
     newMid = take (length newTail - suf) newTail
-    grouped = getGroupedDiff oldMid newMid
+    grouped = Diff.getGroupedDiff oldMid newMid
     contextRow n (k, l) = (' ', Just (n + k), dlText l)
     preRows = map (contextRow 0) (zip [0 ..] (take pre new))
     sufStart = pre + length newMid
     sufRows =
       map (contextRow sufStart) (zip [0 ..] (drop (length newTail - suf) newTail))
-    go :: Int -> [Diff [DiffLine]] -> [(Char, Maybe Int, Text)]
+    go :: Int -> [Diff.Diff [DiffLine]] -> [(Char, Maybe Int, T.Text)]
     go _ [] = []
     go n (grp : rest) =
       case grp of
         -- the new side, not the old: with whitespace ignored the two
         -- spellings of a context line differ, and the buffer's is the
         -- one on screen
-        Both _ cs ->
+        Diff.Both _ cs ->
           map (contextRow n) (zip [0 ..] cs) ++ go (n + length cs) rest
-        First os ->
+        Diff.First os ->
           map (\o -> ('-', Nothing, dlText o)) os ++ go n rest
-        Second ns ->
+        Diff.Second ns ->
           map (\(k, l) -> ('+', Just (n + k), dlText l)) (zip [0 ..] ns)
             ++ go (n + length ns) rest
   in
@@ -181,17 +181,17 @@ diffParts mode oldRaw newRaw =
 -- per-row indexing is ever needed).
 assemble ::
   SplitConfig ->
-  Text -> -- repository root, part of every key
-  Text -> -- file path, part of every key
-  [(Char, Maybe Int, Text)] ->
-  [[(AttrName, Text)]] ->
+  T.Text -> -- repository root, part of every key
+  T.Text -> -- file path, part of every key
+  [(Char, Maybe Int, T.Text)] ->
+  [[(Brick.AttrName, T.Text)]] ->
   ([RowR], [Run])
 assemble sc repo file rows toks =
   let
     ixs = runIndexes sc rows
     markedLine (m, _, t) =
       if m == ' ' then Nothing else Just (T.cons m t)
-    keys = lineKeys repo file (mapMaybe markedLine rows)
+    keys = Key.lineKeys repo file (Maybe.mapMaybe markedLine rows)
     -- The base side — context rows and removed rows — is the committed
     -- file, in order, whatever the working tree has been edited into. A
     -- remark on a line nobody has changed is keyed against that, so when
@@ -204,7 +204,7 @@ assemble sc repo file rows toks =
     -- disturb each other's ordinals.
     baseLine (m, _, t) =
       if m == '+' then Nothing else Just (T.cons ' ' t)
-    remarkKeys = lineKeys repo file (mapMaybe baseLine rows)
+    remarkKeys = Key.lineKeys repo file (Maybe.mapMaybe baseLine rows)
   in
     (buildRows rows toks ixs keys remarkKeys, buildRuns rows ixs keys)
 
@@ -228,7 +228,7 @@ defaultSplitConfig =
     , pieceMax = 32
     }
 
-runIndexes :: SplitConfig -> [(Char, Maybe Int, Text)] -> [Maybe Int]
+runIndexes :: SplitConfig -> [(Char, Maybe Int, T.Text)] -> [Maybe Int]
 runIndexes sc rows0 =
   let
     isCtx (m, _, _) = m == ' '
@@ -266,7 +266,7 @@ runIndexes sc rows0 =
 -- comments need no tracking — a blank line ends them by definition.
 -- Delimiters inside string literals over-count harmlessly (the split
 -- just gets more conservative).
-insideBlockComment :: [(Char, Maybe Int, Text)] -> [Bool]
+insideBlockComment :: [(Char, Maybe Int, T.Text)] -> [Bool]
 insideBlockComment rows0 =
   let
     step (hs, c, xml) (_, _, t) =
@@ -286,7 +286,7 @@ insideBlockComment rows0 =
   in
     go (0 :: Int, 0 :: Int, 0 :: Int) rows0
 
-splitChunk :: SplitConfig -> [(Char, Maybe Int, Text)] -> [[(Char, Maybe Int, Text)]]
+splitChunk :: SplitConfig -> [(Char, Maybe Int, T.Text)] -> [[(Char, Maybe Int, T.Text)]]
 splitChunk sc chg0 =
   let
     insides = insideBlockComment chg0
@@ -392,9 +392,9 @@ splitChunk sc chg0 =
                         inside || isLineComment t
                     )
                     piece
-              indents :: Array Int Int
+              indents :: Array.Array Int Int
               indents =
-                listArray (0, total - 1) (map indentOf (zip piece prevIsComment))
+                Array.listArray (0, total - 1) (map indentOf (zip piece prevIsComment))
               cutFrom off rows =
                 let
                   remaining = total - off
@@ -422,11 +422,11 @@ splitChunk sc chg0 =
       else map (map fst) (concatMap weakSplit (strongSegments chg))
 
 buildRows ::
-  [(Char, Maybe Int, Text)] ->
-  [[(AttrName, Text)]] ->
+  [(Char, Maybe Int, T.Text)] ->
+  [[(Brick.AttrName, T.Text)]] ->
   [Maybe Int] ->
-  [Text] ->
-  [Text] ->
+  [T.Text] ->
+  [T.Text] ->
   [RowR]
 buildRows =
   let
@@ -457,15 +457,15 @@ buildRows =
   in
     go
 
-buildRuns :: [(Char, Maybe Int, Text)] -> [Maybe Int] -> [Text] -> [Run]
+buildRuns :: [(Char, Maybe Int, T.Text)] -> [Maybe Int] -> [T.Text] -> [Run]
 buildRuns rows ixs keys0 =
   let
     bufferRowOf (_, mr, _) = mr
-    lastRow = maximum (0 : mapMaybe bufferRowOf rows)
+    lastRow = maximum (0 : Maybe.mapMaybe bufferRowOf rows)
     -- nexts !! i = the buffer row of the first row after i that has
     -- one, so a delete-only run can anchor where the deletion now sits
     nexts =
-      drop 1 (scanr (\(_, mr, _) acc -> fromMaybe acc mr) lastRow rows)
+      drop 1 (scanr (\(_, mr, _) acc -> Maybe.fromMaybe acc mr) lastRow rows)
     hasNoRun ((_, mix, _), _) = mix == Nothing
     runIxOf ((_, mix, _), _) = mix
     addedRowAnchor ((row, _, _), _) = case row of
@@ -483,7 +483,7 @@ buildRuns rows ixs keys0 =
             markedOf (((m, _, t), _, _), _) = T.cons m t
             classified (((_, _, t), _, _), inside) = (t, inside)
             n = length grp
-            anchor = case mapMaybe addedRowAnchor grp of
+            anchor = case Maybe.mapMaybe addedRowAnchor grp of
               (r : _) -> r
               [] -> case grp of
                 (((_, _, nxt), _) : _) -> nxt
@@ -499,7 +499,7 @@ buildRuns rows ixs keys0 =
   in
     go (zip (zip3 rows ixs nexts) (insideBlockComment rows)) keys0
 
-forceTokLines :: [[(AttrName, Text)]] -> ()
+forceTokLines :: [[(Brick.AttrName, T.Text)]] -> ()
 forceTokLines =
   let
     forceSeg (a, s) rest = a `seq` s `seq` rest
@@ -507,7 +507,7 @@ forceTokLines =
   in
     foldr forceLine ()
 
-forceRows :: [(Char, Maybe Int, Text)] -> ()
+forceRows :: [(Char, Maybe Int, T.Text)] -> ()
 forceRows =
   let
     forceMaybe m = case m of
