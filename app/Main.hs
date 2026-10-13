@@ -205,20 +205,41 @@ review marg = do
 -- there would make the first command an agent runs fail.
 targetRepos :: IO [FilePath]
 targetRepos = do
+  found <- reposInReach
+  here <- Directory.getCurrentDirectory
+  if null found
+    then Exit.die (noRepoMessage here ++ ".")
+    else pure found
+
+reposInReach :: IO [FilePath]
+reposInReach = do
   got <- Git.repoRoot
   here <- Directory.getCurrentDirectory
   case got of
     Just root -> pure [root]
-    Nothing -> do
-      children <- Git.childRepos here
-      if null children
-        then
-          Exit.die
-            ( "Not inside a git repository, and no repositories directly under "
-                ++ here
-                ++ "."
-            )
-        else pure children
+    Nothing -> Git.childRepos here
+
+noRepoMessage :: FilePath -> String
+noRepoMessage here =
+  "Not inside a git repository, and no repositories directly under " ++ here
+
+waitForRepos :: IO [FilePath]
+waitForRepos = do
+  found <- reposInReach
+  if not (null found)
+    then pure found
+    else do
+      here <- Directory.getCurrentDirectory
+      SysIO.hPutStrLn SysIO.stderr (noRepoMessage here ++ "; waiting for one to appear. Ctrl-C quits.")
+      let
+        poll = do
+          Concurrent.threadDelay repoPollUs
+          again <- reposInReach
+          if null again then poll else pure again
+      poll
+
+repoPollUs :: Int
+repoPollUs = 2000000
 
 -- Where a review session starts: the first repository in reach, with the
 -- rest reachable by :repo once the session is up.
@@ -227,8 +248,8 @@ targetRepos = do
 -- partway through a review is noticed.
 reviewStart :: IO (FilePath, [FilePath], Maybe FilePath)
 reviewStart = do
+  roots <- waitForRepos
   inRepo <- Git.repoRoot
-  roots <- targetRepos
   story <- case inRepo of
     Just _ -> pure Nothing
     Nothing -> fmap Just Directory.getCurrentDirectory

@@ -263,8 +263,26 @@ listRefs root = do
 childRepos :: FilePath -> IO [FilePath]
 childRepos dir = do
   entries <- listDirectoryOr dir
-  found <- mapM asRepo (List.sort entries)
+  unreachable <- blockingMountPoints
+  let
+    reachable = filter (`Set.notMember` unreachable) (List.sort entries)
+  found <- mapM asRepo reachable
   pure (concat found)
+
+blockingMountPoints :: IO (Set.Set FilePath)
+blockingMountPoints = do
+  table <- readFileOr "" "/proc/self/mountinfo"
+  let
+    entry line =
+      case break (== "-") (words (T.unpack line)) of
+        (before, "-" : fstype : _)
+          | length before >= 5 && blockingFilesystem fstype -> Just (before !! 4)
+        _ -> Nothing
+  pure (Set.fromList (Maybe.mapMaybe entry (T.lines table)))
+
+blockingFilesystem :: String -> Bool
+blockingFilesystem fstype =
+  any (`List.isPrefixOf` fstype) ["fuse", "nfs", "cifs", "smb", "9p", "autofs", "sshfs"]
 
 asRepo :: FilePath -> IO [FilePath]
 asRepo path = do
