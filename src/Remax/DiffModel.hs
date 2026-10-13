@@ -23,7 +23,9 @@ import Data.Algorithm.Diff qualified as Diff
 import Data.Array ((!))
 import Data.Array qualified as Array
 import Data.Char qualified as Char
+import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
+import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 
 import Remax.Key qualified as Key
@@ -145,7 +147,7 @@ diffParts mode oldRaw newRaw =
       length (takeWhile id (zipWith (==) (reverse oldTail) (reverse newTail)))
     oldMid = take (length oldTail - suf) oldTail
     newMid = take (length newTail - suf) newTail
-    grouped = Diff.getGroupedDiff oldMid newMid
+    grouped = anchoredDiff oldMid newMid
     contextRow n (k, l) = (' ', Just (n + k), dlText l)
     preRows = map (contextRow 0) (zip [0 ..] (take pre new))
     sufStart = pre + length newMid
@@ -175,6 +177,104 @@ diffParts mode oldRaw newRaw =
             ++ zipWith (\k l -> ('+', Just (pre + k), dlText l)) [0 ..] newMid
             ++ sufRows
       }
+
+anchorDepth :: Int
+anchorDepth = 4
+
+anchoredDiff :: [DiffLine] -> [DiffLine] -> [Diff.Diff [DiffLine]]
+anchoredDiff = anchoredDiffDepth anchorDepth
+
+anchoredDiffDepth :: Int -> [DiffLine] -> [DiffLine] -> [Diff.Diff [DiffLine]]
+anchoredDiffDepth depth old new =
+  case (old, new) of
+    ([], []) -> []
+    ([], _) -> [Diff.Second new]
+    (_, []) -> [Diff.First old]
+    _
+      | depth <= 0 -> Diff.getGroupedDiff old new
+      | otherwise ->
+          case uniqueAnchors old new of
+            [] -> Diff.getGroupedDiff old new
+            anchors -> stitchAnchors depth old new anchors
+
+uniqueAnchors :: [DiffLine] -> [DiffLine] -> [(Int, Int)]
+uniqueAnchors old new =
+  let
+    count ls = Map.fromListWith (+) [(dlKey l, 1 :: Int) | l <- ls]
+    oldCount = count old
+    newCount = count new
+    newAt =
+      Map.fromList
+        [(dlKey l, j) | (j, l) <- zip [0 ..] new, Map.lookup (dlKey l) newCount == Just 1]
+    candidates =
+      [ (i, j)
+      | (i, l) <- zip [0 ..] old
+      , Map.lookup (dlKey l) oldCount == Just 1
+      , Just j <- [Map.lookup (dlKey l) newAt]
+      ]
+  in
+    longestRising candidates
+
+longestRising :: [(Int, Int)] -> [(Int, Int)]
+longestRising candidates =
+  let
+    lowerBound tops j =
+      let
+        search lo hi =
+          let
+            mid = (lo + hi) `div` 2
+          in
+            if lo >= hi
+              then lo
+              else
+                if fst (Seq.index tops mid) < j
+                  then search (mid + 1) hi
+                  else search lo mid
+      in
+        search 0 (Seq.length tops)
+    step (tops, links, n) pair@(_, j) =
+      let
+        pos = lowerBound tops j
+        prev = if pos == 0 then Nothing else Just (snd (Seq.index tops (pos - 1)))
+        links' = Map.insert n (pair, prev) links
+        tops' =
+          if pos == Seq.length tops
+            then tops Seq.|> (j, n)
+            else Seq.update pos (j, n) tops
+      in
+        (tops', links', n + 1)
+    (topsF, linksF, _) = foldl step (Seq.empty, Map.empty, 0 :: Int) candidates
+    walk k acc =
+      case k >>= (`Map.lookup` linksF) of
+        Nothing -> acc
+        Just (pair, prev) -> walk prev (pair : acc)
+  in
+    case Seq.viewr topsF of
+      Seq.EmptyR -> []
+      _ Seq.:> (_, lastIdx) -> walk (Just lastIdx) []
+
+stitchAnchors :: Int -> [DiffLine] -> [DiffLine] -> [(Int, Int)] -> [Diff.Diff [DiffLine]]
+stitchAnchors depth old new anchors =
+  let
+    go _ _ os ns [] = anchoredDiffDepth (depth - 1) os ns
+    go oi ni os ns ((ai, aj) : rest) =
+      let
+        (oSeg, oRest) = splitAt (ai - oi) os
+        (nSeg, nRest) = splitAt (aj - ni) ns
+        (anchorO, oAfter) = splitAt 1 oRest
+        (anchorN, nAfter) = splitAt 1 nRest
+      in
+        anchoredDiffDepth (depth - 1) oSeg nSeg
+          ++ (Diff.Both anchorO anchorN : go (ai + 1) (aj + 1) oAfter nAfter rest)
+  in
+    mergeBoth (go 0 0 old new anchors)
+
+mergeBoth :: [Diff.Diff [DiffLine]] -> [Diff.Diff [DiffLine]]
+mergeBoth groups =
+  case groups of
+    Diff.Both a b : Diff.Both c d : rest -> mergeBoth (Diff.Both (a ++ c) (b ++ d) : rest)
+    g : rest -> g : mergeBoth rest
+    [] -> []
 
 -- Attach run indexes, syntax tokens, and content keys to raw diff rows in
 -- single tandem walks (the row streams are aligned by construction, so no

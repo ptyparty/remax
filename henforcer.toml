@@ -217,6 +217,12 @@ qualified = { qualifiedPost = true }
 alias = "Ord"
 
 [[forAnyModule.allowedQualifications]]
+module = "Data.Sequence"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Seq"
+
+[[forAnyModule.allowedQualifications]]
 module = "Data.Set"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }
