@@ -32,11 +32,14 @@ gitBar st =
           , Brick.withAttr Attrs.headerAttr (Brick.txt " ·")
           ]
         else []
+    placeWord = case Git.subjectOf (Types.stMode st) of
+      Git.WorkingTree -> " on "
+      Git.Ref _ -> " at "
     place = case Types.stBranch st of
       Just b ->
         Brick.hBox
           ( repoSeg
-              ++ [ Brick.withAttr Attrs.headerAttr (Brick.txt " on ")
+              ++ [ Brick.withAttr Attrs.headerAttr (Brick.txt placeWord)
                  , Brick.withAttr Attrs.headerFileAttr (Brick.txt b)
                  ]
           )

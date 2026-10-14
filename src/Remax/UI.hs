@@ -95,8 +95,7 @@ loadStartup mode root = do
   noteGroups0 <- Store.loadNoteGroups conn (T.pack root)
   cfg <- Config.loadConfig
   rebase0 <- Git.rebaseStatus root
-  branch0 <- Git.currentBranch root
-  head0 <- Git.headCommit root
+  (branch0, head0) <- Git.subjectPlace (Types.rebaseEffMode rebase0 mode) root
   passId <- Store.beginPass conn (T.pack root) (Git.modeLabel mode)
   theme <- Theme.loadHelixTheme
   chan <- BChan.newBChan 64
@@ -120,6 +119,12 @@ loadStartup mode root = do
       , suSlots = slots
       }
 
+treeModeOf :: Git.ReviewMode -> Git.ReviewMode
+treeModeOf mode =
+  case Git.subjectOf mode of
+    Git.WorkingTree -> mode
+    Git.Ref _ -> Git.VsRef "HEAD"
+
 initialState ::
   Startup ->
   Git.ReviewMode ->
@@ -140,12 +145,14 @@ initialState startup mode root roots story watchMode dirWatch clip alreadyThere 
     , Types.stMsg = if watchMode == Types.PollingWatch then Watch.watchPollWarning else "loading\8230"
     , Types.stRoot = root
     , Types.stMode = mode
+    , Types.stTreeMode = treeModeOf mode
     , Types.stConn = suConn startup
     , Types.stPassId = suPassId startup
     , Types.stCounts = Map.empty
     , Types.stPunch = []
     , Types.stTray = True
     , Types.stLastGit = 0
+    , Types.stLastRefPoll = 0
     , Types.stGitQueued = False
     , Types.stChan = suChan startup
     , Types.stWatch = Watch.dirWatchFollow dirWatch

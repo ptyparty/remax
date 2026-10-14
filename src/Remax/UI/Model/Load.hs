@@ -7,8 +7,9 @@ module Remax.UI.Model.Load
   , patchLine
   , ensureCurrentHighlighted
   , rebuildWith
+  , freshView
   , reloadFromDisk
-  , pollCurrentFile
+  , pollSubject
   , refreshGit
   , rebuildAllFiles
   , forceGitRefresh
@@ -65,11 +66,24 @@ loadOne ::
   FilePath ->
   FilePath ->
   IO (Maybe Types.FileView)
-loadOne cfg hls mode root path = do
-  present <- Directory.doesFileExist (root </> path)
-  if present
-    then loadPresent cfg hls mode root path
-    else loadRemoved cfg hls mode root path
+loadOne cfg hls mode root path =
+  case Git.subjectOf mode of
+    Git.WorkingTree -> do
+      present <- Directory.doesFileExist (root </> path)
+      if present
+        then loadPresent cfg hls mode root path
+        else loadRemoved cfg hls mode root path
+    Git.Ref tip -> loadAtRef cfg hls mode root tip path
+
+loadAtRef :: Config.Config -> TS.HighlighterTable -> Git.ReviewMode -> FilePath -> T.Text -> FilePath -> IO (Maybe Types.FileView)
+loadAtRef cfg hls mode root tip path = do
+  got <- Git.refContent root tip path
+  case got of
+    Nothing -> loadRemoved cfg hls mode root path
+    Just Git.RefBinary -> pure Nothing
+    Just (Git.RefText newLs) -> do
+      base <- Git.baseLines mode root path
+      fmap Just (buildView cfg hls root path False base newLs)
 
 -- No working copy, but git still has the base: the change set
 -- removed this file. It reviews as a file whose every line is a
@@ -322,6 +336,12 @@ data ReloadPlan = ReloadPlan
 reloadFromDisk :: FilePath -> Brick.EventM Types.Name Types.St ()
 reloadFromDisk rel = do
   st <- State.get
+  case Git.subjectOf (Types.effectiveMode st) of
+    Git.Ref _ -> pure ()
+    Git.WorkingTree -> reloadWorking rel st
+
+reloadWorking :: FilePath -> Types.St -> Brick.EventM Types.Name Types.St ()
+reloadWorking rel st =
   case List.find ((== rel) . Types.fvPath) (Types.stFiles st) of
     -- an unknown file changing may mean the change set just grew
     Nothing -> refreshGit
@@ -406,7 +426,7 @@ installReload plan i current rebuilt newRow = do
         else newRow
     installed =
       if moved
-        then rebuilt {Types.fvEd = (Types.fvEd rebuilt) {Modal.edZipper = Z.moveCursor (landing, liveCol) (Modal.edZipper (Types.fvEd rebuilt))}}
+        then rebuilt {Types.fvEd = placeCursor (landing, liveCol) (Types.fvEd rebuilt)}
         else rebuilt
     oldOut = View.cursorDisplayRow (Types.fvRows current) liveRow
     screenOff = case mvp of
@@ -424,26 +444,44 @@ installReload plan i current rebuilt newRow = do
   Brick.setTop (Brick.viewportScroll Types.BodyVP) (max 0 (newOut - origin - screenOff))
   Types.setMsg ("\8635 reloaded " <> T.pack (rlPath plan))
 
-pollCurrentFile :: Brick.EventM Types.Name Types.St ()
-pollCurrentFile = do
+pollSubject :: Brick.EventM Types.Name Types.St ()
+pollSubject = do
   st <- State.get
-  Monad.when (Types.stWatchMode st == Types.PollingWatch) $
-    case Types.currentFileMay st of
-      Nothing -> pure ()
-      Just fv -> do
-        got <-
-          MonadIO.liftIO
-            ( Exception.try (Directory.getModificationTime (Types.stRoot st </> Types.fvPath fv)) ::
-                IO (Either Exception.IOException Clock.UTCTime)
-            )
-        case (got, Types.fvMtime fv) of
-          (Left _, _) -> pure ()
-          (Right mtime, Nothing) ->
-            State.modify (Verdict.updateFile (Types.stCurF st) (\f -> f {Types.fvMtime = Just mtime}))
-          (Right mtime, Just seen)
-            | mtime /= seen && not (Map.member (Types.fvPath fv) (Types.stReloading st)) ->
-                reloadFromDisk (Types.fvPath fv)
-            | otherwise -> pure ()
+  case Git.subjectOf (Types.effectiveMode st) of
+    Git.Ref tip -> pollRef st tip
+    Git.WorkingTree -> Monad.when (Types.stWatchMode st == Types.PollingWatch) (pollCurrentFile st)
+
+refPollSeconds :: Double
+refPollSeconds = 2
+
+pollRef :: Types.St -> T.Text -> Brick.EventM Types.Name Types.St ()
+pollRef st tip = do
+  now <- MonadIO.liftIO GHCClock.getMonotonicTime
+  Monad.when (now - Types.stLastRefPoll st >= refPollSeconds && not (Types.stRefreshing st)) $ do
+    State.modify (\s -> s {Types.stLastRefPoll = now})
+    MonadIO.liftIO . Monad.void . Concurrent.forkIO $ do
+      at <- Git.commitAt (Types.stRoot st) tip
+      Monad.when (at /= Types.stHead st) $
+        Monad.void (BChan.writeBChanNonBlocking (Types.stChan st) Types.GitStateChanged)
+
+pollCurrentFile :: Types.St -> Brick.EventM Types.Name Types.St ()
+pollCurrentFile st =
+  case Types.currentFileMay st of
+    Nothing -> pure ()
+    Just fv -> do
+      got <-
+        MonadIO.liftIO
+          ( Exception.try (Directory.getModificationTime (Types.stRoot st </> Types.fvPath fv)) ::
+              IO (Either Exception.IOException Clock.UTCTime)
+          )
+      case (got, Types.fvMtime fv) of
+        (Left _, _) -> pure ()
+        (Right mtime, Nothing) ->
+          State.modify (Verdict.updateFile (Types.stCurF st) (\f -> f {Types.fvMtime = Just mtime}))
+        (Right mtime, Just seen)
+          | mtime /= seen && not (Map.member (Types.fvPath fv) (Types.stReloading st)) ->
+              reloadFromDisk (Types.fvPath fv)
+          | otherwise -> pure ()
 
 -- Where the cursor's line went: the old buffer is diffed against the new
 -- one and the row mapped through it, so the cursor follows its content
@@ -517,12 +555,18 @@ refreshWork st = do
     root = Types.stRoot st
     existing = Map.fromList (map (\fv -> (Types.fvPath fv, fv)) (Types.stFiles st))
   rebaseNow <- Git.rebaseStatus root
-  branchNow <- Git.currentBranch root
-  headNow <- Git.headCommit root
   let
     mode = Types.rebaseEffMode rebaseNow (Types.stMode st)
+  (branchNow, headNow) <- Git.subjectPlace mode root
+  let
+    tipSettled = case Git.subjectOf mode of
+      Git.Ref _ -> headNow == Types.stHead st && mode == Types.stMode st
+      Git.WorkingTree -> False
     guarded name = do
-      got <- Exception.try (refreshOne st mode existing name)
+      got <-
+        if tipSettled && Map.member name existing
+          then pure (Right (Unchanged name))
+          else Exception.try (refreshOne st mode existing name)
       pure $ case got of
         Left e -> let _ = (e :: Exception.IOException) in Dropped
         Right r -> r
@@ -537,27 +581,49 @@ refreshWork st = do
 
 refreshOne :: Types.St -> Git.ReviewMode -> Map.Map FilePath Types.FileView -> FilePath -> IO Refreshed
 refreshOne st mode existing name =
+  case Map.lookup name existing of
+    Nothing -> reloadOne st mode name
+    Just fv ->
+      case Git.subjectOf mode of
+        Git.WorkingTree -> refreshWorking st mode name fv
+        Git.Ref tip -> refreshAtRef st mode tip name fv
+
+reloadOne :: Types.St -> Git.ReviewMode -> FilePath -> IO Refreshed
+reloadOne st mode name =
+  fmap
+    (maybe Dropped (Replaced . Verdict.recountIn st))
+    (loadOne (Types.stConfig st) (Types.stHls st) mode (Types.stRoot st) name)
+
+refreshWorking :: Types.St -> Git.ReviewMode -> FilePath -> Types.FileView -> IO Refreshed
+refreshWorking st mode name fv = do
   let
     root = Types.stRoot st
-    counted = Verdict.recountIn st
-    reload = fmap (maybe Dropped (Replaced . counted)) (loadOne (Types.stConfig st) (Types.stHls st) mode root name)
-  in
-    case Map.lookup name existing of
-      Nothing -> reload
-      Just fv -> do
-        -- a file that has come or gone since it was loaded is a
-        -- different kind of view than the one in hand, so it is
-        -- read afresh rather than patched
-        present <- Directory.doesFileExist (root </> name)
-        if present == Types.fvDeleted fv
-          then reload
-          else do
-            base <- Git.baseLines mode root name
-            if base == Types.fvBase fv
-              then pure (Unchanged name)
-              else do
-                (rebuilt, _) <- rebuildFV (Types.stConfig st) (Types.repoText st) fv {Types.fvBase = base}
-                pure (Replaced (counted rebuilt))
+  -- a file that has come or gone since it was loaded is a
+  -- different kind of view than the one in hand, so it is
+  -- read afresh rather than patched
+  present <- Directory.doesFileExist (root </> name)
+  if present == Types.fvDeleted fv
+    then reloadOne st mode name
+    else do
+      base <- Git.baseLines mode root name
+      if base == Types.fvBase fv
+        then pure (Unchanged name)
+        else do
+          (rebuilt, _) <- rebuildFV (Types.stConfig st) (Types.repoText st) fv {Types.fvBase = base}
+          pure (Replaced (Verdict.recountIn st rebuilt))
+
+refreshAtRef :: Types.St -> Git.ReviewMode -> T.Text -> FilePath -> Types.FileView -> IO Refreshed
+refreshAtRef st mode tip name fv = do
+  got <- Git.refContent (Types.stRoot st) tip name
+  base <- Git.baseLines mode (Types.stRoot st) name
+  let
+    shown = if Types.fvDeleted fv then Nothing else Just (Modal.bufferLines (Types.fvEd fv))
+    now = case got of
+      Just (Git.RefText ls) -> Just ls
+      _ -> Nothing
+  if now == shown && base == Types.fvBase fv
+    then pure (Unchanged name)
+    else reloadOne st mode name
 
 -- hand-opened files stay in the session even when the change set
 -- doesn't claim them; once git stops seeing a difference (say the
@@ -606,23 +672,38 @@ installRefresh before refresh = do
   latest <- State.get
   let
     current = Map.fromList (map (\fv -> (Types.fvPath fv, fv)) (Types.stFiles latest))
+    subject = Git.subjectOf (Types.effectiveMode latest)
     resolve r = case r of
       Dropped -> Nothing
       Unchanged path -> Map.lookup path current
-      Replaced fv -> Just (Verdict.recountIn latest (mergeLive current fv))
+      Replaced fv -> Just (Verdict.recountIn latest (mergeLive subject current fv))
     remaining = Maybe.mapMaybe resolve (rfResults refresh)
   Monad.forM_ remaining (MonadIO.liftIO . Types.stWatch latest . Types.fileDir (Types.stRoot latest) . Types.fvPath)
   Monad.when gitMoved (MonadIO.liftIO (Watch.watchTracked (Types.stWatch latest) (Types.stRoot latest)))
   applyChangeSet remaining
 
-mergeLive :: Map.Map FilePath Types.FileView -> Types.FileView -> Types.FileView
-mergeLive current fv =
+mergeLive :: Git.Subject -> Map.Map FilePath Types.FileView -> Types.FileView -> Types.FileView
+mergeLive subject current fv =
   case Map.lookup (Types.fvPath fv) current of
     Nothing -> fv
     Just live
       | Modal.bufferLines (Types.fvEd live) == Modal.bufferLines (Types.fvEd fv) ->
           fv {Types.fvEd = Types.fvEd live, Types.fvOrigin = Types.fvOrigin live}
-      | otherwise -> live {Types.fvBase = Types.fvBase fv, Types.fvStale = True}
+      | otherwise ->
+          case subject of
+            Git.WorkingTree -> live {Types.fvBase = Types.fvBase fv, Types.fvStale = True}
+            Git.Ref _ -> fv {Types.fvEd = cursorCarried live fv, Types.fvOrigin = Types.fvOrigin live}
+
+cursorCarried :: Types.FileView -> Types.FileView -> Modal.EdState
+cursorCarried live fresh = placeCursor (Modal.cursorRC (Types.fvEd live)) (Types.fvEd fresh)
+
+placeCursor :: (Int, Int) -> Modal.EdState -> Modal.EdState
+placeCursor (row, col) ed =
+  let
+    landing = max 0 (min row (Modal.bufferLineCount ed - 1))
+    width = maybe 0 T.length (Types.safeIdx (Modal.bufferLines ed) landing)
+  in
+    ed {Modal.edZipper = Z.moveCursor (landing, max 0 (min col width)) (Modal.edZipper ed)}
 
 applyChangeSet :: [Types.FileView] -> Brick.EventM Types.Name Types.St ()
 applyChangeSet remaining = do

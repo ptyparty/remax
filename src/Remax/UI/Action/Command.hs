@@ -180,10 +180,13 @@ runCommand input =
     ["checkout", branch] -> PickerAction.applyCheckout branch
     ["base", "branch"] -> Settings.setBaseBranch
     ["branch"] -> Settings.setBaseBranch
-    ["base", ref] -> Settings.setBase (Git.VsRef ref)
-    ["mode", "head"] -> Settings.setBase (Git.VsRef "HEAD")
-    ["mode", "unstaged"] -> Settings.setBase Git.VsIndex
-    ["mode", "untracked"] -> Settings.setBase Git.Untracked
+    ["base", ref] -> Settings.setBaseRef ref
+    ["mode", "head"] -> Settings.setMode (Git.VsRef "HEAD")
+    ["mode", "unstaged"] -> Settings.setMode Git.VsIndex
+    ["mode", "untracked"] -> Settings.setMode Git.Untracked
+    ["mode", "tree"] -> Settings.returnToTree
+    ["ref"] -> PickerAction.openRefPicker
+    ["ref", ref] -> Settings.setRef ref
     ["mode", other] ->
       Types.setMsg ("unknown mode " <> other <> " — head | unstaged | untracked")
     ["rebase"] -> Rebase.startRebase Nothing

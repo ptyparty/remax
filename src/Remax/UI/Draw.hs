@@ -47,7 +47,7 @@ draw st =
     menuRows = case DrawPrompt.promptMenu st of
       Just menu -> [menu]
       Nothing -> []
-    rebaseRows = case Types.stRebase st of
+    rebaseRows = case Types.rebaseShown st of
       Just rb -> [DrawHeader.rebaseBar rb]
       Nothing -> [DrawHeader.gitBar st]
     helpRows =

@@ -87,8 +87,9 @@ showCommitPopup :: Brick.EventM Types.Name Types.St ()
 showCommitPopup = do
   st <- State.get
   let
-    ref = case Types.stRebase st of
-      Just rb
+    ref = case (Git.subjectOf (Types.stMode st), Types.stRebase st) of
+      (Git.Ref tip, _) -> tip
+      (Git.WorkingTree, Just rb)
         | not (T.null (Git.rebaseSha rb)) -> Git.rebaseSha rb
       _ -> "HEAD"
   got <- MonadIO.liftIO (Git.commitMessage (Types.stRoot st) ref)
@@ -100,7 +101,7 @@ showCommitPopup = do
 -- cursor, or for every hunk a selection touches. The revert is an
 -- ordinary buffer edit, so u undoes it and the diff re-derives at once.
 revertTarget :: Brick.EventM Types.Name Types.St ()
-revertTarget = do
+revertTarget = Types.whenWritable $ do
   st <- State.get
   case Types.currentFileMay st of
     Nothing -> Types.setMsg "no file on screen"
@@ -207,16 +208,23 @@ clearVerdictBySelection = do
     Nothing -> clearVerdict Types.VerdictHunk
 
 -- The commit a verdict describes, when the session knows it: at a rebase
--- stop, HEAD is the commit under review. Ambient reviews record no
--- commit — agents recover one from the line text with git blame.
-verdictCommitContext :: Brick.EventM Types.Name Types.St (Maybe (T.Text, T.Text))
-verdictCommitContext = do
+-- stop, HEAD is the commit under review; reviewing a ref, the ref and the
+-- tip it pointed at. Ambient reviews record no commit — agents recover
+-- one from the line text with git blame.
+verdictOrigin :: Brick.EventM Types.Name Types.St Store.VerdictOrigin
+verdictOrigin = do
   st <- State.get
-  case Types.stRebase st of
-    Nothing -> pure Nothing
-    Just rb
-      | Git.rebaseConflicted rb -> pure Nothing
-      | otherwise -> MonadIO.liftIO (Git.headCommit (Types.stRoot st))
+  case Git.subjectOf (Types.effectiveMode st) of
+    Git.Ref tip ->
+      pure Store.VerdictOrigin {Store.originCommit = Types.stHead st, Store.originRef = Just tip}
+    Git.WorkingTree ->
+      case Types.stRebase st of
+        Nothing -> pure Store.noOrigin
+        Just rb
+          | Git.rebaseConflicted rb -> pure Store.noOrigin
+          | otherwise -> do
+              at <- MonadIO.liftIO (Git.headCommit (Types.stRoot st))
+              pure Store.noOrigin {Store.originCommit = at}
 
 -- Mark the whole current hunk and move on to the next pending one.
 applyVerdictHunk :: Store.Verdict -> Brick.EventM Types.Name Types.St Bool
@@ -242,8 +250,8 @@ applyVerdictHunk v = do
       let
         storeRow (k, l, n) = (k, path, l, n)
         rows = map storeRow (Nav.runChanges fv (Types.clampH rs (Types.stCurH st)))
-      mCommit <- verdictCommitContext
-      MonadIO.liftIO (Store.recordVerdicts (Types.stConn st) (Types.repoText st) (Types.stPassId st) v mCommit rows)
+      origin <- verdictOrigin
+      MonadIO.liftIO (Store.recordVerdicts (Types.stConn st) (Types.repoText st) (Types.stPassId st) v origin rows)
       Monad.when (v == Store.Reviewed) (Conversation.closeConversation (DiffModel.runKeys r))
       State.modify $ \s ->
         s
@@ -290,8 +298,8 @@ recordLineVerdicts v fv lo picks = do
     path = T.pack (Types.fvPath fv)
     storeRow (k, l, n) = (k, path, l, n)
     keys = map (\(k, _, _) -> k) picks
-  mCommit <- verdictCommitContext
-  MonadIO.liftIO (Store.recordVerdicts (Types.stConn st) (Types.repoText st) (Types.stPassId st) v mCommit (map storeRow picks))
+  origin <- verdictOrigin
+  MonadIO.liftIO (Store.recordVerdicts (Types.stConn st) (Types.repoText st) (Types.stPassId st) v origin (map storeRow picks))
   Monad.when (v == Store.Reviewed) (Conversation.closeConversation keys)
   State.modify $ \s ->
     s
@@ -389,7 +397,7 @@ cancelMark undoing = do
     rowsFor ks = filter (\(k, _, _, _) -> k `elem` ks) (Types.muRows undoing)
   Monad.unless (null fresh) $
     MonadIO.liftIO (Store.deleteKeys (Types.stConn st) (Types.repoText st) fresh)
-  mCommit <- verdictCommitContext
+  origin <- verdictOrigin
   Monad.forM_ (Map.toList replaced) $ \(v, ks) ->
     MonadIO.liftIO
       ( Store.recordVerdicts
@@ -397,7 +405,7 @@ cancelMark undoing = do
           (Types.repoText st)
           (Types.stPassId st)
           v
-          mCommit
+          origin
           (rowsFor ks)
       )
   State.modify $ \s ->
@@ -453,7 +461,7 @@ advanceToPending = do
 -- (:revert restoring the base, or typing into the buffer) may resurrect
 -- it, and that write is what stops the file being deleted.
 applyToDisk :: Int -> Brick.EventM Types.Name Types.St ()
-applyToDisk i = do
+applyToDisk i = Types.whenWritable $ do
   st <- State.get
   let
     fv = Types.stFiles st !! i
@@ -506,14 +514,14 @@ acceptPath rawPath = do
   if null targets
     then Types.setMsg ("nothing in the change set under " <> T.pack prefix)
     else do
-      mCommit <- verdictCommitContext
+      origin <- verdictOrigin
       MonadIO.liftIO
         ( Store.recordVerdicts
             (Types.stConn st)
             (Types.repoText st)
             (Types.stPassId st)
             Store.Reviewed
-            mCommit
+            origin
             rows
         )
       Conversation.resolveNotesInMemory keys

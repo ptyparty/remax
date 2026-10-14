@@ -35,6 +35,8 @@ remax                 # review everything uncommitted (working tree vs HEAD)
                       #   the first and offers the rest to :repo
 remax --base REF      # review the working tree against any ref
 remax --branch        # against the merge-base with the mainline (whole branch)
+remax --ref REF       # review REF itself, read-only, without checking it out
+                      # (against --base BASE, or its merge-base with the mainline)
 remax --unstaged      # working tree vs index
 remax --untracked     # new files only, reviewed as pure additions; ordinary
                       #   reviews already include them (:set untracked 0 to stop)
@@ -316,6 +318,8 @@ note popup keeps its modal keys in either keymap.
 | `:base` | pick the base out of the history: a picker over this branch's own line of development (`--first-parent`: a merge is one row, and what it brought in stays out) in aligned columns — short sha, how long ago, what points there (`HEAD -> main`, `tag: v1.0`), subject — with `HEAD` and `branch` on top. Type to filter on any of it, including a name too long to fit on screen, `⏎` reviews the working tree against the row you land on, and whatever you're reviewing against now is marked `← current`. Any commit reachable from HEAD is a legal base, so `:base SHA` still names one the picker leaves out |
 | `:base REF` | review the working tree against REF (any commit-ish) |
 | `:base branch` / `:branch` | against the merge-base with the mainline — the whole branch diff, fixes land at the tip |
+| `:ref` | pick a branch to review without checking it out: the session reads that ref's files instead of the working tree and refuses every edit, so an agent can keep working on whatever is checked out. The branch's own merge-base with the mainline is the base until `:base` says otherwise, and the view follows the branch as commits land on it. Verdicts record the ref and the tip they were made at, and `remax list` reports both so the agent knows where to look. The first row, `working tree`, is the way back; so is `:mode tree`, and both restore the base you had before |
+| `:ref REF` | the same, naming the ref |
 | `:mode head` / `:mode unstaged` / `:mode untracked` | the classic change sets |
 | `:rebase [REF]` | start a commit-by-commit review pass (below) |
 | `:continue` | fold this stop's edits into the stopped commit and advance — *everything* dirty at the stop counts, including edits made through `$EDITOR` or by an agent, since the stop started clean |

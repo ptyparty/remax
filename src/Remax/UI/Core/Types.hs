@@ -26,6 +26,9 @@ module Remax.UI.Core.Types
   , currentFileMay
   , rebaseEffMode
   , effectiveMode
+  , rebaseShown
+  , whenWritable
+  , readOnlyMsg
   , fileDir
   , clampH
   , safeIdx
@@ -97,7 +100,7 @@ data Prompt = SearchPrompt T.Text | CmdPrompt T.Text
 -- The finder overlay: fuzzy file picking, or project-wide grep. Each
 -- display row is aligned with a jump target (file, and a 1-based line
 -- for grep hits; 0 = just open the file).
-data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRepo
+data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRef | PickRepo
 
 data Picker = Picker
   { pkMode :: PickerMode
@@ -239,12 +242,14 @@ data St = St
   , stMsg :: T.Text
   , stRoot :: FilePath
   , stMode :: Git.ReviewMode
+  , stTreeMode :: Git.ReviewMode
   , stConn :: SQLite.Connection
   , stPassId :: DataInt.Int64
   , stCounts :: Map.Map Store.Verdict Int
   , stPunch :: [(FilePath, Int, Store.Verdict)]
   , stTray :: Bool
   , stLastGit :: Double
+  , stLastRefPoll :: Double
   , stGitQueued :: Bool
   , stChan :: BChan.BChan REvent
   , stWatch :: FilePath -> IO () -- watch one directory, once
@@ -328,14 +333,32 @@ currentFileMay st = safeIdx (stFiles st) (stCurF st)
 -- in the tree is the story.
 rebaseEffMode :: Maybe Git.RebaseStatus -> Git.ReviewMode -> Git.ReviewMode
 rebaseEffMode mRebase mode =
-  case mRebase of
-    Just rs
+  case (Git.subjectOf mode, mRebase) of
+    (Git.Ref _, _) -> mode
+    (Git.WorkingTree, Nothing) -> mode
+    (Git.WorkingTree, Just rs)
       | Git.rebaseConflicted rs -> Git.VsRef "HEAD"
       | otherwise -> Git.VsRef "HEAD^"
-    Nothing -> mode
 
 effectiveMode :: St -> Git.ReviewMode
 effectiveMode st = rebaseEffMode (stRebase st) (stMode st)
+
+rebaseShown :: St -> Maybe Git.RebaseStatus
+rebaseShown st =
+  case Git.subjectOf (stMode st) of
+    Git.WorkingTree -> stRebase st
+    Git.Ref _ -> Nothing
+
+whenWritable :: Brick.EventM Name St () -> Brick.EventM Name St ()
+whenWritable act = do
+  st <- State.get
+  case Git.subjectOf (effectiveMode st) of
+    Git.WorkingTree -> act
+    Git.Ref tip -> setMsg (readOnlyMsg tip)
+
+readOnlyMsg :: T.Text -> T.Text
+readOnlyMsg tip =
+  "reviewing " <> tip <> " read-only \8212 :mode tree returns to the working tree"
 
 -- The file watcher ---------------------------------------------------------
 

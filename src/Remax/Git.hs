@@ -2,16 +2,23 @@
 
 module Remax.Git
   ( ReviewMode (..)
+  , RefReview (..)
+  , Subject (..)
+  , subjectOf
+  , subjectPlace
   , modeLabel
   , repoRoot
   , changedFiles
   , reviewFiles
   , baseLines
+  , RefContent (..)
+  , refContent
   , looksBinary
   , refExists
   , readFileOr
   , mainlineRef
   , branchRoot
+  , branchRootOf
   , trackedChanges
   , hasStagedChanges
   , FileScope (..)
@@ -32,6 +39,7 @@ module Remax.Git
   , commitMessage
   , gitStateWatchDirs
   , headCommit
+  , commitAt
   , recentCommits
   , currentBranch
   , localBranches
@@ -56,16 +64,43 @@ import System.IO qualified as SysIO
 import System.IO.Error qualified as IOError
 import System.Process qualified as Process
 
--- What the working tree is reviewed against. The buffer on screen is
--- always the working file (that is what editing edits), so the mode picks
+-- What is reviewed against what. The buffer on screen is the working
+-- file (that is what editing edits) in every mode but AtRef, where it is
+-- the file as the ref holds it and nothing can be edited; the mode picks
 -- the base side of the diff:
 --   VsRef ref — everything different from ref in tracked files
 --               ("HEAD" is the classic uncommitted review; a merge-base
 --               gives the whole-branch review)
 --   VsIndex   — only what is not staged yet
 --   Untracked — new files, reviewed as pure additions
-data ReviewMode = VsRef T.Text | VsIndex | Untracked
+data ReviewMode = VsRef T.Text | VsIndex | Untracked | AtRef RefReview
   deriving (Eq, Show)
+
+data RefReview = RefReview
+  { rrTip :: T.Text
+  , rrBase :: T.Text
+  }
+  deriving (Eq, Show)
+
+data Subject = WorkingTree | Ref T.Text
+  deriving (Eq, Show)
+
+subjectOf :: ReviewMode -> Subject
+subjectOf mode =
+  case mode of
+    AtRef rr -> Ref (rrTip rr)
+    _ -> WorkingTree
+
+subjectPlace :: ReviewMode -> FilePath -> IO (Maybe T.Text, Maybe (T.Text, T.Text))
+subjectPlace mode root =
+  case subjectOf mode of
+    WorkingTree -> do
+      branch <- currentBranch root
+      tip <- headCommit root
+      pure (branch, tip)
+    Ref tip -> do
+      at <- commitAt root tip
+      pure (Just tip, at)
 
 modeLabel :: ReviewMode -> T.Text
 modeLabel mode =
@@ -74,6 +109,7 @@ modeLabel mode =
     VsRef ref -> "vs " <> ref
     VsIndex -> "unstaged"
     Untracked -> "untracked"
+    AtRef rr -> rrTip rr <> " vs " <> rrBase rr
 
 repoRoot :: IO (Maybe FilePath)
 repoRoot = do
@@ -97,6 +133,8 @@ changedFiles mode root = do
         ["-C", root, "diff", "--name-only", "--no-color"]
       Untracked ->
         ["-C", root, "ls-files", "--others", "--exclude-standard"]
+      AtRef rr ->
+        ["-C", root, "diff", "--name-only", "--no-color", T.unpack (rrBase rr), T.unpack (rrTip rr)]
   (code, out, _) <- Process.readProcessWithExitCode "git" args ""
   pure $ case code of
     Exit.ExitSuccess -> filter (not . null) (lines out)
@@ -118,7 +156,7 @@ reviewFiles mode withNew root = do
   changed <- changedFiles mode root
   let
     -- Untracked mode is already nothing but new files
-    wanted = withNew && mode /= Untracked
+    wanted = withNew && mode /= Untracked && subjectOf mode == WorkingTree
   if not wanted
     then pure changed
     else do
@@ -139,12 +177,34 @@ baseLines mode root path =
       let
         ref = case mode of
           VsRef r -> T.unpack r ++ ":"
+          AtRef rr -> T.unpack (rrBase rr) ++ ":"
           _ -> ":"
       (code, out, _) <-
         Process.readProcessWithExitCode "git" ["-C", root, "show", ref ++ path] ""
       pure $ case code of
         Exit.ExitSuccess -> T.lines (T.pack out)
         Exit.ExitFailure _ -> []
+
+data RefContent = RefBinary | RefText [T.Text]
+  deriving (Eq, Show)
+
+refContent :: FilePath -> T.Text -> FilePath -> IO (Maybe RefContent)
+refContent root ref path = do
+  let
+    spec = Process.proc "git" ["-C", root, "show", T.unpack ref ++ ":" ++ path]
+  (bytes, code) <-
+    SysIO.withFile "/dev/null" SysIO.WriteMode $ \devNull -> do
+      (_, mOut, _, ph) <-
+        Process.createProcess
+          spec {Process.std_out = Process.CreatePipe, Process.std_err = Process.UseHandle devNull}
+      out <- maybe (pure BS.empty) BS.hGetContents mOut
+      done <- Process.waitForProcess ph
+      pure (out, done)
+  pure $ case code of
+    Exit.ExitFailure _ -> Nothing
+    Exit.ExitSuccess
+      | BS.elem 0 (BS.take 8000 bytes) -> Just RefBinary
+      | otherwise -> Just (RefText (T.lines (TE.decodeUtf8With TEE.lenientDecode bytes)))
 
 -- NUL in the first 8k is the same heuristic git uses. Only those 8k are
 -- read: the caller reads the whole file straight afterwards, and pulling
@@ -355,7 +415,11 @@ pathStats mode root = do
       let
         refArgs = case mode of
           VsRef ref -> [T.unpack ref]
+          AtRef rr -> [T.unpack (rrBase rr), T.unpack (rrTip rr)]
           _ -> []
+        newFiles = case subjectOf mode of
+          WorkingTree -> untracked
+          Ref _ -> Map.empty
         diffFields kind = do
           (code, out, _) <-
             Process.readProcessWithExitCode
@@ -370,7 +434,7 @@ pathStats mode root = do
       let
         stat path change =
           PathStat change (Map.findWithDefault Nothing path counts)
-      pure (Map.union (Map.mapWithKey stat changes) untracked)
+      pure (Map.union (Map.mapWithKey stat changes) newFiles)
 
 untrackedFiles :: FilePath -> IO [FilePath]
 untrackedFiles root = do
@@ -487,7 +551,10 @@ mainlineRef root =
 -- Where the current branch forked from the mainline: the whole-branch
 -- review base.
 branchRoot :: FilePath -> IO (Either T.Text T.Text)
-branchRoot root = do
+branchRoot root = branchRootOf root "HEAD"
+
+branchRootOf :: FilePath -> T.Text -> IO (Either T.Text T.Text)
+branchRootOf root tip = do
   mMain <- mainlineRef root
   case mMain of
     Nothing -> pure (Left "no mainline ref found (origin/main, origin/master, main, master)")
@@ -495,7 +562,7 @@ branchRoot root = do
       (code, out, err) <-
         Process.readProcessWithExitCode
           "git"
-          ["-C", root, "merge-base", "HEAD", T.unpack mainline]
+          ["-C", root, "merge-base", T.unpack tip, T.unpack mainline]
           ""
       pure $ case code of
         Exit.ExitSuccess -> Right (T.strip (T.pack out))
@@ -731,8 +798,8 @@ localBranches root = do
 -- %D is git's own decoration -- "HEAD -> main, origin/main", empty when
 -- nothing points here -- which is how the picker answers "where is HEAD"
 -- and "which of these is a branch tip".
-recentCommits :: Int -> FilePath -> IO [(T.Text, T.Text, T.Text, T.Text)]
-recentCommits n root = do
+recentCommits :: Int -> T.Text -> FilePath -> IO [(T.Text, T.Text, T.Text, T.Text)]
+recentCommits n from root = do
   (code, out, _) <-
     Process.readProcessWithExitCode
       "git"
@@ -743,6 +810,8 @@ recentCommits n root = do
       , "--format=%h%x09%ar%x09%D%x09%s"
       , "-n"
       , show n
+      , T.unpack from
+      , "--"
       ]
       ""
   pure $ case code of
@@ -759,11 +828,14 @@ fourFields line =
     _ -> Nothing
 
 headCommit :: FilePath -> IO (Maybe (T.Text, T.Text))
-headCommit root = do
+headCommit root = commitAt root "HEAD"
+
+commitAt :: FilePath -> T.Text -> IO (Maybe (T.Text, T.Text))
+commitAt root ref = do
   (code, out, _) <-
     Process.readProcessWithExitCode
       "git"
-      ["-C", root, "log", "-1", "--format=%h%x09%s"]
+      ["-C", root, "log", "-1", "--format=%h%x09%s", T.unpack ref, "--"]
       ""
   pure $ case code of
     Exit.ExitFailure _ -> Nothing

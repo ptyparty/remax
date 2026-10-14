@@ -72,8 +72,7 @@ switchRepo target = do
               threads <- Store.loadThreads conn (T.pack target)
               groups <- Store.loadNoteGroups conn (T.pack target)
               rebase <- Git.rebaseStatus target
-              branch <- Git.currentBranch target
-              headAt <- Git.headCommit target
+              (branch, headAt) <- Git.subjectPlace (Types.rebaseEffMode rebase mode) target
               files <-
                 fmap
                   (map (Verdict.recountFile verdicts threads))
@@ -133,6 +132,9 @@ arriveAt target remembered saved mode passId loaded = do
       , Types.stHead = headAt
       , Types.stPassId = passId
       , Types.stMode = mode
+      , Types.stTreeMode = case Git.subjectOf mode of
+          Git.WorkingTree -> mode
+          Git.Ref _ -> Git.VsRef "HEAD"
       , Types.stPlaces = saved
       , -- it listed the repository we just left; bringing it back
         -- here would offer files that are not in front of us

@@ -19,6 +19,7 @@ import Graphics.Vty qualified as V
 import Remax.Clipboard qualified as Clipboard
 import Remax.Config qualified as Config
 import Remax.Emacs qualified as Emacs
+import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
 import Remax.UI.Action.Command qualified as Command
@@ -144,7 +145,7 @@ handleEvent brickEvent =
       State.modify (\s -> s {Types.stThreads = threads, Types.stNoteGroups = groups})
     Brick.AppEvent (Types.Attending seen) -> do
       State.modify (\s -> s {Types.stAttending = seen, Types.stThrob = Types.stThrob s + 1})
-      Load.pollCurrentFile
+      Load.pollSubject
     Brick.AppEvent Types.Tick -> Nav.scrollHunkIntoView
     Brick.AppEvent Types.Pulse -> State.modify (\s -> s {Types.stThrob = Types.stThrob s + 1})
     Brick.AppEvent (Types.JobDone label finish) -> do
@@ -321,13 +322,23 @@ handleEmacsKey i ed ev = do
 emacsEdit :: Int -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()
 emacsEdit i ed ev =
   case Emacs.handleEmacs ev ed of
-    Just edNext ->
-      if Modal.bufferLines edNext /= Modal.bufferLines ed
-        then do
-          Load.rebuildWith i edNext
-          VerdictAction.applyToDisk i
-        else Nav.setEd i edNext
+    Just edNext -> applyEdit i ed edNext
     Nothing -> pure ()
+
+applyEdit :: Int -> Modal.EdState -> Modal.EdState -> Brick.EventM Types.Name Types.St ()
+applyEdit i ed edNext = do
+  st <- State.get
+  let
+    changed = Modal.bufferLines edNext /= Modal.bufferLines ed
+    entering = Modal.edMode edNext == Modal.Insert && Modal.edMode ed /= Modal.Insert
+  case Git.subjectOf (Types.effectiveMode st) of
+    Git.Ref tip
+      | changed || entering -> Types.setMsg (Types.readOnlyMsg tip)
+    _
+      | changed -> do
+          Load.rebuildWith i edNext
+          Monad.when (Modal.edMode edNext == Modal.Normal) (VerdictAction.applyToDisk i)
+      | otherwise -> Nav.setEd i edNext
 
 handleEmacsPrefixed :: Char -> V.Event -> Brick.EventM Types.Name Types.St ()
 handleEmacsPrefixed pfx ev = do
@@ -519,11 +530,7 @@ deferToVi i ed ev = do
     Vi.ViPending keys -> State.modify (\s -> s {Types.stVi = keys})
     Vi.ViDone keys edNext -> do
       State.modify (\s -> s {Types.stVi = keys})
-      if Modal.bufferLines edNext /= Modal.bufferLines ed
-        then do
-          Load.rebuildWith i edNext
-          Monad.when (Modal.edMode edNext == Modal.Normal) (VerdictAction.applyToDisk i)
-        else Nav.setEd i edNext
+      applyEdit i ed edNext
 
 -- A paste key, whichever keymap asked: consult the system clipboard,
 -- then hand the key to the editor with the slot already refreshed. An
@@ -551,10 +558,5 @@ pasteKey deliver i ev = do
 deferToModal :: Int -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()
 deferToModal i ed ev =
   case Modal.handleNormal ev ed of
-    Just edNext ->
-      if Modal.bufferLines edNext /= Modal.bufferLines ed
-        then do
-          Load.rebuildWith i edNext
-          Monad.when (Modal.edMode edNext == Modal.Normal) (VerdictAction.applyToDisk i)
-        else Nav.setEd i edNext
+    Just edNext -> applyEdit i ed edNext
     Nothing -> pure ()
