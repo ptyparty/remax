@@ -42,7 +42,12 @@ module Remax.Git
   , gitStateWatchDirs
   , headCommit
   , commitAt
+  , commitParents
+  , resolveShort
+  , emptyTreeRef
+  , pickableRefs
   , recentCommits
+  , branchCommits
   , currentBranch
   , localBranches
   , runGit
@@ -119,7 +124,9 @@ modeLabel mode =
     VsRef ref -> "vs " <> ref
     VsIndex -> "unstaged"
     Untracked -> "untracked"
-    AtRef rr -> rrTip rr <> " vs " <> rrBase rr
+    AtRef rr
+      | rrBase rr == emptyTreeRef -> rrTip rr <> " vs nothing"
+      | otherwise -> rrTip rr <> " vs " <> rrBase rr
 
 repoRoot :: IO (Maybe FilePath)
 repoRoot = do
@@ -795,6 +802,50 @@ localBranches root = do
     Exit.ExitFailure _ -> []
     Exit.ExitSuccess -> Maybe.mapMaybe fourFields (T.lines (T.pack out))
 
+commitParents :: FilePath -> T.Text -> IO [(T.Text, T.Text)]
+commitParents root ref = do
+  (code, out, _) <-
+    Process.readProcessWithExitCode
+      "git"
+      ["-C", root, "log", "-1", "--format=%P", T.unpack ref, "--"]
+      ""
+  case code of
+    Exit.ExitFailure _ -> pure []
+    Exit.ExitSuccess -> fmap Maybe.catMaybes (mapM (commitAt root) (T.words (T.pack out)))
+
+resolveShort :: FilePath -> T.Text -> IO (Maybe T.Text)
+resolveShort root ref = do
+  (code, out, _) <-
+    Process.readProcessWithExitCode
+      "git"
+      ["-C", root, "rev-parse", "--short=10", "--verify", "--quiet", T.unpack ref ++ "^{commit}"]
+      ""
+  pure $ case (code, T.strip (T.pack out)) of
+    (Exit.ExitSuccess, sha) | not (T.null sha) -> Just sha
+    _ -> Nothing
+
+emptyTreeRef :: T.Text
+emptyTreeRef = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+pickableRefs :: FilePath -> IO [(T.Text, T.Text, T.Text, T.Text)]
+pickableRefs root = do
+  (code, out, _) <-
+    Process.readProcessWithExitCode
+      "git"
+      [ "-C"
+      , root
+      , "for-each-ref"
+      , "--sort=-creatordate"
+      , "--format=%(refname:short)%09%(creatordate:relative)%09%(objectname:short)%09%(contents:subject)"
+      , "refs/heads"
+      , "refs/remotes"
+      , "refs/tags"
+      ]
+      ""
+  pure $ case code of
+    Exit.ExitFailure _ -> []
+    Exit.ExitSuccess -> Maybe.mapMaybe fourFields (T.lines (T.pack out))
+
 -- Recent history for the base picker: short sha, how long ago, subject.
 -- Newest first, which is the order the picker keeps when nothing is
 -- typed.
@@ -809,20 +860,32 @@ localBranches root = do
 -- nothing points here -- which is how the picker answers "where is HEAD"
 -- and "which of these is a branch tip".
 recentCommits :: Int -> T.Text -> FilePath -> IO [(T.Text, T.Text, T.Text, T.Text)]
-recentCommits n from root = do
+recentCommits n from root = logCommits n [T.unpack from] root
+
+branchCommits :: Int -> T.Text -> FilePath -> IO [(T.Text, T.Text, T.Text, T.Text)]
+branchCommits n tip root = do
+  forked <- branchRootOf root tip
+  own <- case forked of
+    Left _ -> pure []
+    Right base -> logCommits n [T.unpack base ++ ".." ++ T.unpack tip] root
+  if null own then recentCommits n tip root else pure own
+
+logCommits :: Int -> [String] -> FilePath -> IO [(T.Text, T.Text, T.Text, T.Text)]
+logCommits n revs root = do
   (code, out, _) <-
     Process.readProcessWithExitCode
       "git"
-      [ "-C"
-      , root
-      , "log"
-      , "--first-parent"
-      , "--format=%h%x09%ar%x09%D%x09%s"
-      , "-n"
-      , show n
-      , T.unpack from
-      , "--"
-      ]
+      ( [ "-C"
+        , root
+        , "log"
+        , "--first-parent"
+        , "--format=%h%x09%ar%x09%D%x09%s"
+        , "-n"
+        , show n
+        ]
+          ++ revs
+          ++ ["--"]
+      )
       ""
   pure $ case code of
     Exit.ExitFailure _ -> []

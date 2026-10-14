@@ -100,7 +100,7 @@ data Prompt = SearchPrompt T.Text | CmdPrompt T.Text
 -- The finder overlay: fuzzy file picking, or project-wide grep. Each
 -- display row is aligned with a jump target (file, and a 1-based line
 -- for grep hits; 0 = just open the file).
-data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRef | PickRepo
+data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRef | PickCommit | PickParent T.Text | PickRepo
 
 data Picker = Picker
   { pkMode :: PickerMode
@@ -109,6 +109,7 @@ data Picker = Picker
   , pkMatches :: [T.Text]
   , pkTargets :: [(FilePath, Int)]
   , pkSel :: Int
+  , pkExpanded :: Set.Set T.Text
   }
 
 -- The selector that was last on screen, kept whole so it can be brought

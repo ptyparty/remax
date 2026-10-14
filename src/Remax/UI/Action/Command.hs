@@ -214,7 +214,9 @@ runCommand input =
     ["help"] -> Types.showHelp
     ["repo"] -> PickerAction.openRepoPicker
     ["repo", name] -> switchRepoNamed name
-    ["commit"] -> VerdictAction.showCommitPopup
+    ["commit"] -> PickerAction.openCommitPicker
+    ["commit", ref] -> PickerAction.reviewCommit ref
+    ["message"] -> VerdictAction.showCommitPopup
     ("grep" : rest) -> PickerAction.openGrepPicker (T.unwords rest)
     ["edit"] -> Editor.editCurrent
     ["edit", path] -> editPath path

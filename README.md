@@ -320,6 +320,9 @@ note popup keeps its modal keys in either keymap.
 | `:base branch` / `:branch` | against the merge-base with the mainline — the whole branch diff, fixes land at the tip |
 | `:ref` | pick a branch to review without checking it out: the session reads that ref's files instead of the working tree and refuses every edit, so an agent can keep working on whatever is checked out. The branch's own merge-base with the mainline is the base until `:base` says otherwise, and the view follows the branch as commits land on it. Verdicts record the ref and the tip they were made at, and `remax list` reports both so the agent knows where to look. The first row, `working tree`, is the way back; so is `:mode tree`, and both restore the base you had before |
 | `:ref REF` | the same, naming the ref |
+| `:commit` | review one commit: a picker over every branch, remote branch and tag, newest first. `⏎` on a ref unfolds the commits it adds over the mainline beneath it (the mainline itself unfolds to its recent history); `⏎` on a commit reviews that commit against its parent, read-only, the same way `:ref` does. A merge asks which parent |
+| `:commit REF` | the same, naming the commit (any commit-ish, so `HEAD~2` and tag names work) |
+| `:message` | the full message of the commit under review, as `Space c` shows it |
 | `:mode head` / `:mode unstaged` / `:mode untracked` | the classic change sets |
 | `:rebase [REF]` | start a commit-by-commit review pass (below) |
 | `:continue` | fold this stop's edits into the stopped commit and advance — *everything* dirty at the stop counts, including edits made through `$EDITOR` or by an agent, since the stop started clean |

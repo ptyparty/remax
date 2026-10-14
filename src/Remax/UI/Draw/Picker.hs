@@ -63,6 +63,8 @@ pickerTitle mode =
     Types.PickBase -> "base"
     Types.PickBranch -> "checkout"
     Types.PickRef -> "ref"
+    Types.PickCommit -> "commit"
+    Types.PickParent _ -> "parent"
     Types.PickRepo -> "repo"
     Types.PickGrep -> "grep"
 
@@ -72,5 +74,7 @@ pickerHint mode =
     Types.PickBase -> "\8593\8595 move · \9166 review against this · esc closes"
     Types.PickBranch -> "\8593\8595 move · \9166 checks out · esc closes"
     Types.PickRef -> "\8593\8595 move · \9166 review this ref without checking it out · esc closes"
+    Types.PickCommit -> "\8593\8595 move · \9166 opens a ref's history, or reviews a commit against its parent · esc closes"
+    Types.PickParent _ -> "\8593\8595 move · \9166 review against this parent · esc closes"
     Types.PickRepo -> "\8593\8595 move · \9166 switch to this repository · esc closes"
     _ -> "\8593\8595 move · \9166 open · esc closes"
