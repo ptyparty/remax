@@ -101,7 +101,7 @@ showCommitPopup = do
 -- cursor, or for every hunk a selection touches. The revert is an
 -- ordinary buffer edit, so u undoes it and the diff re-derives at once.
 revertTarget :: Brick.EventM Types.Name Types.St ()
-revertTarget = Types.whenWritable $ do
+revertTarget = Types.whenWritable $ \grant -> do
   st <- State.get
   case Types.currentFileMay st of
     Nothing -> Types.setMsg "no file on screen"
@@ -110,7 +110,7 @@ revertTarget = Types.whenWritable $ do
       | Set.null (revertTargets st fv) -> Types.setMsg "nothing to revert here"
       | otherwise -> do
           Load.rebuildWith (Types.stCurF st) (revertedBuffer fv (revertTargets st fv))
-          applyToDisk (Types.stCurF st)
+          applyToDisk grant (Types.stCurF st)
           Types.setMsg "\10226 reverted to base"
 
 -- Which hunks the revert reaches: the ones a selection touches, or the
@@ -460,8 +460,8 @@ advanceToPending = do
 -- and call that an edit. Nothing but content deliberately put back
 -- (:revert restoring the base, or typing into the buffer) may resurrect
 -- it, and that write is what stops the file being deleted.
-applyToDisk :: Int -> Brick.EventM Types.Name Types.St ()
-applyToDisk i = Types.whenWritable $ do
+applyToDisk :: Git.Writable -> Int -> Brick.EventM Types.Name Types.St ()
+applyToDisk _ i = do
   st <- State.get
   let
     fv = Types.stFiles st !! i

@@ -89,8 +89,8 @@ tryFileIO act = do
 -- rename in the diff instead of arriving as an unrelated delete and add.
 -- Everything else — new files, anything untracked, anything ignored —
 -- is plain filesystem work.
-runFileAction :: FilePath -> Types.FileAction -> FilePath -> IO (Either T.Text T.Text)
-runFileAction root action rel = do
+runFileAction :: Git.Writable -> FilePath -> Types.FileAction -> FilePath -> IO (Either T.Text T.Text)
+runFileAction grant root action rel = do
   let
     full = root </> rel
     named = T.pack rel
@@ -117,7 +117,7 @@ runFileAction root action rel = do
           if tracked
             then do
               Directory.createDirectoryIfMissing True (FilePath.takeDirectory full)
-              fmap (fmap (const done)) (Git.runGit root ["mv", "--", src, rel])
+              fmap (fmap (const done)) (Git.runGit grant root ["mv", "--", src, rel])
             else tryFileIO $ do
               Directory.createDirectoryIfMissing True (FilePath.takeDirectory full)
               Directory.renamePath (root </> src) full
@@ -134,15 +134,15 @@ runFileAction root action rel = do
               Directory.copyFile (root </> src) full
               pure ("copied to " <> named)
 
-runDelete :: FilePath -> FilePath -> IO (Either T.Text T.Text)
-runDelete root rel = do
+runDelete :: Git.Writable -> FilePath -> FilePath -> IO (Either T.Text T.Text)
+runDelete grant root rel = do
   let
     full = root </> rel
     done = "deleted " <> T.pack rel
   tracked <- Git.isTracked root rel
   isDir <- Directory.doesDirectoryExist full
   if tracked
-    then fmap (fmap (const done)) (Git.runGit root ["rm", "-r", "-f", "--", rel])
+    then fmap (fmap (const done)) (Git.runGit grant root ["rm", "-r", "-f", "--", rel])
     else tryFileIO $ do
       if isDir then Directory.removeDirectoryRecursive full else Directory.removeFile full
       pure done

@@ -19,7 +19,6 @@ import Graphics.Vty qualified as V
 import Remax.Clipboard qualified as Clipboard
 import Remax.Config qualified as Config
 import Remax.Emacs qualified as Emacs
-import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
 import Remax.UI.Action.Command qualified as Command
@@ -327,18 +326,17 @@ emacsEdit i ed ev =
 
 applyEdit :: Int -> Modal.EdState -> Modal.EdState -> Brick.EventM Types.Name Types.St ()
 applyEdit i ed edNext = do
-  st <- State.get
   let
     changed = Modal.bufferLines edNext /= Modal.bufferLines ed
     entering = Modal.edMode edNext == Modal.Insert && Modal.edMode ed /= Modal.Insert
-  case Git.subjectOf (Types.effectiveMode st) of
-    Git.Ref tip
-      | changed || entering -> Types.setMsg (Types.readOnlyMsg tip)
-    _
-      | changed -> do
+  if not (changed || entering)
+    then Nav.setEd i edNext
+    else Types.whenWritable $ \grant ->
+      if changed
+        then do
           Load.rebuildWith i edNext
-          Monad.when (Modal.edMode edNext == Modal.Normal) (VerdictAction.applyToDisk i)
-      | otherwise -> Nav.setEd i edNext
+          Monad.when (Modal.edMode edNext == Modal.Normal) (VerdictAction.applyToDisk grant i)
+        else Nav.setEd i edNext
 
 handleEmacsPrefixed :: Char -> V.Event -> Brick.EventM Types.Name Types.St ()
 handleEmacsPrefixed pfx ev = do
@@ -347,7 +345,7 @@ handleEmacsPrefixed pfx ev = do
     'x' ->
       case ev of
         V.EvKey (V.KChar 'c') [V.MCtrl] -> Brick.halt
-        V.EvKey (V.KChar 's') [V.MCtrl] -> VerdictAction.applyToDisk (Types.stCurF st)
+        V.EvKey (V.KChar 's') [V.MCtrl] -> Types.whenWritable (\grant -> VerdictAction.applyToDisk grant (Types.stCurF st))
         _ -> pure ()
     _ ->
       case ev of
@@ -410,7 +408,7 @@ handleInsertKey i ed ev =
             else Load.rebuildWith i edNext
     Modal.InsertExit edNext -> do
       Load.rebuildWith i edNext
-      VerdictAction.applyToDisk i
+      Types.whenWritable (\grant -> VerdictAction.applyToDisk grant i)
     Modal.InsertUnhandled -> pure ()
 
 handleHelixKey :: Int -> Types.FileView -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()
@@ -468,7 +466,8 @@ helixNormalKey i fv ed ev = do
     V.EvKey (V.KChar 'p') [] -> pasteKey deferToModal i ev
     V.EvKey (V.KChar 'P') [] -> pasteKey deferToModal i ev
     V.EvKey (V.KChar ' ') [] -> State.modify (\s -> s {Types.stSpace = True})
-    V.EvKey (V.KChar 'E') [] -> Editor.launchEditor (Types.stRoot st </> Types.fvPath fv) (fst (Modal.cursorRC ed) + 1)
+    V.EvKey (V.KChar 'E') [] ->
+      Types.whenWritable (\grant -> Editor.launchEditor grant (Types.stRoot st </> Types.fvPath fv) (fst (Modal.cursorRC ed) + 1))
     V.EvKey (V.KChar ')') [] -> Open.switchFile 1
     V.EvKey (V.KChar '(') [] -> Open.switchFile (-1)
     V.EvKey (V.KChar 'p') [V.MCtrl] -> TreeAction.openFileFinder

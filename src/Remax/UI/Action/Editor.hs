@@ -12,6 +12,7 @@ import Control.Monad qualified as Monad
 import Control.Monad.State qualified as State
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
+import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
 import Remax.UI.Core.Types qualified as Types
 import System.Environment qualified as Env
@@ -20,19 +21,19 @@ import System.FilePath qualified as FilePath
 import System.Process qualified as Process
 
 editCurrent :: Brick.EventM Types.Name Types.St ()
-editCurrent = do
+editCurrent = Types.whenWritable $ \grant -> do
   st <- State.get
   case Types.currentFileMay st of
     Nothing -> Types.setMsg "no file on screen — :edit PATH opens one"
     Just fv -> do
       let
         (row, _) = Modal.cursorRC (Types.fvEd fv)
-      launchEditor (Types.stRoot st </> Types.fvPath fv) (row + 1)
+      launchEditor grant (Types.stRoot st </> Types.fvPath fv) (row + 1)
 
 -- Suspend the TUI, run the user's editor on the file at the given line,
 -- and come back; the watcher reloads whatever the editor wrote.
-launchEditor :: FilePath -> Int -> Brick.EventM Types.Name Types.St ()
-launchEditor file line = Types.whenWritable $ do
+launchEditor :: Git.Writable -> FilePath -> Int -> Brick.EventM Types.Name Types.St ()
+launchEditor _ file line = do
   st <- State.get
   Brick.suspendAndResume $ do
     (cmd, args) <- editorInvocation file line

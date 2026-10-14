@@ -236,6 +236,6 @@ switchRepoNamed name = do
     [] -> Types.setMsg ("no repository called " <> name <> " here")
 
 editPath :: T.Text -> Brick.EventM Types.Name Types.St ()
-editPath path = do
+editPath path = Types.whenWritable $ \grant -> do
   st <- State.get
-  Editor.launchEditor (Types.stRoot st </> T.unpack path) 1
+  Editor.launchEditor grant (Types.stRoot st </> T.unpack path) 1

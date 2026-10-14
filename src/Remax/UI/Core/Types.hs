@@ -349,12 +349,12 @@ rebaseShown st =
     Git.WorkingTree -> stRebase st
     Git.Ref _ -> Nothing
 
-whenWritable :: Brick.EventM Name St () -> Brick.EventM Name St ()
+whenWritable :: (Git.Writable -> Brick.EventM Name St ()) -> Brick.EventM Name St ()
 whenWritable act = do
   st <- State.get
-  case Git.subjectOf (effectiveMode st) of
-    Git.WorkingTree -> act
-    Git.Ref tip -> setMsg (readOnlyMsg tip)
+  case Git.writable (effectiveMode st) of
+    Right grant -> act grant
+    Left tip -> setMsg (readOnlyMsg tip)
 
 readOnlyMsg :: T.Text -> T.Text
 readOnlyMsg tip =
