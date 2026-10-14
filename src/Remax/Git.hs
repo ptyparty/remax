@@ -5,6 +5,8 @@ module Remax.Git
   , RefReview (..)
   , Subject (..)
   , subjectOf
+  , Writable
+  , writable
   , subjectPlace
   , modeLabel
   , repoRoot
@@ -90,6 +92,14 @@ subjectOf mode =
   case mode of
     AtRef rr -> Ref (rrTip rr)
     _ -> WorkingTree
+
+data Writable = Writable
+
+writable :: ReviewMode -> Either T.Text Writable
+writable mode =
+  case subjectOf mode of
+    WorkingTree -> Right Writable
+    Ref tip -> Left tip
 
 subjectPlace :: ReviewMode -> FilePath -> IO (Maybe T.Text, Maybe (T.Text, T.Text))
 subjectPlace mode root =
@@ -851,8 +861,8 @@ commitAt root ref = do
 -- stderr so the UI can show it. GIT_EDITOR is forced non-interactive:
 -- these run underneath a live TUI, where an editor popping up would
 -- wedge the terminal.
-runGit :: FilePath -> [String] -> IO (Either T.Text ())
-runGit root args = do
+runGit :: Writable -> FilePath -> [String] -> IO (Either T.Text ())
+runGit _ root args = do
   environment <- Env.getEnvironment
   let
     p =

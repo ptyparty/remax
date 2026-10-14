@@ -37,7 +37,7 @@ rebaseStopMsg rb =
 -- pauses the sequencer after every commit (the failing exec is the stop
 -- mechanism), and rebase awareness takes over from there.
 startRebase :: Maybe T.Text -> Brick.EventM Types.Name Types.St ()
-startRebase mRef = Types.whenWritable $ do
+startRebase mRef = Types.whenWritable $ \grant -> do
   st <- State.get
   case Types.stRebase st of
     Just _ -> Types.setMsg "a rebase is already in progress — :continue or :abort!"
@@ -56,7 +56,7 @@ startRebase mRef = Types.whenWritable $ do
           case target of
             Left e -> Types.setMsg e
             Right ref -> do
-              res <- MonadIO.liftIO (Git.runGit (Types.stRoot st) ["rebase", "--exec", "false", T.unpack ref])
+              res <- MonadIO.liftIO (Git.runGit grant (Types.stRoot st) ["rebase", "--exec", "false", T.unpack ref])
               rb <- MonadIO.liftIO (Git.rebaseStatus (Types.stRoot st))
               State.modify (\s -> s {Types.stRebase = rb, Types.stWritten = Set.empty})
               case rb of
@@ -72,7 +72,7 @@ startRebase mRef = Types.whenWritable $ do
 -- stop has no commit yet, so --continue makes it; an exec stop already
 -- committed, so the edits are amended in first.
 continueRebase :: Brick.EventM Types.Name Types.St ()
-continueRebase = Types.whenWritable $ do
+continueRebase = Types.whenWritable $ \grant -> do
   st <- State.get
   case Types.stRebase st of
     Nothing -> Types.setMsg "no rebase in progress"
@@ -83,18 +83,18 @@ continueRebase = Types.whenWritable $ do
       -- is this stop's fix — including edits made through $EDITOR or by
       -- an agent, which never pass through remax's own write path
       folded <- MonadIO.liftIO $ do
-        addRes <- Git.runGit root ["add", "-A"]
+        addRes <- Git.runGit grant root ["add", "-A"]
         case addRes of
           Left e -> pure (Left e)
           Right () -> do
             staged <- Git.hasStagedChanges root
             if not (Git.rebaseConflicted rb) && staged
-              then Git.runGit root ["commit", "--amend", "--no-edit"]
+              then Git.runGit grant root ["commit", "--amend", "--no-edit"]
               else pure (Right ())
       case folded of
         Left e -> Types.setMsg e
         Right () -> do
-          res <- MonadIO.liftIO (Git.runGit root ["rebase", "--continue"])
+          res <- MonadIO.liftIO (Git.runGit grant root ["rebase", "--continue"])
           rbNext <- MonadIO.liftIO (Git.rebaseStatus root)
           State.modify (\s -> s {Types.stRebase = rbNext, Types.stWritten = Set.empty})
           Load.forceGitRefresh
@@ -113,12 +113,12 @@ continueRebase = Types.whenWritable $ do
                 else Types.setMsg (rebaseStopMsg next)
 
 abortRebase :: Brick.EventM Types.Name Types.St ()
-abortRebase = Types.whenWritable $ do
+abortRebase = Types.whenWritable $ \grant -> do
   st <- State.get
   case Types.stRebase st of
     Nothing -> Types.setMsg "no rebase in progress"
     Just _ -> do
-      res <- MonadIO.liftIO (Git.runGit (Types.stRoot st) ["rebase", "--abort"])
+      res <- MonadIO.liftIO (Git.runGit grant (Types.stRoot st) ["rebase", "--abort"])
       rbNext <- MonadIO.liftIO (Git.rebaseStatus (Types.stRoot st))
       State.modify (\s -> s {Types.stRebase = rbNext, Types.stWritten = Set.empty})
       Load.forceGitRefresh
@@ -133,7 +133,7 @@ abortRebase = Types.whenWritable $ do
 -- rebase (a rebase stop leaves the folding to :continue, so the amend
 -- there is message-only).
 amendHead :: Brick.EventM Types.Name Types.St ()
-amendHead = Types.whenWritable $ do
+amendHead = Types.whenWritable $ \_ -> do
   st <- State.get
   got <- MonadIO.liftIO (Git.commitBody (Types.stRoot st) "HEAD")
   -- what folds in with the message: everything the session is showing as
@@ -158,7 +158,7 @@ amendHead = Types.whenWritable $ do
         )
 
 applyAmendMessage :: [FilePath] -> T.Text -> Brick.EventM Types.Name Types.St ()
-applyAmendMessage folding text = do
+applyAmendMessage folding text = Types.whenWritable $ \grant -> do
   st <- State.get
   if T.null text
     then Types.setMsg "empty commit message — amend cancelled"
@@ -167,11 +167,11 @@ applyAmendMessage folding text = do
         addRes <-
           if null folding
             then pure (Right ())
-            else Git.runGit (Types.stRoot st) (["add", "--"] ++ folding)
+            else Git.runGit grant (Types.stRoot st) (["add", "--"] ++ folding)
         case addRes of
           Left e -> pure (Left e)
           Right () ->
-            Git.runGit (Types.stRoot st) ["commit", "--amend", "-m", T.unpack text]
+            Git.runGit grant (Types.stRoot st) ["commit", "--amend", "-m", T.unpack text]
       case res of
         Left e -> Types.setMsg e
         Right () -> do

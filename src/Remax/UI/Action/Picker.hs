@@ -281,12 +281,12 @@ applyRefChoice choice
 applyCheckout :: T.Text -> Brick.EventM Types.Name Types.St ()
 applyCheckout branch
   | T.null branch = pure ()
-  | otherwise = Types.whenWritable $ do
+  | otherwise = Types.whenWritable $ \grant -> do
       st <- State.get
       if Just branch == Types.stBranch st
         then Types.setMsg ("already on " <> branch)
         else do
-          res <- MonadIO.liftIO (Git.runGit (Types.stRoot st) ["checkout", T.unpack branch])
+          res <- MonadIO.liftIO (Git.runGit grant (Types.stRoot st) ["checkout", T.unpack branch])
           case res of
             Left e -> Types.setMsg e
             Right () -> do

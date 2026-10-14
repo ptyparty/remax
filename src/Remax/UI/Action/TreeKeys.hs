@@ -57,8 +57,8 @@ namingKey ev view action typed = do
         Left err -> do
           TreeAction.setTree view {Types.tvOp = Nothing}
           Types.setMsg err
-        Right rel -> withWritableTree view $ do
-          outcome <- MonadIO.liftIO (FileAction.runFileAction (Types.stRoot st) action rel)
+        Right rel -> withWritableTree view $ \grant -> do
+          outcome <- MonadIO.liftIO (FileAction.runFileAction grant (Types.stRoot st) action rel)
           -- a rename takes the old path out of the session; the other
           -- three leave what is already open alone
           let
@@ -72,17 +72,17 @@ confirmKey :: V.Event -> Types.TreeView -> FilePath -> Brick.EventM Types.Name T
 confirmKey ev view path = do
   st <- State.get
   case ev of
-    V.EvKey (V.KChar 'y') [] -> withWritableTree view $ do
-      outcome <- MonadIO.liftIO (FileAction.runDelete (Types.stRoot st) path)
+    V.EvKey (V.KChar 'y') [] -> withWritableTree view $ \grant -> do
+      outcome <- MonadIO.liftIO (FileAction.runDelete grant (Types.stRoot st) path)
       FileAction.finishFileOp view (Just path) outcome
     _ -> TreeAction.setTree view {Types.tvOp = Nothing}
 
-withWritableTree :: Types.TreeView -> Brick.EventM Types.Name Types.St () -> Brick.EventM Types.Name Types.St ()
+withWritableTree :: Types.TreeView -> (Git.Writable -> Brick.EventM Types.Name Types.St ()) -> Brick.EventM Types.Name Types.St ()
 withWritableTree view act = do
   st <- State.get
-  case Git.subjectOf (Types.effectiveMode st) of
-    Git.WorkingTree -> act
-    Git.Ref tip -> do
+  case Git.writable (Types.effectiveMode st) of
+    Right grant -> act grant
+    Left tip -> do
       TreeAction.setTree view {Types.tvOp = Nothing}
       Types.setMsg (Types.readOnlyMsg tip)
 
