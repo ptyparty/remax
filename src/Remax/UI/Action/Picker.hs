@@ -8,6 +8,8 @@ module Remax.UI.Action.Picker
   , openRepoPicker
   , openBranchPicker
   , openRefPicker
+  , openCommitPicker
+  , reviewCommit
   , applyCheckout
   , openGrepPicker
   , openGrepHit
@@ -21,6 +23,7 @@ import Control.Monad.State qualified as State
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Read qualified as TR
 import Graphics.Vty qualified as V
@@ -59,7 +62,7 @@ openBufferPicker = do
   State.modify $ \s ->
     s
       { Types.stPicker =
-          Just (refreshPicker (Types.Picker Types.PickFiles "" (map Types.fvPath (Types.stFiles st)) [] [] 0))
+          Just (refreshPicker (Types.Picker Types.PickFiles "" (map Types.fvPath (Types.stFiles st)) [] [] 0 Set.empty))
       }
 
 -- A picker row carries three separate things, because they are not the
@@ -109,7 +112,7 @@ openBasePicker = do
         (\cs -> pickerRow (refOf cs) (Widgets.columnRow widths cs) (T.unwords cs))
         cells
   State.modify $ \s ->
-    s {Types.stPicker = Just (refreshRowPicker (Types.Picker Types.PickBase "" rows [] [] 0))}
+    s {Types.stPicker = Just (refreshRowPicker (Types.Picker Types.PickBase "" rows [] [] 0 Set.empty))}
 
 -- For the base and branch pickers, where the incoming order carries
 -- meaning: rank on match quality alone and let the sort's stability keep
@@ -166,7 +169,7 @@ openRepoPicker = do
         s
           { Types.stPicker =
               Just
-                ( (refreshRowPicker (Types.Picker Types.PickRepo "" rows [] [] 0))
+                ( (refreshRowPicker (Types.Picker Types.PickRepo "" rows [] [] 0 Set.empty))
                     { Types.pkSel = startAt
                     }
                 )
@@ -247,7 +250,7 @@ openBranchPicker = do
           s
             { Types.stPicker =
                 Just
-                  (refreshRowPicker (Types.Picker Types.PickBranch "" rows [] [] 0))
+                  (refreshRowPicker (Types.Picker Types.PickBranch "" rows [] [] 0 Set.empty))
             }
 
 openRefPicker :: Brick.EventM Types.Name Types.St ()
@@ -270,7 +273,73 @@ openRefPicker = do
         (\cs -> pickerRow (refOf cs) (Widgets.columnRow widths cs) (T.unwords cs))
         cells
   State.modify $ \s ->
-    s {Types.stPicker = Just (refreshRowPicker (Types.Picker Types.PickRef "" rows [] [] 0))}
+    s {Types.stPicker = Just (refreshRowPicker (Types.Picker Types.PickRef "" rows [] [] 0 Set.empty))}
+
+openCommitPicker :: Brick.EventM Types.Name Types.St ()
+openCommitPicker = do
+  st <- State.get
+  rows <- MonadIO.liftIO (commitPickerRows (Types.stRoot st) Set.empty)
+  if null rows
+    then Types.setMsg "no refs to pick from"
+    else State.modify $ \s ->
+      s {Types.stPicker = Just (refreshRowPicker (Types.Picker Types.PickCommit "" rows [] [] 0 Set.empty))}
+
+commitPickerRows :: FilePath -> Set.Set T.Text -> IO [FilePath]
+commitPickerRows root expanded = do
+  refs <- Git.pickableRefs root
+  groups <- Monad.forM refs $ \(name, ago, _, subject) -> do
+    let
+      open = Set.member name expanded
+      marker = if open then "\9662 " else "\9656 "
+    commits <- if open then Git.branchCommits 100 name root else pure []
+    let
+      commitRow (csha, cago, _, csubject) =
+        ("commit:" <> csha, ["    " <> csha, cago, csubject])
+    pure (("ref:" <> name, [marker <> name, ago, subject]) : map commitRow commits)
+  let
+    entries = concat groups
+    widths = Widgets.columnWidths [34, 15] (map snd entries)
+  pure (map (\(target, cells) -> pickerRow target (Widgets.columnRow widths cells) (T.unwords cells)) entries)
+
+commitChoice :: Types.Picker -> T.Text -> Brick.EventM Types.Name Types.St ()
+commitChoice pk target =
+  case (T.stripPrefix "ref:" target, T.stripPrefix "commit:" target) of
+    (Just name, _) -> do
+      st <- State.get
+      let
+        expanded =
+          if Set.member name (Types.pkExpanded pk)
+            then Set.delete name (Types.pkExpanded pk)
+            else Set.insert name (Types.pkExpanded pk)
+      rows <- MonadIO.liftIO (commitPickerRows (Types.stRoot st) expanded)
+      State.modify $ \s ->
+        s {Types.stPicker = Just (replaceRepoRows rows pk {Types.pkExpanded = expanded})}
+    (_, Just sha) -> reviewCommit sha
+    _ -> pure ()
+
+reviewCommit :: T.Text -> Brick.EventM Types.Name Types.St ()
+reviewCommit ref = do
+  st <- State.get
+  let
+    root = Types.stRoot st
+  resolved <- MonadIO.liftIO (Git.resolveShort root ref)
+  case resolved of
+    Nothing -> Types.setMsg ("no such commit: " <> ref)
+    Just sha -> do
+      parents <- MonadIO.liftIO (Git.commitParents root sha)
+      case parents of
+        [] -> Settings.setMode (Git.AtRef (Git.RefReview {Git.rrTip = sha, Git.rrBase = Git.emptyTreeRef}))
+        [(parent, _)] -> Settings.setMode (Git.AtRef (Git.RefReview {Git.rrTip = sha, Git.rrBase = parent}))
+        many -> openParentPicker sha many
+
+openParentPicker :: T.Text -> [(T.Text, T.Text)] -> Brick.EventM Types.Name Types.St ()
+openParentPicker tip parents = do
+  let
+    cells = zipWith (\i (sha, subject) -> [sha, "parent " <> Types.tshow (i :: Int), subject]) [1 ..] parents
+    widths = Widgets.columnWidths [12, 10] cells
+    rows = map (\cs -> pickerRow (Maybe.fromMaybe "" (Types.safeIdx cs 0)) (Widgets.columnRow widths cs) (T.unwords cs)) cells
+  State.modify $ \s ->
+    s {Types.stPicker = Just (refreshRowPicker (Types.Picker (Types.PickParent tip) "" rows [] [] 0 Set.empty))}
 
 applyRefChoice :: T.Text -> Brick.EventM Types.Name Types.St ()
 applyRefChoice choice
@@ -302,7 +371,7 @@ openGrepPicker query = do
   State.modify $ \s ->
     s
       { Types.stPicker =
-          Just (Types.Picker Types.PickGrep query [] matches targets 0)
+          Just (Types.Picker Types.PickGrep query [] matches targets 0 Set.empty)
       }
 
 -- Land on a grep hit: open the file, select the match on its line, and
@@ -434,6 +503,8 @@ pickerChoose pk (target, line) =
     Types.PickBase -> applyBaseChoice (T.pack target)
     Types.PickBranch -> applyCheckout (T.pack target)
     Types.PickRef -> applyRefChoice (T.pack target)
+    Types.PickCommit -> commitChoice pk (T.pack target)
+    Types.PickParent tip -> Settings.setMode (Git.AtRef (Git.RefReview {Git.rrTip = tip, Git.rrBase = T.pack target}))
     Types.PickRepo -> Repo.switchRepo target
     _
       | line == 0 -> Open.openFilePath (T.pack target)
