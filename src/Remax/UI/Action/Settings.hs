@@ -6,7 +6,10 @@ module Remax.UI.Action.Settings
   , showSettings
   , showSetting
   , applySet
-  , setBase
+  , setMode
+  , returnToTree
+  , setBaseRef
+  , setRef
   , setBaseBranch
   ) where
 
@@ -14,6 +17,7 @@ import Brick qualified as Brick
 import Control.Monad qualified as Monad
 import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Read qualified as TR
 import Remax.Config qualified as Config
@@ -123,30 +127,79 @@ applySet key val = do
 
 -- Switch what the session reviews against. Each switch closes the pass
 -- and opens a new one, so pass history records what was reviewed vs what.
-setBase :: Git.ReviewMode -> Brick.EventM Types.Name Types.St ()
-setBase mode = do
+setMode :: Git.ReviewMode -> Brick.EventM Types.Name Types.St ()
+setMode mode = do
   st <- State.get
   ok <- case mode of
     Git.VsRef ref -> MonadIO.liftIO (Git.refExists (Types.stRoot st) ref)
     _ -> pure True
   case (ok, mode) of
     (False, Git.VsRef ref) -> Types.setMsg ("no such ref: " <> ref)
-    _ -> do
-      MonadIO.liftIO (Store.finishPass (Types.stConn st) (Types.stPassId st))
-      newPass <- MonadIO.liftIO (Store.beginPass (Types.stConn st) (Types.repoText st) (Git.modeLabel mode))
-      State.modify (\s -> s {Types.stMode = mode, Types.stPassId = newPass})
-      Load.forceGitRefresh
-      refreshed <- State.get
-      Monad.unless
-        (null (Types.stFiles refreshed))
-        (Types.setMsg ("base: " <> Git.modeLabel mode))
+    _ -> installMode st mode
+
+installMode :: Types.St -> Git.ReviewMode -> Brick.EventM Types.Name Types.St ()
+installMode st mode = do
+  let
+    subject = Git.subjectOf mode
+    changedSubject = subject /= Git.subjectOf (Types.stMode st)
+    treeMode = case subject of
+      Git.WorkingTree -> mode
+      Git.Ref _ -> Types.stTreeMode st
+  MonadIO.liftIO (Store.finishPass (Types.stConn st) (Types.stPassId st))
+  newPass <- MonadIO.liftIO (Store.beginPass (Types.stConn st) (Types.repoText st) (Git.modeLabel mode))
+  State.modify $ \s ->
+    s
+      { Types.stMode = mode
+      , Types.stTreeMode = treeMode
+      , Types.stPassId = newPass
+      , Types.stFiles = if changedSubject then [] else Types.stFiles s
+      , Types.stOpened = if changedSubject then Set.empty else Types.stOpened s
+      }
+  Load.forceGitRefresh
+  refreshed <- State.get
+  Monad.unless
+    (null (Types.stFiles refreshed))
+    (Types.setMsg ("base: " <> Git.modeLabel mode))
+
+returnToTree :: Brick.EventM Types.Name Types.St ()
+returnToTree = do
+  st <- State.get
+  setMode (Types.stTreeMode st)
+
+setBaseRef :: T.Text -> Brick.EventM Types.Name Types.St ()
+setBaseRef base = do
+  st <- State.get
+  ok <- MonadIO.liftIO (Git.refExists (Types.stRoot st) base)
+  if not ok
+    then Types.setMsg ("no such ref: " <> base)
+    else setMode $ case Types.stMode st of
+      Git.AtRef rr -> Git.AtRef rr {Git.rrBase = base}
+      _ -> Git.VsRef base
+
+subjectTip :: Types.St -> T.Text
+subjectTip st =
+  case Git.subjectOf (Types.stMode st) of
+    Git.Ref tip -> tip
+    Git.WorkingTree -> "HEAD"
 
 -- The whole-branch view: base = where this branch forked from the
 -- mainline. Purely a diff base — no rebase involved.
 setBaseBranch :: Brick.EventM Types.Name Types.St ()
 setBaseBranch = do
   st <- State.get
-  got <- MonadIO.liftIO (Git.branchRoot (Types.stRoot st))
+  got <- MonadIO.liftIO (Git.branchRootOf (Types.stRoot st) (subjectTip st))
   case got of
     Left e -> Types.setMsg e
-    Right sha -> setBase (Git.VsRef (T.take 10 sha))
+    Right sha -> setBaseRef (T.take 10 sha)
+
+setRef :: T.Text -> Brick.EventM Types.Name Types.St ()
+setRef tip = do
+  st <- State.get
+  ok <- MonadIO.liftIO (Git.refExists (Types.stRoot st) tip)
+  if not ok
+    then Types.setMsg ("no such ref: " <> tip)
+    else do
+      got <- MonadIO.liftIO (Git.branchRootOf (Types.stRoot st) tip)
+      case got of
+        Left e -> Types.setMsg e
+        Right sha -> setMode (Git.AtRef (Git.RefReview {Git.rrTip = tip, Git.rrBase = T.take 10 sha}))

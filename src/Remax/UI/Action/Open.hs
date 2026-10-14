@@ -20,7 +20,6 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Remax.Config qualified as Config
 import Remax.Git qualified as Git
-import Remax.Modal qualified as Modal
 import Remax.TreeSitter qualified as TS
 import Remax.UI.Action.Repo qualified as Repo
 import Remax.UI.Core.Types qualified as Types
@@ -117,7 +116,7 @@ openInRoot rel = do
       State.modify (\s -> s {Types.stOpened = Set.insert rel (Types.stOpened s)})
       visitFile i Nothing
     Nothing -> do
-      got <- MonadIO.liftIO (loadOpened (Types.stConfig st) (Types.stHls st) rootP rel)
+      got <- MonadIO.liftIO (loadOpened (Types.stConfig st) (Types.stHls st) (Types.effectiveMode st) rootP rel)
       case got of
         Nothing -> Types.setMsg ("cannot open " <> T.pack rel)
         Just fv -> do
@@ -134,45 +133,34 @@ openInRoot rel = do
 loadOpened ::
   Config.Config ->
   TS.HighlighterTable ->
+  Git.ReviewMode ->
   FilePath ->
   FilePath ->
   IO (Maybe Types.FileView)
-loadOpened cfg hls root path = do
-  readable <- Exception.try (Git.looksBinary root path) :: IO (Either Exception.IOException Bool)
-  case readable of
-    Left _ -> pure Nothing
-    Right True -> pure Nothing
-    Right False -> do
-      gotNew <- Exception.try (TIO.readFile (root </> path)) :: IO (Either Exception.IOException T.Text)
-      case gotNew of
+loadOpened cfg hls mode root path = do
+  got <- openedLines mode root path
+  case got of
+    Nothing -> pure Nothing
+    Just newLs -> do
+      (fv, _) <- Load.rebuildFV cfg (T.pack root) (Load.freshView hls path False newLs newLs)
+      pure (Just fv)
+
+openedLines :: Git.ReviewMode -> FilePath -> FilePath -> IO (Maybe [T.Text])
+openedLines mode root path =
+  case Git.subjectOf mode of
+    Git.Ref tip -> do
+      got <- Git.refContent root tip path
+      pure $ case got of
+        Just (Git.RefText ls) -> Just ls
+        _ -> Nothing
+    Git.WorkingTree -> do
+      readable <- Exception.try (Git.looksBinary root path) :: IO (Either Exception.IOException Bool)
+      case readable of
         Left _ -> pure Nothing
-        Right newTxt -> do
-          let
-            newLs = T.lines newTxt
-            fv0 =
-              Types.FileView
-                { Types.fvPath = path
-                , Types.fvBase = newLs
-                , Types.fvEd = Modal.newEdState 0 newLs
-                , Types.fvRows = []
-                , Types.fvEmph = []
-                , Types.fvRowCount = 0
-                , Types.fvOrigin = 0
-                , Types.fvRuns = []
-                , Types.fvToks = []
-                , Types.fvStale = False
-                , Types.fvDeleted = False
-                , Types.fvHighlighted = False
-                , -- the shebang is the fallback for a file with no
-                  -- extension to go on, so the first line comes along
-                  Types.fvHl = TS.highlighterFor hls path (Maybe.listToMaybe newLs)
-                , Types.fvRunDecls = []
-                , Types.fvRemarks = []
-                , Types.fvPending = 0
-                , Types.fvMtime = Nothing
-                }
-          (fv, _) <- Load.rebuildFV cfg (T.pack root) fv0
-          pure (Just fv)
+        Right True -> pure Nothing
+        Right False -> do
+          gotNew <- Exception.try (TIO.readFile (root </> path)) :: IO (Either Exception.IOException T.Text)
+          pure (either (const Nothing) (Just . T.lines) gotNew)
 
 closeCurrent :: Brick.EventM Types.Name Types.St ()
 closeCurrent = do

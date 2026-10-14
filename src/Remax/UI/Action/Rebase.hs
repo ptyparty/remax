@@ -37,7 +37,7 @@ rebaseStopMsg rb =
 -- pauses the sequencer after every commit (the failing exec is the stop
 -- mechanism), and rebase awareness takes over from there.
 startRebase :: Maybe T.Text -> Brick.EventM Types.Name Types.St ()
-startRebase mRef = do
+startRebase mRef = Types.whenWritable $ do
   st <- State.get
   case Types.stRebase st of
     Just _ -> Types.setMsg "a rebase is already in progress — :continue or :abort!"
@@ -72,7 +72,7 @@ startRebase mRef = do
 -- stop has no commit yet, so --continue makes it; an exec stop already
 -- committed, so the edits are amended in first.
 continueRebase :: Brick.EventM Types.Name Types.St ()
-continueRebase = do
+continueRebase = Types.whenWritable $ do
   st <- State.get
   case Types.stRebase st of
     Nothing -> Types.setMsg "no rebase in progress"
@@ -113,7 +113,7 @@ continueRebase = do
                 else Types.setMsg (rebaseStopMsg next)
 
 abortRebase :: Brick.EventM Types.Name Types.St ()
-abortRebase = do
+abortRebase = Types.whenWritable $ do
   st <- State.get
   case Types.stRebase st of
     Nothing -> Types.setMsg "no rebase in progress"
@@ -133,7 +133,7 @@ abortRebase = do
 -- rebase (a rebase stop leaves the folding to :continue, so the amend
 -- there is message-only).
 amendHead :: Brick.EventM Types.Name Types.St ()
-amendHead = do
+amendHead = Types.whenWritable $ do
   st <- State.get
   got <- MonadIO.liftIO (Git.commitBody (Types.stRoot st) "HEAD")
   -- what folds in with the message: everything the session is showing as

@@ -19,6 +19,8 @@ module Remax.Store
   , beginPass
   , finishPass
   , recordVerdicts
+  , VerdictOrigin (..)
+  , noOrigin
   , Post (..)
   , Awaiting (..)
   , isReviewerPost
@@ -148,7 +150,8 @@ openStore = do
     \  note TEXT,\
     \  commit_sha TEXT,\
     \  commit_subject TEXT,\
-    \  reply TEXT)"
+    \  reply TEXT,\
+    \  ref TEXT)"
   SQLite.execute_
     conn
     "CREATE INDEX IF NOT EXISTS line_verdict_repo ON line_verdict(repo)"
@@ -198,6 +201,8 @@ migrate conn = do
     SQLite.execute_ conn "ALTER TABLE line_verdict ADD COLUMN commit_subject TEXT"
   Monad.unless ("reply" `elem` names) $
     SQLite.execute_ conn "ALTER TABLE line_verdict ADD COLUMN reply TEXT"
+  Monad.unless ("ref" `elem` names) $
+    SQLite.execute_ conn "ALTER TABLE line_verdict ADD COLUMN ref TEXT"
   postCols <-
     SQLite.query_ conn "PRAGMA table_info(note_post)" ::
       IO [(Int, T.Text, T.Text, Int, Maybe T.Text, Int)]
@@ -255,36 +260,46 @@ finishPass conn passId =
 -- Re-verdicting a line updates its row in place, so updated_at reads as
 -- the last time it was looked at; a note already on the line survives.
 -- The commit context (sha, subject) is stamped when the review knows
--- which commit it is looking at — a rebase stop — and is NULL otherwise.
+-- which commit it is looking at — a rebase stop, or the tip of a ref
+-- under review, which also records the ref — and is NULL otherwise.
+data VerdictOrigin = VerdictOrigin
+  { originCommit :: Maybe (T.Text, T.Text)
+  , originRef :: Maybe T.Text
+  }
+
+noOrigin :: VerdictOrigin
+noOrigin = VerdictOrigin {originCommit = Nothing, originRef = Nothing}
+
 recordVerdicts ::
   SQLite.Connection ->
   T.Text ->
   DataInt.Int64 ->
   Verdict ->
-  Maybe (T.Text, T.Text) ->
+  VerdictOrigin ->
   [(T.Text, T.Text, T.Text, Int)] ->
   IO ()
-recordVerdicts conn repo passId v mCommit rows =
+recordVerdicts conn repo passId v origin rows =
   let
-    (sha, subject) = case mCommit of
+    (sha, subject) = case originCommit origin of
       Just (s, subj) -> (Just s, Just subj)
       Nothing -> (Nothing, Nothing)
     toParams (key, file, line, lineNo) =
-      (key, repo, file, line, lineNo, verdictText v, passId, sha, subject)
+      (key, repo, file, line, lineNo, verdictText v, passId, sha, subject, originRef origin)
   in
     SQLite.withTransaction conn $ do
       SQLite.executeMany
         conn
         "INSERT INTO line_verdict\
         \ (key, repo, file, line, line_no, verdict, pass_id,\
-        \  commit_sha, commit_subject, updated_at)\
-        \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))\
+        \  commit_sha, commit_subject, ref, updated_at)\
+        \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))\
         \ ON CONFLICT(key) DO UPDATE SET\
         \   repo = excluded.repo, file = excluded.file,\
         \   line = excluded.line, line_no = excluded.line_no,\
         \   verdict = excluded.verdict, pass_id = excluded.pass_id,\
         \   commit_sha = excluded.commit_sha,\
         \   commit_subject = excluded.commit_subject,\
+        \   ref = excluded.ref,\
         \   updated_at = excluded.updated_at"
         (map toParams rows)
       -- accepting closes the conversation; other verdicts keep it open
@@ -766,6 +781,7 @@ data PunchRow = PunchRow
   , punchThread :: [Post]
   , punchCommitSha :: Maybe T.Text
   , punchCommitSubject :: Maybe T.Text
+  , punchRef :: Maybe T.Text
   , punchAt :: T.Text
   }
 
@@ -776,13 +792,13 @@ punchRows conn repo = do
     SQLite.query
       conn
       "SELECT key, file, verdict, line, line_no,\
-      \ commit_sha, commit_subject, updated_at FROM line_verdict\
+      \ commit_sha, commit_subject, ref, updated_at FROM line_verdict\
       \ WHERE repo = ? AND verdict <> 'reviewed'\
       \ ORDER BY file, line_no, updated_at DESC"
       (SQLite.Only repo)
   threads <- loadThreads conn repo
   let
-    toPunch (key, file, verdictName, line, lineNo, sha, subject, at) =
+    toPunch (key, file, verdictName, line, lineNo, sha, subject, ref, at) =
       fmap
         ( \verdict ->
             PunchRow
@@ -794,6 +810,7 @@ punchRows conn repo = do
               , punchThread = Map.findWithDefault [] key threads
               , punchCommitSha = sha
               , punchCommitSubject = subject
+              , punchRef = ref
               , punchAt = at
               }
         )

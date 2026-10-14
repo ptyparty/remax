@@ -62,6 +62,7 @@ pickerTitle mode =
     Types.PickFiles -> "files"
     Types.PickBase -> "base"
     Types.PickBranch -> "checkout"
+    Types.PickRef -> "ref"
     Types.PickRepo -> "repo"
     Types.PickGrep -> "grep"
 
@@ -70,5 +71,6 @@ pickerHint mode =
   case mode of
     Types.PickBase -> "\8593\8595 move · \9166 review against this · esc closes"
     Types.PickBranch -> "\8593\8595 move · \9166 checks out · esc closes"
+    Types.PickRef -> "\8593\8595 move · \9166 review this ref without checking it out · esc closes"
     Types.PickRepo -> "\8593\8595 move · \9166 switch to this repository · esc closes"
     _ -> "\8593\8595 move · \9166 open · esc closes"

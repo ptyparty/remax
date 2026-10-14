@@ -32,7 +32,7 @@ editCurrent = do
 -- Suspend the TUI, run the user's editor on the file at the given line,
 -- and come back; the watcher reloads whatever the editor wrote.
 launchEditor :: FilePath -> Int -> Brick.EventM Types.Name Types.St ()
-launchEditor file line = do
+launchEditor file line = Types.whenWritable $ do
   st <- State.get
   Brick.suspendAndResume $ do
     (cmd, args) <- editorInvocation file line

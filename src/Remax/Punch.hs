@@ -38,6 +38,7 @@ data Conversation = Conversation
   , conversationRepo :: FilePath
   , conversationFile :: T.Text
   , conversationCommitSha :: Maybe T.Text
+  , conversationRef :: Maybe T.Text
   , conversationLines :: NEL.NonEmpty PunchLine
   , conversationThread :: [Store.Post]
   , conversationUpdatedAt :: T.Text
@@ -59,7 +60,7 @@ conversations repo groups rows =
   let
     conversationIdOf = rowConversationId repo groups
     groupingKey row =
-      (conversationIdOf row, Store.punchFile row, Store.punchCommitSha row, Store.punchThread row)
+      (conversationIdOf row, Store.punchFile row, Store.punchCommitSha row, Store.punchRef row, Store.punchThread row)
     appendLater (_, later) (first, earlier) = (first, earlier <> later)
     grouped =
       Map.fromListWith
@@ -79,6 +80,7 @@ toConversation repo conversationIdOf members@(first :| _) =
     , conversationRepo = repo
     , conversationFile = Store.punchFile first
     , conversationCommitSha = Store.punchCommitSha first
+    , conversationRef = Store.punchRef first
     , conversationLines = fmap toLine members
     , conversationThread = Store.punchThread first
     , conversationUpdatedAt = maximum (fmap Store.punchAt members)

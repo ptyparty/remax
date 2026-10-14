@@ -7,6 +7,7 @@ module Remax.UI.Action.Picker
   , openBasePicker
   , openRepoPicker
   , openBranchPicker
+  , openRefPicker
   , applyCheckout
   , openGrepPicker
   , openGrepHit
@@ -81,15 +82,23 @@ splitPickerRow row =
 openBasePicker :: Brick.EventM Types.Name Types.St ()
 openBasePicker = do
   st <- State.get
-  commits <- MonadIO.liftIO (Git.recentCommits 300 (Types.stRoot st))
+  let
+    tip = case Git.subjectOf (Types.stMode st) of
+      Git.Ref ref -> ref
+      Git.WorkingTree -> "HEAD"
+  commits <- MonadIO.liftIO (Git.recentCommits 300 tip (Types.stRoot st))
   let
     here ref = case Types.stMode st of
       Git.VsRef cur | cur == ref -> "  \8592 current"
+      Git.AtRef rr | Git.rrBase rr == ref -> "  \8592 current"
       _ -> ""
     -- sha · how long ago · what points here · subject
     cellsFor (sha, ago, refs, subject) = [sha, ago, refs, subject <> here sha]
+    topRow = case Git.subjectOf (Types.stMode st) of
+      Git.WorkingTree -> ["HEAD", "", "", "uncommitted changes" <> here "HEAD"]
+      Git.Ref ref -> [ref <> "^", "", "", "the tip commit alone" <> here (ref <> "^")]
     cells =
-      [ ["HEAD", "", "", "uncommitted changes" <> here "HEAD"]
+      [ topRow
       , ["branch", "", "", "the whole branch \8212 merge-base with the mainline"]
       ]
         ++ map cellsFor commits
@@ -129,7 +138,7 @@ applyBaseChoice :: T.Text -> Brick.EventM Types.Name Types.St ()
 applyBaseChoice ref
   | T.null ref = pure ()
   | ref == "branch" = Settings.setBaseBranch
-  | otherwise = Settings.setBase (Git.VsRef ref)
+  | otherwise = Settings.setBaseRef ref
 
 openRepoPicker :: Brick.EventM Types.Name Types.St ()
 openRepoPicker = do
@@ -219,7 +228,10 @@ openBranchPicker = do
     Nothing -> do
       branches <- MonadIO.liftIO (Git.localBranches (Types.stRoot st))
       let
-        here b = if Just b == Types.stBranch st then "  \8592 current" else ""
+        here b =
+          case Git.subjectOf (Types.stMode st) of
+            Git.WorkingTree | Just b == Types.stBranch st -> "  \8592 current"
+            _ -> ""
         -- branch · how long ago · the tip you would land on · subject
         cellsFor (b, ago, sha, subject) = [b, ago, sha, subject <> here b]
         cells = map cellsFor branches
@@ -238,10 +250,38 @@ openBranchPicker = do
                   (refreshRowPicker (Types.Picker Types.PickBranch "" rows [] [] 0))
             }
 
+openRefPicker :: Brick.EventM Types.Name Types.St ()
+openRefPicker = do
+  st <- State.get
+  branches <- MonadIO.liftIO (Git.localBranches (Types.stRoot st))
+  let
+    here b = case Git.subjectOf (Types.stMode st) of
+      Git.Ref tip | tip == b -> "  \8592 current"
+      _ -> ""
+    treeNote = case Git.subjectOf (Types.stMode st) of
+      Git.WorkingTree -> "  \8592 current"
+      Git.Ref _ -> ""
+    cellsFor (b, ago, sha, subject) = [b, ago, sha, subject <> here b]
+    cells = ["working tree", "", "", "the working tree, editable" <> treeNote] : map cellsFor branches
+    widths = Widgets.columnWidths [28, 15, 12] cells
+    refOf cs = Maybe.fromMaybe "" (Types.safeIdx cs 0)
+    rows =
+      map
+        (\cs -> pickerRow (refOf cs) (Widgets.columnRow widths cs) (T.unwords cs))
+        cells
+  State.modify $ \s ->
+    s {Types.stPicker = Just (refreshRowPicker (Types.Picker Types.PickRef "" rows [] [] 0))}
+
+applyRefChoice :: T.Text -> Brick.EventM Types.Name Types.St ()
+applyRefChoice choice
+  | T.null choice = pure ()
+  | choice == "working tree" = Settings.returnToTree
+  | otherwise = Settings.setRef choice
+
 applyCheckout :: T.Text -> Brick.EventM Types.Name Types.St ()
 applyCheckout branch
   | T.null branch = pure ()
-  | otherwise = do
+  | otherwise = Types.whenWritable $ do
       st <- State.get
       if Just branch == Types.stBranch st
         then Types.setMsg ("already on " <> branch)
@@ -393,6 +433,7 @@ pickerChoose pk (target, line) =
   case Types.pkMode pk of
     Types.PickBase -> applyBaseChoice (T.pack target)
     Types.PickBranch -> applyCheckout (T.pack target)
+    Types.PickRef -> applyRefChoice (T.pack target)
     Types.PickRepo -> Repo.switchRepo target
     _
       | line == 0 -> Open.openFilePath (T.pack target)

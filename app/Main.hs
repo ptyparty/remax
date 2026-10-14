@@ -29,7 +29,13 @@ import Remax.Store qualified as Store
 import Remax.UI qualified as UI
 import System.Posix.Process qualified as Posix
 
-data ModeArg = ArgHead | ArgBase T.Text | ArgBranch | ArgUnstaged | ArgUntracked
+data ModeArg
+  = ArgHead
+  | ArgBase T.Text
+  | ArgBranch
+  | ArgUnstaged
+  | ArgUntracked
+  | ArgRef T.Text (Maybe T.Text)
 
 data Cmd
   = Review ModeArg
@@ -125,6 +131,7 @@ listArgs =
 usage :: String
 usage =
   "usage: remax [-C DIR] [--base REF | --branch | --unstaged | --untracked]\n\
+  \       remax [-C DIR] --ref REF [--base BASE | --branch]\n\
   \       remax [-C DIR] forget [PATH]  forget verdicts under PATH (default: the\n\
   \                                     current directory); PATH need not still exist\n\
   \       remax [-C DIR] list [--json] [--wait] [--state FILE]\n\
@@ -150,7 +157,10 @@ usage =
   \  --base REF   review the working tree against REF (default: HEAD)\n\
   \  --branch     review against the merge-base with the mainline\n\
   \  --unstaged   review the working tree against the index\n\
-  \  --untracked  review new files as pure additions"
+  \  --untracked  review new files as pure additions\n\
+  \  --ref REF    review REF itself, read-only, without checking it out:\n\
+  \               against BASE, or its merge-base with the mainline;\n\
+  \               verdicts record the ref and its tip for the agent"
 
 parseArgs :: [String] -> Either String (Maybe FilePath, Cmd)
 parseArgs args0 =
@@ -159,11 +169,6 @@ parseArgs args0 =
       case args of
         ("-C" : dir : rest) -> go (Just dir) rest
         ["-C"] -> Left usage
-        [] -> Right (mDir, Review ArgHead)
-        ["--unstaged"] -> Right (mDir, Review ArgUnstaged)
-        ["--untracked"] -> Right (mDir, Review ArgUntracked)
-        ["--branch"] -> Right (mDir, Review ArgBranch)
-        ["--base", ref] -> Right (mDir, Review (ArgBase (T.pack ref)))
         ["forget"] -> Right (mDir, Forget Nothing)
         ["forget", path] -> Right (mDir, Forget (Just path))
         ("list" : rest)
@@ -173,9 +178,26 @@ parseArgs args0 =
         ("reply" : target : rest)
           | not (null rest) ->
               Right (mDir, Reply (T.pack target) (T.pack (unwords rest)))
-        _ -> Left usage
+        _
+          | Just marg <- reviewArgs args -> Right (mDir, Review marg)
+          | otherwise -> Left usage
   in
     go Nothing args0
+
+reviewArgs :: [String] -> Maybe ModeArg
+reviewArgs args =
+  case args of
+    [] -> Just ArgHead
+    ["--unstaged"] -> Just ArgUnstaged
+    ["--untracked"] -> Just ArgUntracked
+    ["--branch"] -> Just ArgBranch
+    ["--base", ref] -> Just (ArgBase (T.pack ref))
+    ["--ref", ref] -> Just (ArgRef (T.pack ref) Nothing)
+    ["--ref", ref, "--branch"] -> Just (ArgRef (T.pack ref) Nothing)
+    ["--branch", "--ref", ref] -> Just (ArgRef (T.pack ref) Nothing)
+    ["--ref", ref, "--base", base] -> Just (ArgRef (T.pack ref) (Just (T.pack base)))
+    ["--base", base, "--ref", ref] -> Just (ArgRef (T.pack ref) (Just (T.pack base)))
+    _ -> Nothing
 
 review :: ModeArg -> IO ()
 review marg = do
@@ -193,6 +215,20 @@ review marg = do
       case got of
         Left e -> Exit.die (T.unpack e)
         Right sha -> pure (Git.VsRef (T.take 10 sha))
+    ArgRef ref mBase -> do
+      ok <- Git.refExists root ref
+      Monad.unless ok (Exit.die ("No such ref: " ++ T.unpack ref))
+      base <- case mBase of
+        Just given -> do
+          okBase <- Git.refExists root given
+          Monad.unless okBase (Exit.die ("No such ref: " ++ T.unpack given))
+          pure given
+        Nothing -> do
+          got <- Git.branchRootOf root ref
+          case got of
+            Left e -> Exit.die (T.unpack e)
+            Right sha -> pure (T.take 10 sha)
+      pure (Git.AtRef (Git.RefReview {Git.rrTip = ref, Git.rrBase = base}))
   UI.runReview mode root roots story
 
 -- Every repository a command should act on: the one we are inside, or —
@@ -466,10 +502,10 @@ list options = do
             wanted conversation =
               maybe True (== Punch.conversationAwaiting conversation) (listAwaiting options)
             shown = filter wanted (Punch.conversations repo groups rows)
-            files = List.nub (map Punch.conversationFile shown)
-          contents <- mapM (Git.readFileOr "" . (repo </>) . T.unpack) files
+            sources = List.nub (map (\c -> (Punch.conversationRef c, Punch.conversationFile c)) shown)
+          contents <- mapM (sourceLines repo) sources
           let
-            fileLines = Map.fromList (zip files (map T.lines contents))
+            fileLines = Map.fromList (zip sources contents)
           pure (repo, map (describe fileLines) shown)
       )
       found
@@ -500,15 +536,29 @@ data Described = Described
   , describedLinesInFile :: Maybe Punch.LinesInFile
   }
 
-describe :: Map.Map T.Text [T.Text] -> Punch.Conversation -> Described
+describe :: Map.Map (Maybe T.Text, T.Text) [T.Text] -> Punch.Conversation -> Described
 describe fileLines conversation =
   Described
     { describedConversation = conversation
     , describedLinesInFile =
         Punch.linesInFile
-          (Map.findWithDefault [] (Punch.conversationFile conversation) fileLines)
+          ( Map.findWithDefault
+              []
+              (Punch.conversationRef conversation, Punch.conversationFile conversation)
+              fileLines
+          )
           (Punch.conversationLines conversation)
     }
+
+sourceLines :: FilePath -> (Maybe T.Text, T.Text) -> IO [T.Text]
+sourceLines repo (mRef, file) =
+  case mRef of
+    Nothing -> fmap T.lines (Git.readFileOr "" (repo </> T.unpack file))
+    Just ref -> do
+      got <- Git.refContent repo ref (T.unpack file)
+      pure $ case got of
+        Just (Git.RefText ls) -> ls
+        _ -> []
 
 printConversations :: Map.Map T.Text T.Text -> [Described] -> IO ()
 printConversations subjects described =
@@ -549,6 +599,8 @@ printConversations subjects described =
             <> sha
             <> maybe "" (" " <>) (Map.lookup sha subjects)
         )
+    Monad.forM_ (Punch.conversationRef conversation) $ \ref ->
+      TIO.putStrLn ("    ref: " <> ref)
 
 -- An agent's post in a note conversation: ID is a conversation's id from
 -- `list --json`; the post appends to the whole thread's group and
@@ -596,6 +648,7 @@ punchJson scope subjects listed =
         , ("repo", jsonString (T.pack (Punch.conversationRepo conversation)))
         , ("file", jsonString (Punch.conversationFile conversation))
         , ("commit_sha", maybe "null" jsonString (Punch.conversationCommitSha conversation))
+        , ("ref", maybe "null" jsonString (Punch.conversationRef conversation))
         , ("lines", jsonArray (map lineJson (Foldable.toList (Punch.conversationLines conversation))))
         , ("thread", threadJson (Punch.conversationThread conversation))
         , ("awaiting", jsonString (Store.awaitingText (Punch.conversationAwaiting conversation)))

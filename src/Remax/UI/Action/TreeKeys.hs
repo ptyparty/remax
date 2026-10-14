@@ -14,6 +14,7 @@ import Data.Maybe qualified as Maybe
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Graphics.Vty qualified as V
+import Remax.Git qualified as Git
 import Remax.Tree qualified as Tree
 import Remax.UI.Action.Files qualified as FileAction
 import Remax.UI.Action.Open qualified as Open
@@ -56,7 +57,7 @@ namingKey ev view action typed = do
         Left err -> do
           TreeAction.setTree view {Types.tvOp = Nothing}
           Types.setMsg err
-        Right rel -> do
+        Right rel -> withWritableTree view $ do
           outcome <- MonadIO.liftIO (FileAction.runFileAction (Types.stRoot st) action rel)
           -- a rename takes the old path out of the session; the other
           -- three leave what is already open alone
@@ -71,10 +72,19 @@ confirmKey :: V.Event -> Types.TreeView -> FilePath -> Brick.EventM Types.Name T
 confirmKey ev view path = do
   st <- State.get
   case ev of
-    V.EvKey (V.KChar 'y') [] -> do
+    V.EvKey (V.KChar 'y') [] -> withWritableTree view $ do
       outcome <- MonadIO.liftIO (FileAction.runDelete (Types.stRoot st) path)
       FileAction.finishFileOp view (Just path) outcome
     _ -> TreeAction.setTree view {Types.tvOp = Nothing}
+
+withWritableTree :: Types.TreeView -> Brick.EventM Types.Name Types.St () -> Brick.EventM Types.Name Types.St ()
+withWritableTree view act = do
+  st <- State.get
+  case Git.subjectOf (Types.effectiveMode st) of
+    Git.WorkingTree -> act
+    Git.Ref tip -> do
+      TreeAction.setTree view {Types.tvOp = Nothing}
+      Types.setMsg (Types.readOnlyMsg tip)
 
 browseTreeKey :: V.Event -> Types.TreeView -> Brick.EventM Types.Name Types.St ()
 browseTreeKey ev view = do
