@@ -5,10 +5,11 @@ module Remax.UI.Core.Verdict
   ( allRunsInOrder
   , pairPending
   , pairUnvisited
-  , filteredRunPairs
   , firstUnrespondedOrPending
   , runUnvisited
   , runPending
+  , runUnresolved
+  , walkAllows
   , runMark
   , recountFile
   , recountIn
@@ -69,26 +70,17 @@ pairUnvisited st pair =
     Just r -> runUnvisited (Types.stVerdicts st) r
     Nothing -> False
 
--- Every hunk the filter admits, in display order.
-filteredRunPairs :: Types.St -> [(Int, Int)]
-filteredRunPairs st =
-  map fst (filter (Types.runFilterAllows (Types.stRunFilter st) . snd) (allRunsInOrder st))
-
 -- Where a session begins: the first hunk nothing has been said about
 -- yet; only when every hunk has some response does the first still-
 -- pending (flagged/questioned) one win.
 firstUnrespondedOrPending :: Types.St -> Maybe (Int, Int)
 firstUnrespondedOrPending st =
-  fmap fst (List.find (runUnvisited (Types.stVerdicts st) . snd) (filteredRunsInOrder st))
+  fmap fst (List.find (runUnvisited (Types.stVerdicts st) . snd) (allRunsInOrder st))
     <|> firstPending st
 
 firstPending :: Types.St -> Maybe (Int, Int)
 firstPending st =
-  fmap fst (List.find (runPending (Types.stVerdicts st) . snd) (filteredRunsInOrder st))
-
-filteredRunsInOrder :: Types.St -> [((Int, Int), DiffModel.Run)]
-filteredRunsInOrder st =
-  filter (Types.runFilterAllows (Types.stRunFilter st) . snd) (allRunsInOrder st)
+  fmap fst (List.find (runPending (Types.stVerdicts st) . snd) (allRunsInOrder st))
 
 -- Unvisited: some line has no verdict at all — the hunk still needs a
 -- first look, which is what auto-advance cares about.
@@ -104,6 +96,24 @@ runPending m r =
     accepted k = Map.lookup k m == Just Store.Reviewed
   in
     not (all accepted (DiffModel.runKeys r))
+
+runUnresolved :: Map.Map T.Text Store.Verdict -> Map.Map T.Text [Store.Post] -> DiffModel.Run -> Bool
+runUnresolved verdicts threads r =
+  let
+    asked k =
+      case Map.lookup k verdicts of
+        Just Store.Flagged -> True
+        Just Store.Questioned -> True
+        _ -> Map.member k threads
+  in
+    any asked (DiffModel.runKeys r)
+
+walkAllows :: Types.St -> DiffModel.Run -> Bool
+walkAllows st r =
+  case Types.stWalk st of
+    Types.WalkAll -> True
+    Types.WalkPending -> runPending (Types.stVerdicts st) r
+    Types.WalkUnresolved -> runUnresolved (Types.stVerdicts st) (Types.stThreads st) r
 
 runMark :: Map.Map T.Text Store.Verdict -> DiffModel.Run -> Char
 runMark m r =

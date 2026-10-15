@@ -6,6 +6,7 @@ module Remax.UI.Action.Settings
   , showSettings
   , showSetting
   , applySet
+  , toggleIgnoreWs
   , setMode
   , returnToTree
   , setBaseRef
@@ -124,6 +125,11 @@ applySet key val = do
         (\n -> cfg {Config.cfgSplit = splitWith (\sc -> sc {DiffModel.pieceMax = max 2 n})})
         Load.rebuildAllFiles
     _ -> Types.setMsg ("unknown setting: " <> key)
+
+toggleIgnoreWs :: Brick.EventM Types.Name Types.St ()
+toggleIgnoreWs = do
+  st <- State.get
+  applySet "ignore-whitespace" (if Config.cfgIgnoreWs (Types.stConfig st) then "0" else "1")
 
 -- Switch what the session reviews against. Each switch closes the pass
 -- and opens a new one, so pass history records what was reviewed vs what.

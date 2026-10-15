@@ -287,14 +287,14 @@ openCommitPicker = do
 commitPickerRows :: FilePath -> Set.Set T.Text -> IO [FilePath]
 commitPickerRows root expanded = do
   refs <- Git.pickableRefs root
-  groups <- Monad.forM refs $ \(name, ago, _, subject) -> do
+  groups <- Monad.forM refs $ \(name, ago, tipSha, subject) -> do
     let
       open = Set.member name expanded
       marker = if open then "\9662 " else "\9656 "
     commits <- if open then Git.branchCommits 100 name root else pure []
     let
       commitRow (csha, cago, _, csubject) =
-        ("commit:" <> csha, ["    " <> csha, cago, csubject])
+        ("commit:" <> (if csha == tipSha then name else csha), ["    " <> csha, cago, csubject])
     pure (("ref:" <> name, [marker <> name, ago, subject]) : map commitRow commits)
   let
     entries = concat groups
@@ -326,18 +326,25 @@ reviewCommit ref = do
   case resolved of
     Nothing -> Types.setMsg ("no such commit: " <> ref)
     Just sha -> do
+      symbolic <- MonadIO.liftIO (Git.isSymbolicRef root ref)
       parents <- MonadIO.liftIO (Git.commitParents root sha)
+      let
+        tip = if symbolic then ref else sha
       case parents of
-        [] -> Settings.setMode (Git.AtRef (Git.RefReview {Git.rrTip = sha, Git.rrBase = Git.emptyTreeRef}))
-        [(parent, _)] -> Settings.setMode (Git.AtRef (Git.RefReview {Git.rrTip = sha, Git.rrBase = parent}))
-        many -> openParentPicker sha many
+        [] -> Settings.setMode (Git.AtRef (Git.RefReview {Git.rrTip = tip, Git.rrBase = Git.emptyTreeRef}))
+        [_] -> Settings.setMode (Git.AtRef (Git.RefReview {Git.rrTip = tip, Git.rrBase = tip <> "^"}))
+        many -> openParentPicker tip many
 
 openParentPicker :: T.Text -> [(T.Text, T.Text)] -> Brick.EventM Types.Name Types.St ()
 openParentPicker tip parents = do
   let
-    cells = zipWith (\i (sha, subject) -> [sha, "parent " <> Types.tshow (i :: Int), subject]) [1 ..] parents
+    cells = zipWith (\i (sha, subject) -> [sha, "parent " <> Types.tshow (i :: Int), subject]) [1 :: Int ..] parents
     widths = Widgets.columnWidths [12, 10] cells
-    rows = map (\cs -> pickerRow (Maybe.fromMaybe "" (Types.safeIdx cs 0)) (Widgets.columnRow widths cs) (T.unwords cs)) cells
+    rows =
+      zipWith
+        (\i cs -> pickerRow (tip <> "^" <> Types.tshow i) (Widgets.columnRow widths cs) (T.unwords cs))
+        [1 :: Int ..]
+        cells
   State.modify $ \s ->
     s {Types.stPicker = Just (refreshRowPicker (Types.Picker (Types.PickParent tip) "" rows [] [] 0 Set.empty))}
 

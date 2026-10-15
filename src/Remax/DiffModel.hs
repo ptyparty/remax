@@ -6,7 +6,6 @@
 module Remax.DiffModel
   ( RowR (..)
   , Run (..)
-  , RunKind (..)
   , SplitConfig (..)
   , defaultSplitConfig
   , WhitespaceMode (..)
@@ -51,42 +50,12 @@ data Run = Run
   { runAnchor :: !Int -- buffer row to park the cursor on
   , runKeys :: [T.Text] -- one key per changed line, in display order
   , runLines :: [T.Text] -- the marked lines themselves, aligned with runKeys
-  , runKind :: !RunKind -- prose or code, for the code/comment filter
   }
 
--- Whether a hunk changes only comments. Reading a branch's prose and
--- reading its logic are different passes, so the filter needs to tell
--- them apart — and it has to do so for files nothing has opened yet,
--- which rules out the tree-sitter scopes (they exist only once a file
--- has been displayed, and never for the removed side of a diff).
-data RunKind = RunCode | RunComment
-  deriving (Eq, Show)
-
--- The line comment leaders trusted by both the splitter and the
--- code/comment filter. Deliberately short: a leader that fires on
--- ordinary code would quietly hide real changes.
+-- The line comment leaders the splitter trusts. Deliberately short: a
+-- leader that fires on ordinary code would quietly hide real changes.
 lineCommentLeaders :: [T.Text]
 lineCommentLeaders = ["--", "//", "#", ";"]
-
-blockCommentOpeners :: [T.Text]
-blockCommentOpeners = ["{-", "/*", "<!--"]
-
--- A hunk is prose when every non-blank line it changes is one: a line
--- comment, the opening of a block comment, or a line already inside one.
--- An all-blank hunk is code, since there is no prose in it to read.
-runKindOf :: [(T.Text, Bool)] -> RunKind
-runKindOf ls =
-  let
-    meaningful = filter (not . T.null . T.strip . fst) ls
-    isComment (t, inside) =
-      inside
-        || any
-          (`T.isPrefixOf` T.strip t)
-          (lineCommentLeaders ++ blockCommentOpeners)
-  in
-    if not (null meaningful) && all isComment meaningful
-      then RunComment
-      else RunCode
 
 -- One display row per diff row, with equal prefix/suffix trimmed off
 -- before Myers so ordinary edits diff only the touched region.
@@ -566,9 +535,9 @@ buildRuns rows ixs keys0 =
     -- one, so a delete-only run can anchor where the deletion now sits
     nexts =
       drop 1 (scanr (\(_, mr, _) acc -> Maybe.fromMaybe acc mr) lastRow rows)
-    hasNoRun ((_, mix, _), _) = mix == Nothing
-    runIxOf ((_, mix, _), _) = mix
-    addedRowAnchor ((row, _, _), _) = case row of
+    hasNoRun (_, mix, _) = mix == Nothing
+    runIxOf (_, mix, _) = mix
+    addedRowAnchor (row, _, _) = case row of
       ('+', mr, _) -> mr
       _ -> Nothing
     go [] _ = []
@@ -580,24 +549,22 @@ buildRuns rows ixs keys0 =
           let
             headIx = runIxOf first
             (grp, rest) = span (\e -> runIxOf e == headIx) entries
-            markedOf (((m, _, t), _, _), _) = T.cons m t
-            classified (((_, _, t), _, _), inside) = (t, inside)
+            markedOf ((m, _, t), _, _) = T.cons m t
             n = length grp
             anchor = case Maybe.mapMaybe addedRowAnchor grp of
               (r : _) -> r
               [] -> case grp of
-                (((_, _, nxt), _) : _) -> nxt
+                ((_, _, nxt) : _) -> nxt
                 [] -> 0
           in
             Run
               { runAnchor = anchor
               , runKeys = take n ks
               , runLines = map markedOf grp
-              , runKind = runKindOf (map classified grp)
               }
               : go rest (drop n ks)
   in
-    go (zip (zip3 rows ixs nexts) (insideBlockComment rows)) keys0
+    go (zip3 rows ixs nexts) keys0
 
 forceTokLines :: [[(Brick.AttrName, T.Text)]] -> ()
 forceTokLines =

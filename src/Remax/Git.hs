@@ -44,6 +44,7 @@ module Remax.Git
   , commitAt
   , commitParents
   , resolveShort
+  , isSymbolicRef
   , emptyTreeRef
   , pickableRefs
   , recentCommits
@@ -823,6 +824,15 @@ resolveShort root ref = do
   pure $ case (code, T.strip (T.pack out)) of
     (Exit.ExitSuccess, sha) | not (T.null sha) -> Just sha
     _ -> Nothing
+
+isSymbolicRef :: FilePath -> T.Text -> IO Bool
+isSymbolicRef root ref = do
+  (code, out, _) <-
+    Process.readProcessWithExitCode
+      "git"
+      ["-C", root, "rev-parse", "--symbolic-full-name", T.unpack ref]
+      ""
+  pure (code == Exit.ExitSuccess && not (T.null (T.strip (T.pack out))))
 
 emptyTreeRef :: T.Text
 emptyTreeRef = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"

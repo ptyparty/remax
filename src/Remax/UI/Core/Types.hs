@@ -11,11 +11,10 @@ module Remax.UI.Core.Types
   , Selector (..)
   , NotePopup (..)
   , RepoPlace (..)
-  , RunFilter (..)
-  , filterCycle
-  , runFilterLabel
-  , nextRunFilter
-  , runFilterAllows
+  , WalkFilter (..)
+  , walkCycle
+  , walkLabel
+  , nextWalkFilter
   , PopupPurpose (..)
   , NoteOrigin (..)
   , MarkUndo (..)
@@ -145,41 +144,30 @@ data RepoPlace = RepoPlace
   { rpMode :: Git.ReviewMode
   , rpFile :: FilePath
   , rpHunk :: Int
-  , rpOnlyPending :: Bool
-  , rpRunFilter :: RunFilter
+  , rpWalk :: WalkFilter
   , rpOpened :: Set.Set FilePath
   , rpAnchor :: Maybe (FilePath, Int)
   }
 
--- Which hunks the session is walking. Orthogonal to the pending filter,
--- so "the code hunks I have not looked at yet" is reachable.
-data RunFilter = FilterAll | FilterCode | FilterComments
+data WalkFilter = WalkAll | WalkPending | WalkUnresolved
   deriving (Eq)
 
-filterCycle :: [RunFilter]
-filterCycle = [FilterAll, FilterCode, FilterComments]
+walkCycle :: [WalkFilter]
+walkCycle = [WalkPending, WalkUnresolved, WalkAll]
 
-runFilterLabel :: RunFilter -> T.Text
-runFilterLabel f =
-  case f of
-    FilterAll -> "all"
-    FilterCode -> "code"
-    FilterComments -> "comments"
+walkLabel :: WalkFilter -> T.Text
+walkLabel w =
+  case w of
+    WalkAll -> "all"
+    WalkPending -> "pending"
+    WalkUnresolved -> "unresolved"
 
--- Cycles all → code → comments → all.
-nextRunFilter :: RunFilter -> RunFilter
-nextRunFilter f =
-  case f of
-    FilterAll -> FilterCode
-    FilterCode -> FilterComments
-    FilterComments -> FilterAll
-
-runFilterAllows :: RunFilter -> DiffModel.Run -> Bool
-runFilterAllows f r =
-  case f of
-    FilterAll -> True
-    FilterCode -> DiffModel.runKind r == DiffModel.RunCode
-    FilterComments -> DiffModel.runKind r == DiffModel.RunComment
+nextWalkFilter :: WalkFilter -> WalkFilter
+nextWalkFilter w =
+  case w of
+    WalkPending -> WalkUnresolved
+    WalkUnresolved -> WalkAll
+    WalkAll -> WalkPending
 
 data PopupPurpose
   = NoteFor [T.Text] NoteOrigin
@@ -258,8 +246,7 @@ data St = St
   , stLastSearch :: T.Text
   , stBorder :: V.Attr -- concrete attr for raw border fills
   , stHls :: TS.HighlighterTable
-  , stOnlyPending :: Bool -- hide/skip hunks that already have verdicts
-  , stRunFilter :: RunFilter -- walk everything, only code, or only prose
+  , stWalk :: WalkFilter -- which hunks ]/[ and the tray admit
   , stFileScope :: Git.FileScope -- does the file dialog list ignored files too
   , stRebase :: Maybe Git.RebaseStatus -- a paused rebase the session is following
   , stWritten :: Set.Set FilePath -- files written since the last commit-shaped action

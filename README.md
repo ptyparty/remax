@@ -112,8 +112,11 @@ another file is picked up when you visit it.
   their file line — the file's progress meter (`▰▰▱ 2/3`) keeps the
   count — and `]`/`[` skip them; flagged and
   questioned hunks still count as pending — they need another look — so
-  they stay listed and navigable. `Space p` switches to showing (and walking)
-  every hunk, and `Space k` narrows to code-only or comment-only hunks.
+  they stay listed and navigable. `Space p` cycles the walk: pending hunks →
+  only hunks with an **outstanding change request**: a flagged or questioned
+  line, or a conversation nobody has resolved yet, so `]`/`[` jump straight
+  between the things still waiting on someone → every hunk;
+  `:walk pending|unresolved|all` names one outright.
   The current hunk always shows either
   way. `{` / `}` scroll the tray; it auto-centers on the current hunk
   when you jump. Long paths compress like `s/R/Quote.hs` so the file
@@ -183,12 +186,11 @@ Normal mode:
 | `u` | undo |
 | `y` | yank the selection (or cursor cell) — line-wise for `x` selections; the yank slot is session-wide, so paste works across files (and the note popup), and it goes to the **system clipboard** too |
 | `p` / `P` | paste after / before: whole lines below/above for a line-wise yank, after/at the cursor otherwise; the paste is selected. Pastes the **system clipboard** when it holds something copied outside the session, the yank slot otherwise |
-| `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `n` note popup, `e` `$EDITOR` here, `p` pending filter, `k` code / comment filter, `u` resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
+| `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `n` note popup, `e` `$EDITOR` here, `p` walk filter (pending / unresolved / all), `w` toggle ignore-whitespace, `u` resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
 | `.` | repeat the last insert session (the entering command plus what was typed), helix-style — `c`-fix-`Esc` then `.` applies the same change at the cursor |
 | `Enter` | **accept the selection as reviewed** — a selection is required, so what you accept is always visibly highlighted (`X Enter` for the hunk you're looking at). Completing a hunk jumps to the next pending one; a partial mark steps to the next line |
 | `!` / `?` | flag-to-return-to / question — the selection's lines, or the whole current hunk with none. The note popup opens immediately for the reason (`note-on-flag = 0` in the config turns that off); discarding it (`Ctrl-c`, or `Esc` from its normal mode) cancels the mark as well, since the verdict has not been explained yet — save an empty note to keep the mark without one. The jump to the next hunk waits until the popup closes, and never happens if the mark is cancelled |
 | `]` / `[` | next / previous hunk, crossing file boundaries |
-| `Space k` | cycle what `]`/`[` and auto-advance walk: every hunk → only hunks that touch **code** → only hunks that are all **comment** (`:filter all\|code\|comments` names one outright). Reading a branch's prose and reading its logic are different passes. A hunk counts as comment when every non-blank line it changes is a line comment, opens a block comment, or sits inside one — so a hunk that adds a comment *beside* a code change is code. Independent of the pending filter, so "the code hunks nobody has looked at yet" is the two together; the header says which filter is on, and an exhausted walk says which one emptied it |
 | `/`, `n` / `N` | search the file (literal, helix-shaped: the match becomes the selection); repeat forward / back, wrapping |
 | `Space /` | project-wide search (`git grep` behind the picker; also `:grep TEXT`): type, pick a hit, Enter jumps to the file and line with the match selected — and `n`/`N` then walk the **hit list across files** without re-searching (a fresh `/` or `*` returns them to in-file duty). The results box stretches to the pane width so lines keep their context |
 | `:` | the command line — see below |
@@ -307,7 +309,7 @@ do not), `C-k` kills to end of line, `C-y` yanks,
 command line, `C-s` the search prompt. Review verbs live behind the
 `C-c` prefix with the same letters as the helix keys — `C-c Enter`
 accept, `C-c !` / `C-c ?` flag/question, `C-c x` select hunk,
-`C-c ]`/`C-c [` hunks, `C-c p` pending filter, `C-c f` files — and
+`C-c ]`/`C-c [` hunks, `C-c p` walk filter, `C-c f` files — and
 `C-x C-c` quits, `C-x C-s` saves (edits already write through). The
 note popup keeps its modal keys in either keymap.
 
@@ -321,7 +323,7 @@ note popup keeps its modal keys in either keymap.
 | `:ref` | pick a branch to review without checking it out: the session reads that ref's files instead of the working tree and refuses every edit, so an agent can keep working on whatever is checked out. The branch's own merge-base with the mainline is the base until `:base` says otherwise, and the view follows the branch as commits land on it. Verdicts record the ref and the tip they were made at, and `remax list` reports both so the agent knows where to look. The first row, `working tree`, is the way back; so is `:mode tree`, and both restore the base you had before |
 | `:ref REF` | the same, naming the ref |
 | `:commit` | review one commit: a picker over every branch, remote branch and tag, newest first. `⏎` on a ref unfolds the commits it adds over the mainline beneath it (the mainline itself unfolds to its recent history); `⏎` on a commit reviews that commit against its parent, read-only, the same way `:ref` does. A merge asks which parent |
-| `:commit REF` | the same, naming the commit (any commit-ish, so `HEAD~2` and tag names work) |
+| `:commit REF` | the same, naming the commit (any commit-ish, so `HEAD~2` and tag names work). A branch name stays symbolic, so the review follows the branch when an agent amends or adds to it |
 | `:message` | the full message of the commit under review, as `Space c` shows it |
 | `:mode head` / `:mode unstaged` / `:mode untracked` | the classic change sets |
 | `:rebase [REF]` | start a commit-by-commit review pass (below) |
@@ -332,7 +334,6 @@ note popup keeps its modal keys in either keymap.
 | `:note` | open the note popup — a small modal buffer (full editing keys); text auto-wraps; `⏎` in its normal mode saves, `Ctrl-c` (any mode) or `Esc` in its normal mode discards, saving empty clears the whole conversation. Discarding a popup that `:note` opened leaves the verdict alone — only one opened by `!` or `?` takes its mark with it. A note opened that way covers every line the mark just wrote, and accepting a hunk retires the whole of it: the conversation closes and any lines outside the hunk that were part of the same mark lose their verdict too, since one keystroke made them and one retires them. Lines beside them carrying a *different* conversation are untouched, even one worded identically. Notes are a **conversation**, and the popup shows it: the thread so far sits above what you're typing (`≡ you`, `↪ them`, oldest first, the newest kept when a long thread won't fit), the frame names the line you're annotating, and the title and the verb say which of the three things is happening — a new `note`, `editing yours` when your post is the newest and reopens for rewriting, or `reply to NAME` with `⏎ post` once someone has answered. From any line of a hunk that carries a conversation, `:note` continues that thread |
 | `:unnote` / `:resolve` | drop the whole conversation from the same target |
 | `:resolve all` | sweep every **answered** conversation in the repository — any thread whose newest post isn't yours clears; threads awaiting an answer stay |
-| `:filter all` / `:filter code` / `:filter comments` | which hunks `]`/`[` and auto-advance walk; bare `:filter` cycles (also `Space k`) |
 | `:accept PATH` | mark every hunk under a directory (or in one file) reviewed — the bulk verb for generated code; matching is by path component |
 | `:open PATH` / `:close` | open any repository file in the session / drop it again |
 | `:repo` | switch which repository the session is looking at (also `Space R`, or `:repo NAME`). Start remax in a directory that *holds* checkouts rather than being one — a story directory of worktrees, say — and it opens the first and offers the rest here, with each row's branch and state (`clean`, `3 changed`, `rebasing 2/7`, `CONFLICT`) so you can see which one wants you. Your place in a repository is remembered, so leaving one mid-rebase and coming back lands you on the same hunk with the rebase still in progress — that state lives in `.git` and is read back on arrival, while buffers are re-read from disk, since the reason you stepped away may well have been to let an agent work there |

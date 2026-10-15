@@ -45,12 +45,10 @@ trayRows st =
     curH = Types.clampH (Types.fvRuns (Types.currentFile st)) (Types.stCurH st)
     hiddenHunk fi (hi, r, _) =
       let
-        mark = Verdict.runMark (Types.stVerdicts st) r
         isCurrent = fi == curF && hi == curH
-        settled = Types.stOnlyPending st && mark == '\10003'
-        wrongKind = not (Types.runFilterAllows (Types.stRunFilter st) r)
+        skipped = not (Verdict.walkAllows st r)
       in
-        not isCurrent && (settled || wrongKind)
+        not isCurrent && skipped
     fileGroup (fi, fv) =
       let
         -- the declarations are a list parallel to the runs, and a file
