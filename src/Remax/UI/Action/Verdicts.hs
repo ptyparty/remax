@@ -2,9 +2,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Remax.UI.Action.Verdicts
-  ( togglePendingOnly
-  , cycleRunFilter
-  , setRunFilter
+  ( cycleWalkFilter
+  , setWalkFilter
   , showCommitPopup
   , revertTarget
   , acceptSelection
@@ -43,42 +42,22 @@ import Remax.Zipper qualified as Z
 import System.FilePath ((</>))
 import System.FilePath qualified as FilePath
 
-togglePendingOnly :: Brick.EventM Types.Name Types.St ()
-togglePendingOnly = do
-  State.modify $ \s ->
-    let
-      now = not (Types.stOnlyPending s)
-    in
-      s
-        { Types.stOnlyPending = now
-        , Types.stMsg =
-            if now
-              then "pending hunks only"
-              else "showing all hunks"
-        }
-  Nav.scrollTrayToCurrent
-
--- Space k cycles all → code → comments; :filter names one outright.
--- Independent of the pending filter, so "the code hunks nobody has
--- looked at yet" is one combination of the two.
-cycleRunFilter :: Brick.EventM Types.Name Types.St ()
-cycleRunFilter = do
+cycleWalkFilter :: Brick.EventM Types.Name Types.St ()
+cycleWalkFilter = do
   st <- State.get
-  setRunFilter (Types.nextRunFilter (Types.stRunFilter st))
+  setWalkFilter (Types.nextWalkFilter (Types.stWalk st))
 
-setRunFilter :: Types.RunFilter -> Brick.EventM Types.Name Types.St ()
-setRunFilter chosen = do
-  State.modify (\s -> s {Types.stRunFilter = chosen, Types.stMsg = filterMsg chosen})
-  -- the entry list reshapes under the viewport, so the current hunk has
-  -- to be found again
+setWalkFilter :: Types.WalkFilter -> Brick.EventM Types.Name Types.St ()
+setWalkFilter chosen = do
+  State.modify (\s -> s {Types.stWalk = chosen, Types.stMsg = walkMsg chosen})
   Nav.scrollTrayToCurrent
 
-filterMsg :: Types.RunFilter -> T.Text
-filterMsg chosen =
+walkMsg :: Types.WalkFilter -> T.Text
+walkMsg chosen =
   case chosen of
-    Types.FilterAll -> "walking every hunk"
-    Types.FilterCode -> "walking code hunks only"
-    Types.FilterComments -> "walking comment hunks only"
+    Types.WalkAll -> "showing all hunks"
+    Types.WalkPending -> "pending hunks only"
+    Types.WalkUnresolved -> "outstanding requests and conversations only"
 
 -- The full message of the commit under review: the stopped commit's
 -- own sha during a rebase (HEAD differs at a conflict stop), HEAD
@@ -435,7 +414,7 @@ advanceToPending = do
     -- questioned ones only get circled back to once those run out
     wrapped =
       let
-        (upToHere, afterHere) = break (> here) (Verdict.filteredRunPairs st)
+        (upToHere, afterHere) = break (> here) (map fst (Verdict.allRunsInOrder st))
       in
         afterHere ++ upToHere
     unvisited = filter (Verdict.pairUnvisited st) wrapped

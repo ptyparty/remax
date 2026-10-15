@@ -160,8 +160,7 @@ initialState startup mode root roots story watchMode dirWatch clip alreadyThere 
     , Types.stLastSearch = ""
     , Types.stBorder = Attrs.fgOnly (Theme.scopeAttr (suTheme startup) "ui.linenr" (BrickUtil.fg V.brightBlack))
     , Types.stHls = suHighlighters startup
-    , Types.stOnlyPending = True
-    , Types.stRunFilter = Types.FilterAll
+    , Types.stWalk = Types.WalkPending
     , Types.stFileScope = Git.VisibleFiles
     , Types.stRebase = suRebase startup
     , Types.stWritten = Set.empty

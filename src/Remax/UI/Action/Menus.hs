@@ -14,6 +14,7 @@ import Remax.UI.Action.Editor qualified as Editor
 import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Picker qualified as PickerAction
+import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Action.Tree qualified as TreeAction
 import Remax.UI.Action.Verdicts qualified as VerdictAction
 import Remax.UI.Core.Types qualified as Types
@@ -257,8 +258,8 @@ spaceMenuEntries =
   , ("'", "last selector", PickerAction.reopenLastSelector)
   , ("n", "note popup", NoteAction.openNotePopup Types.NoteAsked)
   , ("e", "$EDITOR here", Editor.editCurrent)
-  , ("p", "pending filter", VerdictAction.togglePendingOnly)
-  , ("k", "code / comment filter", VerdictAction.cycleRunFilter)
+  , ("p", "walk filter: pending / unresolved / all", VerdictAction.cycleWalkFilter)
+  , ("w", "toggle ignore whitespace", Settings.toggleIgnoreWs)
   , ("u", "resolve note here", NoteAction.unnoteCmd)
   , ("h", "make this hunk current", Nav.setCurrentHunkHere)
   , ("r", "revert hunk to base", VerdictAction.revertTarget)

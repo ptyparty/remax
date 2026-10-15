@@ -168,18 +168,15 @@ fileHeader st lead fv =
         else Brick.txt ""
     -- a filtered session hides hunks; say so, or an empty-looking
     -- tray reads as a finished review
-    filterSeg =
-      if Types.stRunFilter st == Types.FilterAll
-        then Brick.txt ""
-        else
-          Brick.withAttr
-            Attrs.headerRebaseAttr
-            (Brick.txt ("  ·  " <> Types.runFilterLabel (Types.stRunFilter st) <> " only"))
+    walkSeg =
+      if Types.stWalk st == Types.WalkUnresolved
+        then Brick.withAttr Attrs.headerRebaseAttr (Brick.txt "  ·  unresolved only")
+        else Brick.txt ""
   in
     [ Brick.txt lead
     , Brick.withAttr Attrs.headerFileAttr (Brick.txt (T.pack (Types.fvPath fv)))
     , deletedSeg
-    , filterSeg
+    , walkSeg
     , Brick.withAttr Attrs.headerCountAttr (Brick.txt counts)
     , doneBadge
     ]

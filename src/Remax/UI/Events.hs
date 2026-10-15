@@ -28,6 +28,7 @@ import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Picker qualified as PickerAction
 import Remax.UI.Action.Search qualified as Search
+import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Action.Tree qualified as TreeAction
 import Remax.UI.Action.TreeKeys qualified as TreeKeys
 import Remax.UI.Action.Verdicts qualified as VerdictAction
@@ -357,8 +358,8 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar ']') [] -> Nav.switchRun 1
         V.EvKey (V.KChar '[') [] -> Nav.switchRun (-1)
         V.EvKey (V.KChar 'x') [] -> Nav.selectCurrentHunk
-        V.EvKey (V.KChar 'p') [] -> VerdictAction.togglePendingOnly
-        V.EvKey (V.KChar 'k') [] -> VerdictAction.cycleRunFilter
+        V.EvKey (V.KChar 'p') [] -> VerdictAction.cycleWalkFilter
+        V.EvKey (V.KChar 'w') [] -> Settings.toggleIgnoreWs
         V.EvKey (V.KChar 'u') [] -> NoteAction.unnoteCmd
         V.EvKey (V.KChar 'h') [] -> Nav.setCurrentHunkHere
         V.EvKey (V.KChar 'v') [] -> VerdictAction.revertTarget
@@ -549,7 +550,7 @@ pasteKey deliver i ev = do
     then
       Types.setMsg
         ( if Clipboard.clipboardReadable (Types.stClip st)
-            then "nothing to paste — y yanks (the pending filter is Space p)"
+            then "nothing to paste — y yanks (the walk filter is Space p)"
             else "nothing to paste — no clipboard helper here (wl-copy, xclip, xsel, pbcopy)"
         )
     else deliver i ed ev

@@ -43,7 +43,6 @@ data ArgKind
   | ArgDir
   | ArgText
   | ArgSet
-  | ArgFilter
 
 commandTable :: [(T.Text, ArgKind, T.Text)]
 commandTable =
@@ -60,7 +59,6 @@ commandTable =
   , ("unnote", NoArg, "remove the note from the target lines")
   , ("resolve", ArgText, "resolve the note here; 'all' sweeps answered ones")
   , ("revert", NoArg, "revert hunk under cursor (or selection) to base")
-  , ("filter", ArgFilter, "walk all | code | comments (also Space k)")
   , ("open", ArgPath, "open a file in the session")
   , ("close", NoArg, "drop the current file")
   , ("files", NoArg, "fuzzy file finder")
@@ -100,7 +98,6 @@ cmdCandidates st input =
         Just ArgMode -> prefixed ["head", "unstaged", "untracked"]
         Just ArgPath -> prefixed (Types.stCmdFiles st)
         Just ArgDir -> prefixed (Types.stCmdDirs st ++ Types.stCmdFiles st)
-        Just ArgFilter -> prefixed (map Types.runFilterLabel Types.filterCycle)
         _ -> []
       _ -> []
 
@@ -199,8 +196,8 @@ runCommand input =
     ("note" : rest) -> NoteAction.noteCmd (T.unwords rest)
     ["unnote"] -> NoteAction.unnoteCmd
     ["revert"] -> VerdictAction.revertTarget
-    ["filter"] -> VerdictAction.cycleRunFilter
-    ["filter", which] -> setFilterNamed which
+    ["walk"] -> VerdictAction.cycleWalkFilter
+    ["walk", which] -> setWalkNamed which
     ["resolve"] -> NoteAction.unnoteCmd
     ["resolve", "all"] -> Conversation.resolveAllAnswered
     ["accept", path] -> VerdictAction.acceptPath path
@@ -223,11 +220,11 @@ runCommand input =
     [tok] | Just n <- lineAddress tok -> Nav.gotoLine n
     _ -> Types.setMsg ("unknown command: " <> input)
 
-setFilterNamed :: T.Text -> Brick.EventM Types.Name Types.St ()
-setFilterNamed which =
-  case filter ((== which) . Types.runFilterLabel) Types.filterCycle of
-    (chosen : _) -> VerdictAction.setRunFilter chosen
-    [] -> Types.setMsg ("filter = " <> T.intercalate " | " (map Types.runFilterLabel Types.filterCycle))
+setWalkNamed :: T.Text -> Brick.EventM Types.Name Types.St ()
+setWalkNamed which =
+  case filter ((== which) . Types.walkLabel) Types.walkCycle of
+    (chosen : _) -> VerdictAction.setWalkFilter chosen
+    [] -> Types.setMsg ("walk = " <> T.intercalate " | " (map Types.walkLabel Types.walkCycle))
 
 switchRepoNamed :: T.Text -> Brick.EventM Types.Name Types.St ()
 switchRepoNamed name = do

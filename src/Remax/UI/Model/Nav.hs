@@ -255,9 +255,7 @@ switchRun :: Int -> Brick.EventM Types.Name Types.St ()
 switchRun d = do
   st <- State.get
   let
-    eligible (_, r) =
-      (not (Types.stOnlyPending st) || Verdict.runPending (Types.stVerdicts st) r)
-        && Types.runFilterAllows (Types.stRunFilter st) r
+    eligible (_, r) = Verdict.walkAllows st r
     pairs = map fst (filter eligible (Verdict.allRunsInOrder st))
     here =
       ( Types.stCurF st
@@ -265,10 +263,9 @@ switchRun d = do
       )
     -- name whichever filter emptied the list, so an empty walk is never
     -- mistaken for a finished review
-    emptyMsg = case Types.stRunFilter st of
-      Types.FilterCode -> "no code hunks left"
-      Types.FilterComments -> "no comment hunks left"
-      Types.FilterAll -> "no pending hunks left"
+    emptyMsg = case Types.stWalk st of
+      Types.WalkUnresolved -> "nothing outstanding"
+      _ -> "no pending hunks left"
   case pairs of
     [] -> State.modify (\s -> s {Types.stMsg = emptyMsg})
     _ -> do
