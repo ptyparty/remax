@@ -374,7 +374,7 @@ applyCheckout branch
 openGrepPicker :: T.Text -> Brick.EventM Types.Name Types.St ()
 openGrepPicker query = do
   st <- State.get
-  (matches, targets) <- MonadIO.liftIO (grepRepo (Types.stRoot st) query)
+  (matches, targets) <- MonadIO.liftIO (grepRepo (Types.effectiveMode st) (Types.stRoot st) query)
   State.modify $ \s ->
     s
       { Types.stPicker =
@@ -414,28 +414,38 @@ openGrepHit path line query = do
 
 -- Literal, case-sensitive, binary-skipping; capped so a short query
 -- cannot flood the overlay.
-grepRepo :: FilePath -> T.Text -> IO ([T.Text], [(FilePath, Int)])
-grepRepo root query =
+grepRepo :: Git.ReviewMode -> FilePath -> T.Text -> IO ([T.Text], [(FilePath, Int)])
+grepRepo mode root query =
   if T.length query < 2
     then pure ([], [])
     else do
+      let
+        treeArgs = case Git.subjectOf mode of
+          Git.WorkingTree -> []
+          Git.Ref tip -> [T.unpack tip]
+        prefix = case Git.subjectOf mode of
+          Git.WorkingTree -> ""
+          Git.Ref tip -> tip <> ":"
       (_, out, _) <-
         Process.readProcessWithExitCode
           "git"
-          [ "-C"
-          , root
-          , "grep"
-          , "-nF"
-          , "-I"
-          , "--no-color"
-          , "-e"
-          , T.unpack query
-          , "--"
-          ]
+          ( [ "-C"
+            , root
+            , "grep"
+            , "-nF"
+            , "-I"
+            , "--no-color"
+            , "-e"
+            , T.unpack query
+            ]
+              ++ treeArgs
+              ++ ["--"]
+          )
           ""
       let
         hits = take 200 (T.lines (T.pack out))
-        parse hit = do
+        parse hit0 = do
+          hit <- T.stripPrefix prefix hit0
           let
             (path, rest1) = T.breakOn ":" hit
           _ <- if T.null rest1 then Nothing else Just ()
@@ -499,7 +509,7 @@ pickerRetype pk q =
     Types.PickFiles -> State.modify (\s -> s {Types.stPicker = Just (refreshPicker pk {Types.pkInput = q})})
     Types.PickGrep -> do
       st <- State.get
-      (matches, targets) <- MonadIO.liftIO (grepRepo (Types.stRoot st) q)
+      (matches, targets) <- MonadIO.liftIO (grepRepo (Types.effectiveMode st) (Types.stRoot st) q)
       State.modify $ \s ->
         s {Types.stPicker = Just pk {Types.pkInput = q, Types.pkMatches = matches, Types.pkTargets = targets, Types.pkSel = 0}}
     _ -> State.modify (\s -> s {Types.stPicker = Just (refreshRowPicker pk {Types.pkInput = q})})
