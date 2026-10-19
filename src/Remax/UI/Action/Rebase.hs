@@ -127,65 +127,84 @@ abortRebase = Types.whenWritable $ \grant -> do
         Right () -> "rebase aborted"
 
 -- The standalone fold-fixes-into-HEAD flow (pairs with :base HEAD^).
--- :amend — the commit message of the commit under review (HEAD; during
--- a rebase that is the stopped commit) opens for editing, and saving
--- amends it, folding in any files written this session outside a
--- rebase (a rebase stop leaves the folding to :continue, so the amend
--- there is message-only).
+-- :amend — the commit message of the commit under review (HEAD, or the
+-- stopped commit mid-rebase) opens for editing, and saving amends it,
+-- folding in any files written this session outside a rebase (a rebase
+-- stop leaves the folding to :continue, so the amend there is
+-- message-only). A conflict stop has not made its commit yet, so HEAD is
+-- the previous commit; the edit goes to the message :continue commits.
 amendHead :: Brick.EventM Types.Name Types.St ()
 amendHead = Types.whenWritable $ \_ -> do
   st <- State.get
-  got <- MonadIO.liftIO (Git.commitBody (Types.stRoot st) "HEAD")
-  -- what folds in with the message: everything the session is showing as
-  -- changed, asked of git rather than remembered, so an agent's edits and
-  -- \$EDITOR's edits count the same as the ones typed in here. At a rebase
-  -- stop nothing folds in -- :continue owns that.
-  folding <- case Types.stRebase st of
-    Just _ -> pure []
-    Nothing -> MonadIO.liftIO (Git.changedFiles (Types.effectiveMode st) (Types.stRoot st))
+  stopped <- MonadIO.liftIO (Git.stoppedCommitMessage (Types.stRoot st))
+  got <- case stopped of
+    Just msg -> pure (Right (msg, Types.AmendStoppedCommit))
+    Nothing -> do
+      body <- MonadIO.liftIO (Git.commitBody (Types.stRoot st) "HEAD")
+      -- what folds in with the message: everything the session is showing as
+      -- changed, asked of git rather than remembered, so an agent's edits and
+      -- \$EDITOR's edits count the same as the ones typed in here. At a rebase
+      -- stop nothing folds in -- :continue owns that.
+      folding <- case Types.stRebase st of
+        Just _ -> pure []
+        Nothing -> MonadIO.liftIO (Git.changedFiles (Types.effectiveMode st) (Types.stRoot st))
+      pure (fmap (\msg -> (msg, Types.AmendHead folding)) body)
   case got of
     Left e -> Types.setMsg e
-    Right msg -> do
+    Right (msg, target) -> do
       let
         ls = if T.null (T.strip msg) then [""] else T.lines msg
         ed = Modal.newEdState 0 ls
       State.modify
         ( \s ->
             s
-              { Types.stNotePopup = Just (Types.NotePopup ed (Types.AmendMessage folding))
+              { Types.stNotePopup = Just (Types.NotePopup ed (Types.AmendMessage target))
               , Types.stVi = Vi.viIdle
               }
         )
 
-applyAmendMessage :: [FilePath] -> T.Text -> Brick.EventM Types.Name Types.St ()
-applyAmendMessage folding text = Types.whenWritable $ \grant -> do
+applyAmendMessage :: Types.AmendTarget -> T.Text -> Brick.EventM Types.Name Types.St ()
+applyAmendMessage target text
+  | T.null text = Types.setMsg "empty commit message — amend cancelled"
+  | otherwise =
+      case target of
+        Types.AmendStoppedCommit -> setStoppedMessage text
+        Types.AmendHead folding -> amendHeadCommit folding text
+
+setStoppedMessage :: T.Text -> Brick.EventM Types.Name Types.St ()
+setStoppedMessage text = Types.whenWritable $ \grant -> do
   st <- State.get
-  if T.null text
-    then Types.setMsg "empty commit message — amend cancelled"
-    else do
-      res <- MonadIO.liftIO $ do
-        addRes <-
-          if null folding
-            then pure (Right ())
-            else Git.runGit grant (Types.stRoot st) (["add", "--"] ++ folding)
-        case addRes of
-          Left e -> pure (Left e)
-          Right () ->
-            Git.runGit grant (Types.stRoot st) ["commit", "--amend", "-m", T.unpack text]
-      case res of
-        Left e -> Types.setMsg e
-        Right () -> do
-          Monad.unless (null folding) (State.modify (\s -> s {Types.stWritten = Set.empty}))
-          Load.forceGitRefresh
-          Types.setMsg $
-            if null folding
-              then "amended the commit message"
-              else
-                "amended HEAD: message + "
-                  <> fileCountLabel (length folding)
-                  <> " ("
-                  <> foldedNames 3 folding
-                  <> ")"
+  res <- MonadIO.liftIO (Git.setStoppedCommitMessage grant (Types.stRoot st) text)
+  Types.setMsg $ case res of
+    Left e -> e
+    Right () -> "set the stopped commit's message — :continue commits it"
+
+amendHeadCommit :: [FilePath] -> T.Text -> Brick.EventM Types.Name Types.St ()
+amendHeadCommit folding text = Types.whenWritable $ \grant -> do
+  st <- State.get
+  res <- MonadIO.liftIO $ do
+    addRes <-
+      if null folding
+        then pure (Right ())
+        else Git.runGit grant (Types.stRoot st) (["add", "--"] ++ folding)
+    case addRes of
+      Left e -> pure (Left e)
+      Right () ->
+        Git.runGit grant (Types.stRoot st) ["commit", "--amend", "-m", T.unpack text]
+  case res of
+    Left e -> Types.setMsg e
+    Right () -> do
+      Monad.unless (null folding) (State.modify (\s -> s {Types.stWritten = Set.empty}))
+      Load.forceGitRefresh
+      Types.setMsg $
+        if null folding
+          then "amended the commit message"
+          else
+            "amended HEAD: message + "
+              <> fileCountLabel (length folding)
+              <> " ("
+              <> foldedNames 3 folding
+              <> ")"
 
 fileCountLabel :: Int -> T.Text
 fileCountLabel n = Types.tshow n <> (if n == 1 then " file" else " files")

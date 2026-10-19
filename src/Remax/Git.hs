@@ -38,6 +38,8 @@ module Remax.Git
   , RebaseStatus (..)
   , rebaseStatus
   , commitBody
+  , stoppedCommitMessage
+  , setStoppedCommitMessage
   , commitMessage
   , gitStateWatchDirs
   , headCommit
@@ -746,6 +748,36 @@ commitBody root ref = do
   pure $ case code of
     Exit.ExitSuccess -> Right (T.stripEnd (T.pack out))
     Exit.ExitFailure _ -> Left (T.strip (T.pack err))
+
+{- | The message of the commit a conflict stop has not made yet, which
+@rebase --continue@ commits. Nothing when no such commit is pending.
+-}
+stoppedCommitMessage :: FilePath -> IO (Maybe T.Text)
+stoppedCommitMessage root = do
+  mFile <- stoppedMessageFile root
+  traverse (fmap T.stripEnd . readFileOr "") mFile
+
+setStoppedCommitMessage :: Writable -> FilePath -> T.Text -> IO (Either T.Text ())
+setStoppedCommitMessage _ root text = do
+  mFile <- stoppedMessageFile root
+  case mFile of
+    Nothing -> pure (Left "the stopped commit is no longer pending — amend cancelled")
+    Just file -> do
+      res <- IOError.tryIOError (BS.writeFile file (TE.encodeUtf8 (text <> "\n")))
+      pure $ case res of
+        Left e -> Left (T.pack (show e))
+        Right () -> Right ()
+
+stoppedMessageFile :: FilePath -> IO (Maybe FilePath)
+stoppedMessageFile root = do
+  mMerge <- gitStateDir root "rebase-merge"
+  case mMerge of
+    Nothing -> pure Nothing
+    Just dir -> do
+      let
+        file = dir </> "message"
+      present <- Directory.doesFileExist file
+      pure (if present then Just file else Nothing)
 
 commitMessage :: FilePath -> T.Text -> IO (Either T.Text T.Text)
 commitMessage root ref = do

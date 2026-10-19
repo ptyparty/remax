@@ -16,6 +16,7 @@ module Remax.UI.Core.Types
   , walkLabel
   , nextWalkFilter
   , PopupPurpose (..)
+  , AmendTarget (..)
   , NoteOrigin (..)
   , MarkUndo (..)
   , FileView (..)
@@ -171,10 +172,16 @@ nextWalkFilter w =
 
 data PopupPurpose
   = NoteFor [T.Text] NoteOrigin
-  | -- the paths that will be staged along with the message, so the popup
-    -- can show them before you commit to them (empty at a rebase stop,
-    -- where :continue owns the folding)
-    AmendMessage [FilePath]
+  | AmendMessage AmendTarget
+
+data AmendTarget
+  = {- | the paths that will be staged along with the message, so the popup
+    can show them before you commit to them (empty at a rebase stop,
+    where :continue owns the folding)
+    -}
+    AmendHead [FilePath]
+  | -- | a conflict stop, whose commit :continue has yet to make
+    AmendStoppedCommit
 
 -- Why a note popup is open, which decides what escaping out of it means.
 --

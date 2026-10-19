@@ -316,7 +316,7 @@ saveNote np = do
     Types.NoteFor keys _ -> do
       applyNote text keys
       VerdictAction.runDeferredAdvance
-    Types.AmendMessage folding -> Rebase.applyAmendMessage folding text
+    Types.AmendMessage target -> Rebase.applyAmendMessage target text
 
 notePopupVi :: Types.St -> Types.NotePopup -> V.Event -> Brick.EventM Types.Name Types.St ()
 notePopupVi st np ev =
