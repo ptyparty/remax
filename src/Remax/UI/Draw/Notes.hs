@@ -89,7 +89,7 @@ popupHint np thread =
 popupTargetRows :: Types.St -> Types.NotePopup -> [BrickTypes.Widget Types.Name]
 popupTargetRows st np =
   case Types.npPurpose np of
-    Types.AmendMessage folding -> amendTargetRows st folding
+    Types.AmendMessage target -> amendTargetRows st target
     Types.NoteFor _ _ -> case Types.currentFileMay st of
       Nothing -> []
       Just fv ->
@@ -105,8 +105,17 @@ popupTargetRows st np =
 
 -- an amend that quietly stages files is the surprise this is here
 -- to remove: say what folds in before ⏎ does it
-amendTargetRows :: Types.St -> [FilePath] -> [BrickTypes.Widget Types.Name]
-amendTargetRows st folding
+amendTargetRows :: Types.St -> Types.AmendTarget -> [BrickTypes.Widget Types.Name]
+amendTargetRows st target =
+  case target of
+    Types.AmendStoppedCommit ->
+      [ Brick.withAttr Attrs.hintAttr (Brick.txt "the stopped commit \183 :continue commits it with this message")
+      , Brick.txt " "
+      ]
+    Types.AmendHead folding -> amendHeadRows st folding
+
+amendHeadRows :: Types.St -> [FilePath] -> [BrickTypes.Widget Types.Name]
+amendHeadRows st folding
   | null folding =
       [ Brick.withAttr
           Attrs.hintAttr
