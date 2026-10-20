@@ -104,6 +104,7 @@ executable remax
   main-is: Main.hs
   other-modules:
       Remax.Clipboard
+      Remax.CommitMessage
       Remax.Config
       Remax.DiffModel
       Remax.Emacs

@@ -36,7 +36,6 @@ settingNames :: [T.Text]
 settingNames =
   [ "keys"
   , "scrolloff"
-  , "note-wrap"
   , "note-on-flag"
   , "ignore-whitespace"
   , "word-diff"
@@ -51,7 +50,6 @@ settingValue cfg key =
   case key of
     "keys" -> Config.keyModeToText (Config.cfgKeys cfg)
     "scrolloff" -> Types.tshow (Config.cfgScrolloff cfg)
-    "note-wrap" -> Types.tshow (Config.cfgNoteWrap cfg)
     "note-on-flag" -> if Config.cfgNoteOnFlag cfg then "1" else "0"
     "ignore-whitespace" -> if Config.cfgIgnoreWs cfg then "1" else "0"
     "word-diff" -> if Config.cfgWordDiff cfg then "1" else "0"
@@ -100,7 +98,6 @@ applySet key val = do
           finish cfg {Config.cfgKeys = Config.keyModeFromText val} (State.modify (\s -> s {Types.stVi = Vi.viIdle}))
       | otherwise -> Types.setMsg ("keys = " <> T.intercalate " | " Config.keyModeNames)
     "scrolloff" -> withInt (\n -> cfg {Config.cfgScrolloff = max 0 n}) (pure ())
-    "note-wrap" -> withInt (\n -> cfg {Config.cfgNoteWrap = max 20 n}) (pure ())
     "note-on-flag" ->
       withInt (\n -> cfg {Config.cfgNoteOnFlag = n /= 0}) (pure ())
     -- both change what the diff says, so every file is decorated again

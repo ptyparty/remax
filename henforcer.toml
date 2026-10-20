@@ -8,7 +8,7 @@ allowedOpenUnaliasedImports = 1
 allowedAliasUniqueness = { allAliasesUniqueExcept = [] }
 encapsulatedTrees = ["Remax.UI"]
 treeDependencies = [
-  { moduleTree = "Remax.UI", dependencies = ["Remax.Clipboard", "Remax.Config", "Remax.DiffModel", "Remax.Emacs", "Remax.Git", "Remax.Highlight", "Remax.Key", "Remax.Modal", "Remax.Punch", "Remax.Store", "Remax.Theme", "Remax.Tree", "Remax.TreeSitter", "Remax.Vi", "Remax.Zipper"], note = "the session modules sit above every other Remax module" },
+  { moduleTree = "Remax.UI", dependencies = ["Remax.Clipboard", "Remax.CommitMessage", "Remax.Config", "Remax.DiffModel", "Remax.Emacs", "Remax.Git", "Remax.Highlight", "Remax.Key", "Remax.Modal", "Remax.Punch", "Remax.Store", "Remax.Theme", "Remax.Tree", "Remax.TreeSitter", "Remax.Vi", "Remax.Zipper"], note = "the session modules sit above every other Remax module" },
   { moduleTree = "Remax.UI.Model", dependencies = ["Remax.UI.Core"], note = "model operations build on the core; the core knows nothing of them" },
   { moduleTree = "Remax.UI.Action", dependencies = ["Remax.UI.Core", "Remax.UI.Model"], note = "actions build on the model and core" },
   { moduleTree = "Remax.UI.Draw", dependencies = ["Remax.UI.Core", "Remax.UI.Model", "Remax.UI.Action"], note = "drawing reads everything below it and nothing reads drawing" },
@@ -365,6 +365,12 @@ module = "Remax.Clipboard"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }
 alias = "Clipboard"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.CommitMessage"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "CommitMessage"
 
 [[forAnyModule.allowedQualifications]]
 module = "Remax.Config"
