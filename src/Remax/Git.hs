@@ -777,7 +777,8 @@ stoppedMessageFile root = do
       let
         file = dir </> "message"
       present <- Directory.doesFileExist file
-      pure (if present then Just file else Nothing)
+      editStop <- Directory.doesFileExist (dir </> "amend")
+      pure (if present && not editStop then Just file else Nothing)
 
 commitMessage :: FilePath -> T.Text -> IO (Either T.Text T.Text)
 commitMessage root ref = do
