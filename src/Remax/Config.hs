@@ -60,7 +60,6 @@ keyModeNames = ["helix", "vi", "emacs"]
 data Config = Config
   { cfgKeys :: KeyMode
   , cfgScrolloff :: Int
-  , cfgNoteWrap :: Int
   , cfgNoteOnFlag :: Bool -- ! and ? open the note popup immediately
   , cfgIgnoreWs :: Bool -- compare lines with their whitespace removed
   , cfgWordDiff :: Bool -- mark the words that differ within a changed line (on)
@@ -73,7 +72,6 @@ defaultConfig =
   Config
     { cfgKeys = KeysHelix
     , cfgScrolloff = 5
-    , cfgNoteWrap = 58
     , cfgNoteOnFlag = True
     , cfgIgnoreWs = False
     , cfgWordDiff = True
@@ -180,7 +178,6 @@ fromEntries entries =
     Config
       { cfgKeys = keyModeFromText (maybe "" id (lookup "keys" entries))
       , cfgScrolloff = max 0 (getInt "scrolloff" (cfgScrolloff base))
-      , cfgNoteWrap = max 20 (getInt "note-wrap" (cfgNoteWrap base))
       , cfgNoteOnFlag = getInt "note-on-flag" (1 :: Int) /= 0
       , cfgIgnoreWs = getInt "ignore-whitespace" (0 :: Int) /= 0
       , cfgWordDiff = getInt "word-diff" (1 :: Int) /= 0

@@ -8,6 +8,7 @@ module Remax.UI.Draw.Notes
 import Brick ((<+>))
 import Brick qualified as Brick
 import Brick.Types qualified as BrickTypes
+import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
@@ -24,11 +25,9 @@ notePopupLayer :: Types.St -> Types.NotePopup -> BrickTypes.Widget Types.Name
 notePopupLayer st np =
   let
     ed = Types.npEd np
-    ls = Modal.bufferLines ed
     thread = popupThread st np
     title = popupTitle np thread <> " \183 " <> modeTag (Modal.edMode ed)
     targetRows = popupTargetRows st np
-    bodyW = Brick.showCursor Types.TheCursor (Brick.Location (snd (Modal.cursorRC ed), fst (Modal.cursorRC ed))) (noteBodyWidget ed)
   in
     BrickTypes.Widget BrickTypes.Greedy BrickTypes.Greedy $ do
       ctx <- BrickTypes.getContext
@@ -38,7 +37,8 @@ notePopupLayer st np =
         -- the editor keeps its room first; the transcript takes what is
         -- left, and gives up its oldest posts to fit rather than
         -- squeezing the box you are typing in
-        editorRows = max 3 (min 10 (length ls + 1))
+        rows = softRows (max 1 (boxWidth - 1)) (Modal.bufferLines ed)
+        editorRows = max 3 (min 10 (length rows + 1))
         budget = bodyRows - editorRows - length targetRows - 1
         transcript = transcriptRows (boxWidth - 2) budget (NoteAction.transcriptPosts thread)
       BrickTypes.render $
@@ -46,7 +46,7 @@ notePopupLayer st np =
           Brick.hLimit boxWidth $
             Brick.padRight Brick.Max $
               Brick.vLimit bodyRows $
-                Brick.vBox (targetRows ++ transcript ++ [bodyW])
+                Brick.vBox (targetRows ++ transcript ++ [noteBodyWidget ed rows])
 
 modeTag :: Modal.Mode -> T.Text
 modeTag mode =
@@ -137,32 +137,84 @@ amendHeadRows st folding
 
 -- selections paint here the same way they do in the main buffer:
 -- whole rows for x, column spans for v
-noteBodyWidget :: Modal.EdState -> BrickTypes.Widget Types.Name
-noteBodyWidget ed =
-  let
-    lineSel = Modal.selectionRows ed
-    charSel = Modal.charSelection ed
-    inLineSel i = case lineSel of
-      Just (a, b) -> i >= a && i <= b
-      Nothing -> False
-    bodyLine (i, l)
-      | inLineSel i = Brick.withDefAttr Attrs.selAttr (Brick.txt (Widgets.padT l))
-      | otherwise = case spanFor charSel i of
-          Nothing -> Brick.txt (Widgets.padT l)
-          Just (start, mEnd) -> selectedLine l start mEnd
-  in
-    Brick.vBox (map bodyLine (zip [0 ..] (Modal.bufferLines ed)))
+noteBodyWidget :: Modal.EdState -> [SoftRow] -> BrickTypes.Widget Types.Name
+noteBodyWidget ed rows =
+  BrickTypes.Widget BrickTypes.Greedy BrickTypes.Greedy $ do
+    ctx <- BrickTypes.getContext
+    let
+      (cr, cc) = Modal.cursorRC ed
+      (cursorIx, cursorRow) = cursorSoftRow cr cc rows
+      height = max 1 (BrickTypes.availHeight ctx)
+      top = max 0 (cursorIx - height + 1)
+      cursorAt = Brick.Location (cc - srStart cursorRow, cursorIx - top)
+    BrickTypes.render $
+      Brick.showCursor Types.TheCursor cursorAt $
+        Brick.vBox (map (paintSoftRow ed) (take height (drop top rows)))
 
-spanFor :: Maybe ((Int, Int), (Int, Int)) -> Int -> Maybe (Int, Maybe Int)
-spanFor charSel i = do
+data RowEnd = LineContinues | LineEnds
+
+data SoftRow = SoftRow
+  { srLine :: Int
+  , srStart :: Int
+  , srText :: T.Text
+  , srEnd :: RowEnd
+  }
+
+softRows :: Int -> [T.Text] -> [SoftRow]
+softRows width ls = concat (zipWith (lineSoftRows width) [0 ..] ls)
+
+lineSoftRows :: Int -> Int -> T.Text -> [SoftRow]
+lineSoftRows width i =
+  let
+    go start t
+      | T.compareLength t width /= GT = [SoftRow i start t LineEnds]
+      | otherwise =
+          let
+            cut = case T.findIndex (== ' ') (T.reverse (T.take (width + 1) t)) of
+              Just fromEnd | fromEnd < width -> width + 1 - fromEnd
+              _ -> width
+            (row, rest) = T.splitAt cut t
+          in
+            SoftRow i start row LineContinues : go (start + cut) rest
+  in
+    go 0
+
+cursorSoftRow :: Int -> Int -> [SoftRow] -> (Int, SoftRow)
+cursorSoftRow cr cc rows =
+  let
+    pick found (ix, r) =
+      if srLine r == cr && srStart r <= cc then (ix, r) else found
+  in
+    List.foldl' pick (0, SoftRow cr 0 T.empty LineEnds) (zip [0 ..] (takeWhile (\r -> srLine r <= cr) rows))
+
+paintSoftRow :: Modal.EdState -> SoftRow -> BrickTypes.Widget Types.Name
+paintSoftRow ed row =
+  let
+    text = srText row
+    plain = Brick.txt (Widgets.padT text)
+    inLineSel = case Modal.selectionRows ed of
+      Just (a, b) -> srLine row >= a && srLine row <= b
+      Nothing -> False
+  in
+    if inLineSel
+      then Brick.withDefAttr Attrs.selAttr plain
+      else case spanFor (Modal.charSelection ed) row of
+        Nothing -> plain
+        Just (start, mEnd) -> selectedLine text start mEnd
+
+spanFor :: Maybe ((Int, Int), (Int, Int)) -> SoftRow -> Maybe (Int, Maybe Int)
+spanFor charSel row = do
   ((lr, lc), (hr, hc)) <- charSel
-  if i < lr || i > hr
+  let
+    i = srLine row
+    start = if i == lr then lc - srStart row else 0
+    end = if i == hr then Just (hc - srStart row) else Nothing
+    pastRow = case srEnd row of
+      LineContinues -> start >= T.length (srText row)
+      LineEnds -> False
+  if i < lr || i > hr || pastRow || maybe False (< 0) end
     then Nothing
-    else
-      Just
-        ( if i == lr then lc else 0
-        , if i == hr then Just hc else Nothing
-        )
+    else Just (max 0 start, end)
 
 selectedLine :: T.Text -> Int -> Maybe Int -> BrickTypes.Widget Types.Name
 selectedLine l start mEnd =
