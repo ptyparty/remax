@@ -88,8 +88,12 @@ continueRebase = Types.whenWritable $ \grant -> do
           Left e -> pure (Left e)
           Right () -> do
             staged <- Git.hasStagedChanges root
-            if not (Git.rebaseConflicted rb) && staged
-              then Git.runGit grant root ["commit", "--amend", "--no-edit"]
+            if staged
+              then do
+                pending <- Git.stoppedCommitMessage root
+                case pending of
+                  Nothing -> Git.runGit grant root ["commit", "--amend", "--no-edit"]
+                  Just _ -> pure (Right ())
               else pure (Right ())
       case folded of
         Left e -> Types.setMsg e
