@@ -19,9 +19,11 @@ import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
+import Data.Time.Clock qualified as Clock
 import Remax.Git qualified as Git
 import Remax.Store qualified as Store
 import Remax.UI.Core.Types qualified as Types
+import System.Directory qualified as Directory
 import System.Exit qualified as Exit
 import System.FSNotify qualified as FS
 import System.FilePath qualified as FilePath
@@ -131,8 +133,8 @@ followNewDirectory chan root dirWatch dir = do
     mapM_ (dirWatchFollow dirWatch . Types.fileDir root) files
     Monad.void (BChan.writeBChanNonBlocking chan Types.GitStateChanged)
 
-dispatchFsEvent :: BChan.BChan Types.REvent -> FilePath -> DirWatch -> FS.Event -> IO ()
-dispatchFsEvent chan root dirWatch ev = do
+dispatchFsEvent :: BChan.BChan Types.REvent -> FilePath -> DirWatch -> IndexStamps -> FS.Event -> IO ()
+dispatchFsEvent chan root dirWatch stamps ev = do
   let
     absolute = FS.eventPath ev
     rel = FilePath.makeRelative root absolute
@@ -153,16 +155,34 @@ dispatchFsEvent chan root dirWatch ev = do
         | isDir && not underGit ->
             Monad.void (Concurrent.forkIO (followNewDirectory chan root dirWatch absolute))
       _
-        | underGit ->
-            -- git updates the index by writing index.lock and renaming it,
-            -- so the lock file is the reliably-delivered signal
-            Monad.when
-              ( FilePath.takeFileName rel
-                  `elem` ["index", "index.lock", "HEAD", "HEAD.lock", "COMMIT_EDITMSG"]
-                  || "refs" `elem` parts
-              )
-              (Monad.void (BChan.writeBChanNonBlocking chan Types.GitStateChanged))
+        | underGit -> do
+            moved <- gitStateMoved stamps parts absolute
+            Monad.when moved (Monad.void (BChan.writeBChanNonBlocking chan Types.GitStateChanged))
         | otherwise -> Monad.void (BChan.writeBChanNonBlocking chan (Types.FileChangedOnDisk absolute))
+
+gitStateMoved :: IndexStamps -> [FilePath] -> FilePath -> IO Bool
+gitStateMoved stamps parts absolute =
+  case FilePath.takeFileName absolute of
+    -- git updates the index by writing index.lock and renaming it,
+    -- so the lock file is the reliably-delivered signal
+    name
+      | name `elem` ["index", "index.lock"] ->
+          indexMoved stamps (FilePath.replaceFileName absolute "index")
+      | otherwise -> pure (name `elem` ["HEAD", "HEAD.lock", "COMMIT_EDITMSG"] || "refs" `elem` parts)
+
+data IndexStamp = IndexStamp Integer Clock.UTCTime
+  deriving (Eq)
+
+type IndexStamps = IORef.IORef (Map.Map FilePath (Maybe IndexStamp))
+
+indexMoved :: IndexStamps -> FilePath -> IO Bool
+indexMoved stamps index = do
+  got <-
+    Exception.try (IndexStamp <$> Directory.getFileSize index <*> Directory.getModificationTime index) ::
+      IO (Either Exception.IOException IndexStamp)
+  let
+    stamp = either (const Nothing) Just got
+  IORef.atomicModifyIORef' stamps (\seen -> (Map.insert index stamp seen, Map.lookup index seen /= Just stamp))
 
 -- Loading and rebuilding -----------------------------------------------------
 
@@ -175,8 +195,9 @@ type Watched = Map.Map FilePath (Maybe FS.StopListening)
 installWatches :: FS.WatchManager -> BChan.BChan Types.REvent -> FilePath -> Types.WatchMode -> IO DirWatch
 installWatches mgr chan root mode = do
   watchedRef <- IORef.newIORef (Map.empty :: Watched)
+  stamps <- IORef.newIORef Map.empty
   let
-    watchDirOnce = watchOnce watchedRef mgr (dispatchFsEvent chan root dirWatch)
+    watchDirOnce = watchOnce watchedRef mgr (dispatchFsEvent chan root dirWatch stamps)
     followDir dir =
       if mode == Types.PollingWatch && ".git" `notElem` FilePath.splitDirectories dir
         then pure ()
