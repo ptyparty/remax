@@ -38,7 +38,8 @@ module Remax.Git
   , RebaseStatus (..)
   , rebaseStatus
   , commitBody
-  , stoppedCommitMessage
+  , CommitUnderReview (..)
+  , commitUnderReview
   , setStoppedCommitMessage
   , commitMessage
   , gitStateWatchDirs
@@ -659,7 +660,13 @@ data RebaseStatus = RebaseStatus
 -- repository's .git/worktrees/<name>/, so a literal .git/<name> path
 -- misses it.
 gitStateDir :: FilePath -> String -> IO (Maybe FilePath)
-gitStateDir root name = do
+gitStateDir = gitStatePath Directory.doesDirectoryExist
+
+gitStateFile :: FilePath -> String -> IO (Maybe FilePath)
+gitStateFile = gitStatePath Directory.doesFileExist
+
+gitStatePath :: (FilePath -> IO Bool) -> FilePath -> String -> IO (Maybe FilePath)
+gitStatePath exists root name = do
   (code, out, _) <-
     Process.readProcessWithExitCode "git" ["-C", root, "rev-parse", "--git-path", name] ""
   case code of
@@ -668,7 +675,7 @@ gitStateDir root name = do
       let
         raw = T.unpack (T.strip (T.pack out))
         path = if FilePath.isAbsolute raw then raw else root </> raw
-      present <- Directory.doesDirectoryExist path
+      present <- exists path
       pure (if present then Just path else Nothing)
 
 hasUnmerged :: FilePath -> IO Bool
@@ -749,13 +756,34 @@ commitBody root ref = do
     Exit.ExitSuccess -> Right (T.stripEnd (T.pack out))
     Exit.ExitFailure _ -> Left (T.strip (T.pack err))
 
-{- | The message of the commit a conflict stop has not made yet, which
-@rebase --continue@ commits. Nothing when no such commit is pending.
--}
-stoppedCommitMessage :: FilePath -> IO (Maybe T.Text)
-stoppedCommitMessage root = do
-  mFile <- stoppedMessageFile root
-  traverse (fmap T.stripEnd . readFileOr "") mFile
+data CommitUnderReview
+  = CommitAtHead
+  | CommitPending (Maybe T.Text)
+
+commitUnderReview :: FilePath -> IO CommitUnderReview
+commitUnderReview root = do
+  stop <- rebaseStop root
+  case stop of
+    StopCommitted -> pure CommitAtHead
+    StopPending mFile -> CommitPending <$> traverse (fmap T.stripEnd . readFileOr "") mFile
+
+data RebaseStop
+  = StopCommitted
+  | StopPending (Maybe FilePath)
+
+rebaseStop :: FilePath -> IO RebaseStop
+rebaseStop root = do
+  mApply <- gitStateDir root "rebase-apply"
+  mMerge <- gitStateDir root "rebase-merge"
+  mMergeMsg <- gitStateFile root "MERGE_MSG"
+  case (mApply, mMerge, mMergeMsg) of
+    (Just _, _, _) -> pure (StopPending Nothing)
+    (Nothing, Just dir, Just _) -> do
+      let
+        file = dir </> "message"
+      present <- Directory.doesFileExist file
+      pure (StopPending (if present then Just file else Nothing))
+    _ -> pure StopCommitted
 
 setStoppedCommitMessage :: Writable -> FilePath -> T.Text -> IO (Either T.Text ())
 setStoppedCommitMessage _ root text = do
@@ -770,15 +798,10 @@ setStoppedCommitMessage _ root text = do
 
 stoppedMessageFile :: FilePath -> IO (Maybe FilePath)
 stoppedMessageFile root = do
-  mMerge <- gitStateDir root "rebase-merge"
-  case mMerge of
-    Nothing -> pure Nothing
-    Just dir -> do
-      let
-        file = dir </> "message"
-      present <- Directory.doesFileExist file
-      editStop <- Directory.doesFileExist (dir </> "amend")
-      pure (if present && not editStop then Just file else Nothing)
+  stop <- rebaseStop root
+  pure $ case stop of
+    StopPending mFile -> mFile
+    StopCommitted -> Nothing
 
 commitMessage :: FilePath -> T.Text -> IO (Either T.Text T.Text)
 commitMessage root ref = do

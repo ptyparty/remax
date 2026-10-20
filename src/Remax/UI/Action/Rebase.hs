@@ -90,10 +90,10 @@ continueRebase = Types.whenWritable $ \grant -> do
             staged <- Git.hasStagedChanges root
             if staged
               then do
-                pending <- Git.stoppedCommitMessage root
-                case pending of
-                  Nothing -> Git.runGit grant root ["commit", "--amend", "--no-edit"]
-                  Just _ -> pure (Right ())
+                commit <- Git.commitUnderReview root
+                case commit of
+                  Git.CommitAtHead -> Git.runGit grant root ["commit", "--amend", "--no-edit"]
+                  Git.CommitPending _ -> pure (Right ())
               else pure (Right ())
       case folded of
         Left e -> Types.setMsg e
@@ -140,10 +140,11 @@ abortRebase = Types.whenWritable $ \grant -> do
 amendHead :: Brick.EventM Types.Name Types.St ()
 amendHead = Types.whenWritable $ \_ -> do
   st <- State.get
-  stopped <- MonadIO.liftIO (Git.stoppedCommitMessage (Types.stRoot st))
-  got <- case stopped of
-    Just msg -> pure (Right (msg, Types.AmendStoppedCommit))
-    Nothing -> do
+  commit <- MonadIO.liftIO (Git.commitUnderReview (Types.stRoot st))
+  got <- case commit of
+    Git.CommitPending (Just msg) -> pure (Right (msg, Types.AmendStoppedCommit))
+    Git.CommitPending Nothing -> pure (Left "git keeps no editable message for this stop's commit — :continue first")
+    Git.CommitAtHead -> do
       body <- MonadIO.liftIO (Git.commitBody (Types.stRoot st) "HEAD")
       -- what folds in with the message: everything the session is showing as
       -- changed, asked of git rather than remembered, so an agent's edits and
