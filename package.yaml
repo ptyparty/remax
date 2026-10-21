@@ -79,6 +79,8 @@ executables:
       - vendor/grammars/typescript/src/scanner.c
       - vendor/grammars/tsx/src/parser.c
       - vendor/grammars/tsx/src/scanner.c
+      - vendor/grammars/javascript/src/parser.c
+      - vendor/grammars/javascript/src/scanner.c
     cxx-sources:
       - vendor/grammars/yaml/src/scanner.cc
     extra-libraries:
