@@ -147,6 +147,12 @@ foreign import ccall unsafe "tree_sitter_nu"
 foreign import ccall unsafe "tree_sitter_markdown"
   c_lang_markdown :: IO (Ptr.Ptr CLanguage)
 
+foreign import ccall unsafe "tree_sitter_typescript"
+  c_lang_typescript :: IO (Ptr.Ptr CLanguage)
+
+foreign import ccall unsafe "tree_sitter_tsx"
+  c_lang_tsx :: IO (Ptr.Ptr CLanguage)
+
 -- One vendored grammar: extensions it claims, its language function, and
 -- its embedded highlight query.
 -- How a grammar claims a file. Both ways of claiming live on the same
@@ -222,6 +228,16 @@ vendored =
     ( GrammarKeys [".md", ".markdown"] []
     , c_lang_markdown
     , $(FileEmbed.embedFile "vendor/grammars/markdown/highlights.scm")
+    )
+  ,
+    ( GrammarKeys [".ts", ".mts", ".cts"] ["ts-node", "tsx", "deno"]
+    , c_lang_typescript
+    , $(FileEmbed.embedFile "vendor/grammars/typescript/highlights.scm")
+    )
+  ,
+    ( GrammarKeys [".tsx"] []
+    , c_lang_tsx
+    , $(FileEmbed.embedFile "vendor/grammars/tsx/highlights.scm")
     )
   ]
 

@@ -53,9 +53,13 @@ extra-source-files:
     vendor/grammars/python/highlights.scm
     vendor/grammars/sql/highlights.scm
     vendor/grammars/toml/highlights.scm
+    vendor/grammars/tsx/highlights.scm
+    vendor/grammars/typescript/highlights.scm
     vendor/grammars/yaml/highlights.scm
     vendor/grammars/haskell/src/unicode.h
     vendor/grammars/purescript/src/unicode.h
+    vendor/grammars/tsx/src/scanner.h
+    vendor/grammars/typescript/src/scanner.h
     vendor/grammars/bash/src/tree_sitter/alloc.h
     vendor/grammars/bash/src/tree_sitter/array.h
     vendor/grammars/bash/src/tree_sitter/parser.h
@@ -86,6 +90,8 @@ extra-source-files:
     vendor/grammars/toml/src/tree_sitter/alloc.h
     vendor/grammars/toml/src/tree_sitter/array.h
     vendor/grammars/toml/src/tree_sitter/parser.h
+    vendor/grammars/tsx/src/tree_sitter/parser.h
+    vendor/grammars/typescript/src/tree_sitter/parser.h
     vendor/grammars/yaml/src/tree_sitter/parser.h
     vendor/grammars/QUERY-LICENSE.md
     vendor/themes/jellybeans.toml
@@ -192,6 +198,10 @@ executable remax
       vendor/grammars/nu/src/scanner.c
       vendor/grammars/markdown/src/parser.c
       vendor/grammars/markdown/src/scanner.c
+      vendor/grammars/typescript/src/parser.c
+      vendor/grammars/typescript/src/scanner.c
+      vendor/grammars/tsx/src/parser.c
+      vendor/grammars/tsx/src/scanner.c
   cxx-sources:
       vendor/grammars/yaml/src/scanner.cc
   extra-libraries:
