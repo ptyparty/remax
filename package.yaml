@@ -75,6 +75,10 @@ executables:
       - vendor/grammars/nu/src/scanner.c
       - vendor/grammars/markdown/src/parser.c
       - vendor/grammars/markdown/src/scanner.c
+      - vendor/grammars/typescript/src/parser.c
+      - vendor/grammars/typescript/src/scanner.c
+      - vendor/grammars/tsx/src/parser.c
+      - vendor/grammars/tsx/src/scanner.c
     cxx-sources:
       - vendor/grammars/yaml/src/scanner.cc
     extra-libraries:
