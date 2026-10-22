@@ -115,8 +115,9 @@ another file is picked up when you visit it.
   they stay listed and navigable. `Space p` cycles the walk: pending hunks →
   only hunks with an **outstanding change request**: a flagged or questioned
   line, or a conversation nobody has resolved yet, so `]`/`[` jump straight
-  between the things still waiting on someone → every hunk;
-  `:walk pending|unresolved|all` names one outright.
+  between the things still waiting on someone → the **tour**, when an
+  agent has posted one (see *Working with agents*) → every hunk;
+  `:walk pending|unresolved|tour|all` names one outright.
   The current hunk always shows either
   way. `{` / `}` scroll the tray; it auto-centers on the current hunk
   when you jump. Long paths compress like `s/R/Quote.hs` so the file
@@ -325,6 +326,8 @@ note popup keeps its modal keys in either keymap.
 | `:commit` | review one commit: a picker over every branch, remote branch and tag, newest first. `⏎` on a ref unfolds the commits it adds over the mainline beneath it (the mainline itself unfolds to its recent history); `⏎` on a commit reviews that commit against its parent, read-only, the same way `:ref` does. A merge asks which parent |
 | `:commit REF` | the same, naming the commit (any commit-ish, so `HEAD~2` and tag names work). A branch name stays symbolic, so the review follows the branch when an agent amends or adds to it |
 | `:message` | the full message of the commit under review, as `Space c` shows it |
+| `:walk tour` | follow the tour an agent posted for this view (see *A guided tour*); `]`/`[` step through it and the header counts the steps |
+| `:tour` / `:tour N` | get back on the tour: `:tour` returns to the stop you last visited (or the one under the cursor, or the first), `:tour N` jumps to stop N. Either way the walk follows the tour again |
 | `:mode head` / `:mode unstaged` / `:mode untracked` | the classic change sets |
 | `:rebase [REF]` | start a commit-by-commit review pass (below) |
 | `:continue` | fold this stop's edits into the stopped commit and advance — *everything* dirty at the stop counts, including edits made through `$EDITOR` or by an agent, since the stop started clean |
@@ -409,6 +412,34 @@ your feedback flows back through the store:
 `skills/remax-review/SKILL.md` teaches Claude Code this protocol — copy
 or symlink it into `~/.claude/skills/` (or a workspace `.claude/skills/`)
 so agents pick it up.
+
+### A guided tour
+
+An agent can present a change rather than wait to be asked about it.
+Ask it in its own terminal — "give me a tour of the commit I have open,
+schema first" — and it builds one out of the change set as your session
+sees it:
+
+```sh
+remax -C /path/to/repo hunks --json        # the hunks, one id each
+remax -C /path/to/repo tour begin          # empty the old tour
+remax -C /path/to/repo tour step ID "Start here: the new table"
+remax -C /path/to/repo tour step ID,ID "The two call sites it changed"
+```
+
+With no ref flags the commands follow whatever your open session is
+viewing, so a tour of `:ref feature` or `:commit abc123` lands on the
+right hunks without the agent being told; `--ref REF [--base BASE]` and
+`--base REF` name a view outright. The moment the first step lands your
+session switches to `:walk tour`: `]`/`[` follow the steps in order,
+the header counts `tour 2/5`, a bar under the header names the stop
+you are on, and each stop's note shows above its hunk on its own
+background. Notes are narration, not feedback: they never count as
+outstanding and nothing waits on them.
+Space p or `:walk pending` leaves the tour; a file switch, a grep hit
+or Space a can wander off it too. `:tour` brings you back to the last
+stop you were on, and `:tour 4` jumps to stop four. A tour belongs to the view it was built for; switching the
+subject puts it away and `tour begin` on the same view replaces it.
 
 ## Configuration
 

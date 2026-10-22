@@ -37,6 +37,7 @@ module Remax.UI.Core.Attrs
   , modeDotInsAttr
   , noteInlineAttr
   , replyInlineAttr
+  , guideAttr
   , floatAttr
   , floatSelAttr
   , floatSelBarAttr
@@ -95,6 +96,7 @@ headerAttr
   , modeDotInsAttr
   , noteInlineAttr
   , replyInlineAttr
+  , guideAttr
   , floatAttr
   , floatSelAttr
   , floatSelBarAttr
@@ -117,6 +119,7 @@ modeDotNorAttr = Brick.attrName "modeDotNor"
 modeDotInsAttr = Brick.attrName "modeDotIns"
 noteInlineAttr = Brick.attrName "noteInline"
 replyInlineAttr = Brick.attrName "replyInline"
+guideAttr = Brick.attrName "guide"
 floatAttr = Brick.attrName "float"
 floatSelAttr = floatAttr <> Brick.attrName "sel"
 floatSelBarAttr = floatAttr <> Brick.attrName "selBar"
@@ -301,6 +304,7 @@ mkAttrMap mth =
       , (pendingMarkAttr, BrickUtil.fg inkBlue)
       , (noteInlineAttr, BrickUtil.fg inkLavender)
       , (replyInlineAttr, BrickUtil.fg inkMidBlue)
+      , (guideAttr, BrickUtil.fg inkTeal `V.withBackColor` surfGuide)
       , (floatAttr, onFloat V.defAttr)
       , (floatSelAttr, V.defAttr `V.withBackColor` surfSel)
       , (floatSelBarAttr, BrickUtil.fg inkLavender `V.withBackColor` surfSel)
@@ -335,11 +339,13 @@ inkText = V.linearColor (0xb4 :: Int) 0xb4 0xaa
 inkFlag = V.linearColor (0xcf :: Int) 0x8a 0x6a
 trayFileInk = V.linearColor (0xd8 :: Int) 0xd3 0xc0
 
-surfFloat, surfSel, cursorWash, wordWash, hairInk, meterRail, matchGold :: V.Color
+surfFloat, surfSel, surfGuide, inkTeal, cursorWash, wordWash, hairInk, meterRail, matchGold :: V.Color
 -- Only used when the theme names no background at all, so there is
 -- nothing to measure a lift from.
 surfFloat = V.linearColor (0x15 :: Int) 0x15 0x15
 surfSel = V.linearColor (0x24 :: Int) 0x24 0x30
+surfGuide = V.linearColor (0x1c :: Int) 0x2e 0x2e
+inkTeal = V.linearColor (0x9f :: Int) 0xd8 0xd0
 cursorWash = V.linearColor (0x3a :: Int) 0x33 0x25
 wordWash = V.linearColor (0x3d :: Int) 0x35 0x4a
 hairInk = V.linearColor (0x2c :: Int) 0x2c 0x2c

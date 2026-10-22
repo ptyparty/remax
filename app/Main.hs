@@ -22,8 +22,11 @@ import System.FilePath ((</>))
 import System.FilePath qualified as FilePath
 import System.IO qualified as SysIO
 
+import Database.SQLite.Simple qualified as SQLite
 import Paths_remax qualified as Paths
+import Remax.Config qualified as Config
 import Remax.Git qualified as Git
+import Remax.Hunks qualified as Hunks
 import Remax.Punch qualified as Punch
 import Remax.Store qualified as Store
 import Remax.UI qualified as UI
@@ -46,6 +49,10 @@ data Cmd
   | List ListOptions
   | Reply T.Text T.Text
   | Attend
+  | Hunks [String]
+  | TourBegin [String]
+  | TourStep [String]
+  | TourClear [String]
   | ShowVersion
 
 -- How a listing is printed, and when.
@@ -96,6 +103,10 @@ main = do
         List options -> list options
         Reply target text -> reply target text
         Attend -> attend
+        Hunks rest -> hunks rest
+        TourBegin rest -> tourBegin rest
+        TourStep rest -> tourStep rest
+        TourClear rest -> tourBegin rest
         ShowVersion -> putStrLn ("remax " ++ Version.showVersion Paths.version)
 
 -- list's flags, in either order and each at most once.
@@ -152,6 +163,17 @@ usage =
   \       remax [-C DIR] watching       say an agent is on this review, until\n\
   \                                     stopped; the session shows it in its\n\
   \                                     header, working or waiting\n\
+  \       remax [-C DIR] hunks [--json] [--ref REF [--base BASE] | --base REF]\n\
+  \                                     list the change set as the session sees\n\
+  \                                     it, one id per hunk; with no ref flags,\n\
+  \                                     whatever the open session is viewing\n\
+  \       remax [-C DIR] tour begin [ref flags]\n\
+  \       remax [-C DIR] tour step [ref flags] ID[,ID...] NOTE...\n\
+  \       remax [-C DIR] tour clear [ref flags]\n\
+  \                                     guide the reviewer through the change:\n\
+  \                                     begin empties the tour, each step names\n\
+  \                                     hunks and says something about them, and\n\
+  \                                     the session walks them in that order\n\
   \\n\
   \  -C DIR       run as if started in DIR\n\
   \  --base REF   review the working tree against REF (default: HEAD)\n\
@@ -174,6 +196,10 @@ parseArgs args0 =
         ("list" : rest)
           | Just cmd <- listArgs rest -> Right (mDir, cmd)
         ["watching"] -> Right (mDir, Attend)
+        ("hunks" : rest) -> Right (mDir, Hunks rest)
+        ("tour" : "begin" : rest) -> Right (mDir, TourBegin rest)
+        ("tour" : "step" : rest) -> Right (mDir, TourStep rest)
+        ("tour" : "clear" : rest) -> Right (mDir, TourClear rest)
         ["--version"] -> Right (mDir, ShowVersion)
         ("reply" : target : rest)
           | not (null rest) ->
@@ -231,7 +257,121 @@ review marg = do
       pure (Git.AtRef (Git.RefReview {Git.rrTip = ref, Git.rrBase = base}))
   UI.runReview mode root roots story
 
--- Every repository a command should act on: the one we are inside, or —
+-- Flags an agent command accepts anywhere in its arguments, pulled out so
+-- the rest can be read positionally.
+takeFlags :: [String] -> [String] -> Either String (Map.Map String String, [String])
+takeFlags valued args =
+  case args of
+    [] -> Right (Map.empty, [])
+    (flag : rest)
+      | flag `elem` valued ->
+          case rest of
+            (val : more) -> fmap (\(m, ps) -> (Map.insert flag val m, ps)) (takeFlags valued more)
+            [] -> Left (flag ++ " wants a value")
+      | "--" `List.isPrefixOf` flag -> Left ("unknown flag " ++ flag)
+      | otherwise -> fmap (\(m, ps) -> (m, flag : ps)) (takeFlags valued rest)
+
+-- The view an agent command works on: the ref flags it was given, else
+-- whatever the open session on this repository is looking at, else
+-- the working tree against HEAD.
+agentMode :: SQLite.Connection -> FilePath -> Map.Map String String -> IO Git.ReviewMode
+agentMode conn root flags =
+  case (Map.lookup "--ref" flags, Map.lookup "--base" flags) of
+    (Just ref, mBase) -> do
+      ok <- Git.refExists root (T.pack ref)
+      Monad.unless ok (Exit.die ("No such ref: " ++ ref))
+      base <- case mBase of
+        Just given -> pure (T.pack given)
+        Nothing -> do
+          got <- Git.branchRootOf root (T.pack ref)
+          either (Exit.die . T.unpack) (pure . T.take 10) got
+      pure (Git.AtRef (Git.RefReview {Git.rrTip = T.pack ref, Git.rrBase = base}))
+    (Nothing, Just base) -> pure (Git.VsRef (T.pack base))
+    (Nothing, Nothing) -> do
+      viewed <- Store.sessionView conn (T.pack root)
+      pure (Maybe.fromMaybe (Git.VsRef "HEAD") (viewed >>= Git.modeFromText))
+
+refFlags :: [String]
+refFlags = ["--ref", "--base"]
+
+hunks :: [String] -> IO ()
+hunks args = do
+  (flags, positional) <- either Exit.die pure (takeFlags refFlags (filter (/= "--json") args))
+  let
+    asJson = "--json" `elem` args
+  Monad.unless (null positional) (Exit.die usage)
+  roots <- targetRepos
+  conn <- Store.openStore
+  cfg <- Config.loadConfig
+  listed <- Monad.forM roots $ \root -> do
+    mode <- agentMode conn root flags
+    found <- Hunks.changeSetHunks cfg mode root
+    pure (root, mode, found)
+  if asJson
+    then TIO.putStrLn (jsonArray (map hunksJson listed))
+    else Monad.forM_ listed $ \(root, mode, found) -> do
+      Monad.when (length roots > 1) (putStrLn ("\9472\9472 " ++ FilePath.takeFileName root ++ " \9472\9472"))
+      TIO.putStrLn ("viewing " <> Git.modeLabel mode)
+      Monad.forM_ found $ \h -> do
+        TIO.putStrLn (Hunks.hunkId h <> "  " <> T.pack (Hunks.hunkFile h) <> ":" <> T.pack (show (Hunks.hunkLine h)))
+        Monad.forM_ (Hunks.hunkLines h) (\l -> TIO.putStrLn ("    " <> l))
+
+hunksJson :: (FilePath, Git.ReviewMode, [Hunks.Hunk]) -> T.Text
+hunksJson (root, mode, found) =
+  let
+    one h =
+      jsonObject
+        [ ("id", jsonString (Hunks.hunkId h))
+        , ("file", jsonString (T.pack (Hunks.hunkFile h)))
+        , ("line_no", T.pack (show (Hunks.hunkLine h)))
+        , ("lines", jsonArray (map jsonString (Hunks.hunkLines h)))
+        ]
+  in
+    jsonObject
+      [ ("repo", jsonString (T.pack root))
+      , ("subject", jsonString (Git.subjectText mode))
+      , ("view", jsonString (Git.modeLabel mode))
+      , ("hunks", jsonArray (map one found))
+      ]
+
+tourBegin :: [String] -> IO ()
+tourBegin args = do
+  (flags, positional) <- either Exit.die pure (takeFlags refFlags args)
+  Monad.unless (null positional) (Exit.die usage)
+  roots <- targetRepos
+  conn <- Store.openStore
+  Monad.forM_ roots $ \root -> do
+    mode <- agentMode conn root flags
+    Store.clearTour conn (T.pack root) (Git.subjectText mode)
+    putStrLn ("tour cleared for " ++ T.unpack (Git.modeLabel mode) ++ (if length roots > 1 then " in " ++ FilePath.takeFileName root else ""))
+
+tourStep :: [String] -> IO ()
+tourStep args = do
+  (flags, positional) <- either Exit.die pure (takeFlags refFlags args)
+  (idsArg, noteWords) <- case positional of
+    (ids : rest@(_ : _)) -> pure (ids, rest)
+    _ -> Exit.die "tour step wants ID[,ID...] followed by the note"
+  let
+    ids = filter (not . T.null) (T.splitOn "," (T.pack idsArg))
+    note = T.pack (unwords noteWords)
+  roots <- targetRepos
+  conn <- Store.openStore
+  cfg <- Config.loadConfig
+  placed <- Monad.forM roots $ \root -> do
+    mode <- agentMode conn root flags
+    found <- Hunks.changeSetHunks cfg mode root
+    let
+      chosen = filter ((`elem` ids) . Hunks.hunkId) found
+    pure (root, mode, chosen)
+  case filter (\(_, _, chosen) -> not (null chosen)) placed of
+    [] -> Exit.die "No hunk with that id in the view; run remax hunks to list them."
+    ((root, mode, chosen) : _) -> do
+      let
+        missing = filter (`notElem` map Hunks.hunkId chosen) ids
+      Monad.unless (null missing) (Exit.die ("No hunk with id " ++ T.unpack (T.intercalate ", " missing)))
+      seq_ <- Store.appendTourStep conn (T.pack root) (Git.subjectText mode) "tour" note (concatMap Hunks.hunkKeys chosen)
+      putStrLn ("step " ++ show seq_ ++ ": " ++ show (length chosen) ++ " hunk(s)")
+
 -- for a directory that merely holds repositories, which is what a story
 -- directory is — all of them.
 --

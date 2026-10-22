@@ -282,6 +282,48 @@ reviewer may answer your post with another of theirs, so re-check
 answer was the last word. Accepting the hunk (or resolving the note)
 closes the whole conversation.
 
+## Giving a tour
+
+When the human asks you to walk them through a change — present it,
+explain it, "give me a tour" — build one and remax walks them along it.
+This is the one thing you post *before* being asked about a line.
+
+```sh
+remax -C "$REPO" hunks --json
+```
+
+Lists the change set exactly as the reviewer's session sees it: one
+entry per hunk with an `id`, `file`, `line_no` and the marked `lines`.
+With no flags it follows **whatever their open session is viewing** —
+the working tree, a `:ref`, a `:commit` — so you do not need to be told
+which commit they have up; `--ref REF [--base BASE]` or `--base REF`
+names a view when nobody has one open. Read the whole listing and decide
+an order and a sentence or two for each stop; a stop may cover several
+hunks when they are one idea (a rename and its fallout, a signature and
+its call sites).
+
+```sh
+remax -C "$REPO" tour begin
+remax -C "$REPO" tour step ID "Start with the new table; everything else hangs off it"
+remax -C "$REPO" tour step ID,ID,ID "The three call sites the signature change touched"
+```
+
+`tour begin` empties any earlier tour for that view. Each `tour step`
+appends one stop; the reviewer's session switches to following the
+tour as the first one lands and each note renders above its hunk on
+its own background. An id that is not in the view is refused, so re-run
+`hunks` after you edit.
+
+Keep a stop small: one hunk, or the two or three that are one idea.
+`]`/`[` walk the hunks inside a stop one by one and the header counts
+both the stop and the position within it, so a twenty-hunk stop reads
+as twenty hunks with one note at the front. Split by idea instead.
+
+Keep notes short and pointed at the code — what to look at and why it
+is there, not a restatement of the diff. The reviewer still reads every
+line; the tour is the order and the context, not the review. Do not
+turn feedback into tour steps: a `!` or `?` is theirs to give.
+
 ## Fixing per-commit feedback
 
 When conversations have a `commit_sha`, the reviewer reviewed commit by
@@ -308,6 +350,8 @@ tip is the safe fallback.
   itself; the fixed lines go back to pending and they re-review.
 - Never write to `~/.local/state/remax/review.db` directly, and never
   run `remax forget` unless the human explicitly asks.
+- Post a tour only when asked for one; `tour begin` discards the
+  previous tour for that view.
 - An empty `conversations` list means no outstanding feedback.
 - Under `watch`, keep one `list --wait` in flight and start a fresh one
   each time it wakes you. With none running you are only as current as

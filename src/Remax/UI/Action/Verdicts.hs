@@ -4,6 +4,8 @@
 module Remax.UI.Action.Verdicts
   ( cycleWalkFilter
   , setWalkFilter
+  , resumeTour
+  , gotoTourStep
   , showCommitPopup
   , revertTarget
   , acceptSelection
@@ -33,6 +35,7 @@ import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
 import Remax.UI.Action.Conversation qualified as Conversation
+import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
 import Remax.UI.Core.View qualified as View
@@ -45,12 +48,48 @@ import System.FilePath qualified as FilePath
 cycleWalkFilter :: Brick.EventM Types.Name Types.St ()
 cycleWalkFilter = do
   st <- State.get
-  setWalkFilter (Types.nextWalkFilter (Types.stWalk st))
+  let
+    next = Types.nextWalkFilter (Types.stWalk st)
+    chosen = if next == Types.WalkTour && null (Types.stTour st) then Types.nextWalkFilter next else next
+  setWalkFilter chosen
 
 setWalkFilter :: Types.WalkFilter -> Brick.EventM Types.Name Types.St ()
 setWalkFilter chosen = do
-  State.modify (\s -> s {Types.stWalk = chosen, Types.stMsg = walkMsg chosen})
+  st <- State.get
+  if chosen == Types.WalkTour && null (Types.stTour st)
+    then Types.setMsg "no tour recorded for this view"
+    else do
+      State.modify (\s -> s {Types.stWalk = chosen, Types.stMsg = walkMsg chosen})
+      Nav.scrollTrayToCurrent
+
+resumeTour :: Brick.EventM Types.Name Types.St ()
+resumeTour = do
+  st <- State.get
+  let
+    ordered = Tour.tourOrder st
+    here = (Types.stCurF st, Types.clampH (Types.fvRuns (Types.currentFile st)) (Types.stCurH st))
+    target = case Types.stTourLast st of
+      Just p | p `elem` ordered -> Just p
+      _
+        | here `elem` ordered -> Just here
+        | otherwise -> Maybe.listToMaybe ordered
+  case target of
+    Nothing -> Types.setMsg "no tour recorded for this view"
+    Just (f, h) -> landOnTour "back on the tour" (f, h)
+
+gotoTourStep :: Int -> Brick.EventM Types.Name Types.St ()
+gotoTourStep n = do
+  st <- State.get
+  case Types.safeIdx (Tour.stepGroups st) (n - 1) of
+    Just ((f, h) : _) -> landOnTour ("tour step " <> Types.tshow n) (f, h)
+    _ -> Types.setMsg ("no tour step " <> Types.tshow n <> " in this view")
+
+landOnTour :: T.Text -> (Int, Int) -> Brick.EventM Types.Name Types.St ()
+landOnTour said (f, h) = do
+  State.modify (\s -> s {Types.stWalk = Types.WalkTour, Types.stTourLast = Just (f, h)})
+  Nav.parkAnchor f h
   Nav.scrollTrayToCurrent
+  Types.setMsg said
 
 walkMsg :: Types.WalkFilter -> T.Text
 walkMsg chosen =
@@ -58,6 +97,7 @@ walkMsg chosen =
     Types.WalkAll -> "showing all hunks"
     Types.WalkPending -> "pending hunks only"
     Types.WalkUnresolved -> "outstanding requests and conversations only"
+    Types.WalkTour -> "following the tour"
 
 -- The full message of the commit under review: the stopped commit's
 -- own sha during a rebase (HEAD differs at a conflict stop), HEAD
@@ -412,15 +452,26 @@ advanceToPending = do
     -- scan starts just after the current hunk and wraps all the way;
     -- hunks nothing has been said about come first, and the flagged/
     -- questioned ones only get circled back to once those run out
-    wrapped =
-      let
-        (upToHere, afterHere) = break (> here) (map fst (Verdict.allRunsInOrder st))
-      in
-        afterHere ++ upToHere
+    wrapped = case Types.stWalk st of
+      Types.WalkTour ->
+        let
+          ordered = Tour.tourOrder st
+        in
+          case List.elemIndex here ordered of
+            Just i -> drop (i + 1) ordered ++ take (i + 1) ordered
+            Nothing -> ordered
+      _ ->
+        let
+          (upToHere, afterHere) = break (> here) (map fst (Verdict.allRunsInOrder st))
+        in
+          afterHere ++ upToHere
     unvisited = filter (Verdict.pairUnvisited st) wrapped
     pending = filter (Verdict.pairPending st) wrapped
   case unvisited ++ pending of
-    ((f, h) : _) -> Nav.parkAnchor f h
+    ((f, h) : _) -> do
+      Nav.parkAnchor f h
+      Monad.when (Types.stWalk st == Types.WalkTour) $
+        State.modify (\s -> s {Types.stTourLast = Just (f, h)})
     [] ->
       State.modify
         ( \s ->

@@ -47,6 +47,12 @@ module Remax.Store
   , punchRows
   , repoRows
   , deleteFiles
+  , recordView
+  , sessionView
+  , TourStep (..)
+  , clearTour
+  , appendTourStep
+  , loadTour
   ) where
 
 import Control.Monad qualified as Monad
@@ -177,6 +183,30 @@ openStore = do
     "CREATE TABLE IF NOT EXISTS note_composing (\
     \  repo TEXT PRIMARY KEY,\
     \  since TEXT NOT NULL DEFAULT (datetime('now')))"
+  SQLite.execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS session_view (\
+    \  repo TEXT PRIMARY KEY,\
+    \  mode TEXT NOT NULL,\
+    \  since TEXT NOT NULL DEFAULT (datetime('now')))"
+  SQLite.execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS tour_step (\
+    \  repo TEXT NOT NULL,\
+    \  subject TEXT NOT NULL,\
+    \  seq INTEGER NOT NULL,\
+    \  author TEXT NOT NULL,\
+    \  note TEXT NOT NULL,\
+    \  created_at TEXT NOT NULL DEFAULT (datetime('now')),\
+    \  PRIMARY KEY (repo, subject, seq))"
+  SQLite.execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS tour_hunk (\
+    \  repo TEXT NOT NULL,\
+    \  subject TEXT NOT NULL,\
+    \  seq INTEGER NOT NULL,\
+    \  key TEXT NOT NULL,\
+    \  PRIMARY KEY (repo, subject, seq, key))"
   -- several instances (sessions, agent CLI calls) share this file; WAL
   -- lets readers proceed under a writer instead of stacking on the lock
   Monad.void (SQLite.query_ conn "PRAGMA journal_mode = WAL" :: IO [SQLite.Only T.Text])
@@ -236,6 +266,77 @@ migrate conn = do
   Monad.unless ("group_id" `elem` postNames) $ do
     SQLite.execute_ conn "ALTER TABLE note_post ADD COLUMN group_id TEXT"
     nameExistingGroups conn
+
+recordView :: SQLite.Connection -> T.Text -> T.Text -> IO ()
+recordView conn repo mode =
+  SQLite.execute
+    conn
+    "INSERT INTO session_view (repo, mode) VALUES (?, ?)\
+    \ ON CONFLICT(repo) DO UPDATE SET mode = excluded.mode, since = datetime('now')"
+    (repo, mode)
+
+sessionView :: SQLite.Connection -> T.Text -> IO (Maybe T.Text)
+sessionView conn repo = do
+  rows <-
+    SQLite.query conn "SELECT mode FROM session_view WHERE repo = ?" (SQLite.Only repo) ::
+      IO [SQLite.Only T.Text]
+  pure (Maybe.listToMaybe (map SQLite.fromOnly rows))
+
+data TourStep = TourStep
+  { tourSeq :: Int
+  , tourAuthor :: T.Text
+  , tourNote :: T.Text
+  , tourKeys :: [T.Text]
+  }
+  deriving (Eq, Show)
+
+clearTour :: SQLite.Connection -> T.Text -> T.Text -> IO ()
+clearTour conn repo subject =
+  SQLite.withTransaction conn $ do
+    SQLite.execute conn "DELETE FROM tour_hunk WHERE repo = ? AND subject = ?" (repo, subject)
+    SQLite.execute conn "DELETE FROM tour_step WHERE repo = ? AND subject = ?" (repo, subject)
+
+appendTourStep :: SQLite.Connection -> T.Text -> T.Text -> T.Text -> T.Text -> [T.Text] -> IO Int
+appendTourStep conn repo subject author note keys =
+  SQLite.withTransaction conn $ do
+    rows <-
+      SQLite.query
+        conn
+        "SELECT COALESCE(MAX(seq), 0) FROM tour_step WHERE repo = ? AND subject = ?"
+        (repo, subject) ::
+        IO [SQLite.Only Int]
+    let
+      seq_ = maybe 1 ((+ 1) . SQLite.fromOnly) (Maybe.listToMaybe rows)
+    SQLite.execute
+      conn
+      "INSERT INTO tour_step (repo, subject, seq, author, note) VALUES (?, ?, ?, ?, ?)"
+      (repo, subject, seq_, author, note)
+    SQLite.executeMany
+      conn
+      "INSERT OR IGNORE INTO tour_hunk (repo, subject, seq, key) VALUES (?, ?, ?, ?)"
+      (map (\k -> (repo, subject, seq_, k)) keys)
+    pure seq_
+
+loadTour :: SQLite.Connection -> T.Text -> T.Text -> IO [TourStep]
+loadTour conn repo subject = do
+  steps <-
+    SQLite.query
+      conn
+      "SELECT seq, author, note FROM tour_step WHERE repo = ? AND subject = ? ORDER BY seq"
+      (repo, subject) ::
+      IO [(Int, T.Text, T.Text)]
+  keys <-
+    SQLite.query
+      conn
+      "SELECT seq, key FROM tour_hunk WHERE repo = ? AND subject = ?"
+      (repo, subject) ::
+      IO [(Int, T.Text)]
+  let
+    bySeq = Map.fromListWith (++) (map (\(s, k) -> (s, [k])) keys)
+  pure
+    [ TourStep {tourSeq = s, tourAuthor = a, tourNote = n, tourKeys = Map.findWithDefault [] s bySeq}
+    | (s, a, n) <- steps
+    ]
 
 loadVerdicts :: SQLite.Connection -> T.Text -> IO (Map.Map T.Text Verdict)
 loadVerdicts conn repo = do

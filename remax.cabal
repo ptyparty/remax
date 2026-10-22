@@ -117,6 +117,7 @@ executable remax
       Remax.Emacs
       Remax.Git
       Remax.Highlight
+      Remax.Hunks
       Remax.Key
       Remax.Modal
       Remax.Punch
@@ -144,6 +145,7 @@ executable remax
       Remax.UI.Core.Attrs
       Remax.UI.Core.Ink
       Remax.UI.Core.Jobs
+      Remax.UI.Core.Tour
       Remax.UI.Core.Types
       Remax.UI.Core.Verdict
       Remax.UI.Core.View

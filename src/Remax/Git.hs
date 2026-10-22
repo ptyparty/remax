@@ -8,7 +8,10 @@ module Remax.Git
   , Writable
   , writable
   , subjectPlace
+  , subjectText
   , modeLabel
+  , modeToText
+  , modeFromText
   , repoRoot
   , changedFiles
   , reviewFiles
@@ -120,6 +123,29 @@ subjectPlace mode root =
     Ref tip -> do
       at <- commitAt root tip
       pure (Just tip, at)
+
+subjectText :: ReviewMode -> T.Text
+subjectText mode =
+  case subjectOf mode of
+    WorkingTree -> "worktree"
+    Ref tip -> tip
+
+modeToText :: ReviewMode -> T.Text
+modeToText mode =
+  case mode of
+    VsRef ref -> "vs " <> ref
+    VsIndex -> "unstaged"
+    Untracked -> "untracked"
+    AtRef rr -> "at " <> rrTip rr <> " vs " <> rrBase rr
+
+modeFromText :: T.Text -> Maybe ReviewMode
+modeFromText t =
+  case T.words t of
+    ["vs", ref] -> Just (VsRef ref)
+    ["unstaged"] -> Just VsIndex
+    ["untracked"] -> Just Untracked
+    ["at", tip, "vs", base] -> Just (AtRef (RefReview {rrTip = tip, rrBase = base}))
+    _ -> Nothing
 
 modeLabel :: ReviewMode -> T.Text
 modeLabel mode =

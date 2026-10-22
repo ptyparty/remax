@@ -7,6 +7,7 @@ module Remax.UI.Core.Verdict
   , pairUnvisited
   , firstUnrespondedOrPending
   , runUnvisited
+  , runAt
   , runPending
   , runUnresolved
   , walkAllows
@@ -114,6 +115,7 @@ walkAllows st r =
     Types.WalkAll -> True
     Types.WalkPending -> runPending (Types.stVerdicts st) r
     Types.WalkUnresolved -> runUnresolved (Types.stVerdicts st) (Types.stThreads st) r
+    Types.WalkTour -> any (`Map.member` Types.stTourKeys st) (DiffModel.runKeys r)
 
 runMark :: Map.Map T.Text Store.Verdict -> DiffModel.Run -> Char
 runMark m r =

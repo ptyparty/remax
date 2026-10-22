@@ -38,6 +38,7 @@ import Remax.Highlight qualified as Highlight
 import Remax.Modal qualified as Modal
 import Remax.TreeSitter qualified as TS
 import Remax.UI.Core.Jobs qualified as Jobs
+import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
 import Remax.UI.Core.View qualified as View
@@ -681,6 +682,7 @@ installRefresh before refresh = do
   Monad.forM_ remaining (MonadIO.liftIO . Types.stWatch latest . Types.fileDir (Types.stRoot latest) . Types.fvPath)
   Monad.when gitMoved (MonadIO.liftIO (Watch.watchTracked (Types.stWatch latest) (Types.stRoot latest)))
   applyChangeSet remaining
+  State.modify (\s -> Tour.installTour (Types.stTour s) s)
 
 mergeLive :: Git.Subject -> Map.Map FilePath Types.FileView -> Types.FileView -> Types.FileView
 mergeLive subject current fv =

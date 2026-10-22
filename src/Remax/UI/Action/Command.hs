@@ -197,6 +197,8 @@ runCommand input =
     ["unnote"] -> NoteAction.unnoteCmd
     ["revert"] -> VerdictAction.revertTarget
     ["walk"] -> VerdictAction.cycleWalkFilter
+    ["tour"] -> VerdictAction.resumeTour
+    ["tour", n] | Just k <- lineAddress n -> VerdictAction.gotoTourStep k
     ["walk", which] -> setWalkNamed which
     ["resolve"] -> NoteAction.unnoteCmd
     ["resolve", "all"] -> Conversation.resolveAllAnswered

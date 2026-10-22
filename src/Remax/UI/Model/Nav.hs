@@ -40,6 +40,7 @@ import Remax.Config qualified as Config
 import Remax.DiffModel qualified as DiffModel
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
+import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
 import Remax.UI.Core.View qualified as View
@@ -212,17 +213,8 @@ scrollHunkIntoViewOf fv = do
         -- the hunk (exact when the render window covers them)
         renderStart =
           startIn
-            + sum
-              ( map
-                  length
-                  ( take
-                      startIn
-                      ( drop
-                          origin
-                          (View.shownNoteLines noteRoom st (Types.fvRows fv))
-                      )
-                  )
-              )
+            + sum (map length (take startIn (drop origin (View.shownNoteLines noteRoom st (Types.fvRows fv)))))
+            + sum (map length (take (startIn + 1) (drop origin (View.shownGuideLines noteRoom st (Types.fvRows fv)))))
         top =
           if len + 4 >= vpH
             then max 0 (renderStart - 2)
@@ -256,7 +248,9 @@ switchRun d = do
   st <- State.get
   let
     eligible (_, r) = Verdict.walkAllows st r
-    pairs = map fst (filter eligible (Verdict.allRunsInOrder st))
+    pairs = case Types.stWalk st of
+      Types.WalkTour -> Tour.tourOrder st
+      _ -> map fst (filter eligible (Verdict.allRunsInOrder st))
     here =
       ( Types.stCurF st
       , Types.clampH (Types.fvRuns (Types.currentFile st)) (Types.stCurH st)
@@ -265,22 +259,42 @@ switchRun d = do
     -- mistaken for a finished review
     emptyMsg = case Types.stWalk st of
       Types.WalkUnresolved -> "nothing outstanding"
+      Types.WalkTour -> "no tour steps here"
       _ -> "no pending hunks left"
   case pairs of
     [] -> State.modify (\s -> s {Types.stMsg = emptyMsg})
     _ -> do
       let
-        after = filter (> here) pairs
-        before = filter (< here) pairs
-        target =
-          if d > 0
-            then case after ++ pairs of
-              (p : _) -> p
-              [] -> here
-            else case reverse before ++ reverse pairs of
-              (p : _) -> p
-              [] -> here
+        target = case Types.stWalk st of
+          Types.WalkTour -> stepAlong pairs here d
+          _ -> stepPast pairs here d
       parkAnchor (fst target) (snd target)
+      Monad.when (Types.stWalk st == Types.WalkTour) $
+        State.modify (\s -> s {Types.stTourLast = Just target})
+
+stepPast :: [(Int, Int)] -> (Int, Int) -> Int -> (Int, Int)
+stepPast pairs here d =
+  let
+    after = filter (> here) pairs
+    before = filter (< here) pairs
+  in
+    if d > 0
+      then case after ++ pairs of
+        (p : _) -> p
+        [] -> here
+      else case reverse before ++ reverse pairs of
+        (p : _) -> p
+        [] -> here
+
+stepAlong :: [(Int, Int)] -> (Int, Int) -> Int -> (Int, Int)
+stepAlong pairs here d =
+  let
+    n = length pairs
+    at i = Maybe.fromMaybe here (Types.safeIdx pairs (i `mod` n))
+  in
+    case List.elemIndex here pairs of
+      Just i -> at (i + d)
+      Nothing -> if d > 0 then at 0 else at (n - 1)
 
 -- Changed lines within a buffer-row span, as (key, marked line, 1-based
 -- position) triples. A removed line has no buffer row of its own; it

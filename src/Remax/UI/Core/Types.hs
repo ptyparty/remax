@@ -150,11 +150,11 @@ data RepoPlace = RepoPlace
   , rpAnchor :: Maybe (FilePath, Int)
   }
 
-data WalkFilter = WalkAll | WalkPending | WalkUnresolved
+data WalkFilter = WalkAll | WalkPending | WalkUnresolved | WalkTour
   deriving (Eq)
 
 walkCycle :: [WalkFilter]
-walkCycle = [WalkPending, WalkUnresolved, WalkAll]
+walkCycle = [WalkPending, WalkUnresolved, WalkTour, WalkAll]
 
 walkLabel :: WalkFilter -> T.Text
 walkLabel w =
@@ -162,12 +162,14 @@ walkLabel w =
     WalkAll -> "all"
     WalkPending -> "pending"
     WalkUnresolved -> "unresolved"
+    WalkTour -> "tour"
 
 nextWalkFilter :: WalkFilter -> WalkFilter
 nextWalkFilter w =
   case w of
     WalkPending -> WalkUnresolved
-    WalkUnresolved -> WalkAll
+    WalkUnresolved -> WalkTour
+    WalkTour -> WalkAll
     WalkAll -> WalkPending
 
 data PopupPurpose
@@ -268,6 +270,10 @@ data St = St
     stTraySeen :: (Int, Int)
   , stNotePopup :: Maybe NotePopup
   , stThreads :: Map.Map T.Text [Store.Post] -- note conversations by line key, posts in order
+  , stTour :: [Store.TourStep]
+  , stTourKeys :: Map.Map T.Text Int
+  , stTourNotes :: Map.Map T.Text [Store.Post]
+  , stTourLast :: Maybe (Int, Int)
   , -- which named group each noted key belongs to. Two notes worded the
     -- same are two notes, and only the name says so.
     stNoteGroups :: Map.Map T.Text T.Text
