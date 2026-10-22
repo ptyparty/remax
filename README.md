@@ -146,9 +146,11 @@ another file is picked up when you visit it.
   `COLORTERM` says the terminal can (the same signal helix trusts) —
   otherwise the terminal's palette approximation applies. Hunks are decorated in place by a live diff
   against the base: removed lines float inline in a muted rose, and
-  reviewed lines keep their full syntax colors — the gutter column and
-  the tray meters carry the review state, so settled code never turns
-  murky.
+  reviewed lines keep their full syntax colors on the plain background.
+  Lines still waiting on a verdict sit on a faint cool wash, flagged
+  lines on a rose one and questioned lines on an amber one, all light
+  enough that the syntax colors read through — so on a re-review the
+  eye lands on what still needs attention without reading the gutter.
 - Status line: a quiet mode chip (`● nor` / `● ins`), the top-level
   declaration the cursor is inside, the overall progress meter
   (`▰▰▰▰▱▱▱▱▱ 4/9`), transient messages, and a short hint. The tray shows each hunk's enclosing
