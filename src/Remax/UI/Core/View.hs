@@ -16,6 +16,7 @@ module Remax.UI.Core.View
   , gutterWidth
   , noteTextWidth
   , shownNoteLines
+  , shownGuideLines
   , hScrollFor
   , currentLineOf
   , activeSelectionRows
@@ -265,7 +266,7 @@ gutterWidth :: Types.FileView -> Int
 gutterWidth fv = length (show (max 1 (Modal.bufferLineCount (Types.fvEd fv))))
 
 noteTextWidth :: Int -> Types.FileView -> Int
-noteTextWidth paneWidth fv = max 12 (paneWidth - (gutterWidth fv + 4))
+noteTextWidth paneWidth fv = max 12 (paneWidth - (gutterWidth fv + 5))
 
 shownNoteLines :: Int -> Types.St -> [DiffModel.RowR] -> [[Types.NoteLine]]
 shownNoteLines width st rows =
@@ -303,6 +304,32 @@ shownNoteLines width st rows =
       _ -> []
   in
     map pick (zip anns nexts)
+
+shownGuideLines :: Int -> Types.St -> [DiffModel.RowR] -> [[Types.NoteLine]]
+shownGuideLines width st rows =
+  let
+    guideOf r =
+      Maybe.listToMaybe (Maybe.mapMaybe (`Map.lookup` Types.stTourNotes st) (Verdict.rowFeedbackKeys r))
+    guides = map guideOf rows
+    prevs = Nothing : guides
+    postLines post =
+      let
+        room = max 12 (width - 2)
+        fold ln = case Modal.greedyWrap room (T.words ln) of
+          [] -> [""]
+          wss -> map T.unwords wss
+      in
+        case concatMap fold (T.lines (Store.postBody post)) of
+          [] -> []
+          (first : rest) ->
+            Types.NoteLine (Store.postAuthor post) True first
+              : map (Types.NoteLine (Store.postAuthor post) False) rest
+    pick (mprev, mg) = case mg of
+      Just posts
+        | mprev /= Just posts -> concatMap postLines posts
+      _ -> []
+  in
+    map pick (zip prevs guides)
 
 -- How far the view is shifted right: zero until the cursor closes in on
 -- the pane's right edge, then just enough to keep a small margin ahead

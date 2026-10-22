@@ -4,14 +4,18 @@
 module Remax.UI.Draw.Header
   ( gitBar
   , rebaseBar
+  , tourBar
   , headerBar
   ) where
 
 import Brick ((<+>))
 import Brick qualified as Brick
+import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Remax.Git qualified as Git
+import Remax.Store qualified as Store
 import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
 import Remax.UI.Core.Widgets qualified as Widgets
@@ -168,10 +172,10 @@ fileHeader st lead fv =
         else Brick.txt ""
     -- a filtered session hides hunks; say so, or an empty-looking
     -- tray reads as a finished review
-    walkSeg =
-      if Types.stWalk st == Types.WalkUnresolved
-        then Brick.withAttr Attrs.headerRebaseAttr (Brick.txt "  ·  unresolved only")
-        else Brick.txt ""
+    walkSeg = case Types.stWalk st of
+      Types.WalkUnresolved -> Brick.withAttr Attrs.headerRebaseAttr (Brick.txt "  ·  unresolved only")
+      Types.WalkTour -> Brick.withAttr Attrs.headerRebaseAttr (Brick.txt ("  ·  " <> tourPosition st))
+      _ -> Brick.txt ""
   in
     [ Brick.txt lead
     , Brick.withAttr Attrs.headerFileAttr (Brick.txt (T.pack (Types.fvPath fv)))
@@ -180,6 +184,45 @@ fileHeader st lead fv =
     , Brick.withAttr Attrs.headerCountAttr (Brick.txt counts)
     , doneBadge
     ]
+
+-- The tour's own bar, under the git bar for as long as the walk follows
+-- a tour: which stop this is, where in the stop the cursor sits, and
+-- the stop's note, so the trail stays visible on every hunk of a stop
+-- and not only on the one that carries the note.
+tourBar :: Types.St -> Maybe (Brick.Widget Types.Name)
+tourBar st =
+  case (Types.stWalk st, Types.stTour st) of
+    (Types.WalkTour, steps@(_ : _)) ->
+      let
+        here = (Types.stCurF st, Types.clampH (Types.fvRuns (Types.currentFile st)) (Types.stCurH st))
+        total = Types.tshow (length steps)
+        text = case Tour.stepPosition st here of
+          Just (i, j, size) ->
+            let
+              stop = Maybe.fromMaybe "" (fmap stepLead (Types.safeIdx steps i))
+              within = if size > 1 then "  \183  hunk " <> Types.tshow (j + 1) <> "/" <> Types.tshow size <> " of this stop" else ""
+            in
+              " \9656 stop " <> Types.tshow (i + 1) <> "/" <> total <> within <> "  \183  " <> stop
+          Nothing ->
+            " \9656 tour of " <> total <> " stops  \183  off the trail \8212 :tour returns to it, ] goes to the first stop"
+      in
+        Just (Brick.withDefAttr Attrs.guideAttr (Brick.padRight Brick.Max (Brick.txt text)))
+    _ -> Nothing
+
+stepLead :: Store.TourStep -> T.Text
+stepLead step = Maybe.fromMaybe "" (Maybe.listToMaybe (T.lines (Store.tourNote step)))
+
+tourPosition :: Types.St -> T.Text
+tourPosition st =
+  let
+    here = (Types.stCurF st, Types.clampH (Types.fvRuns (Types.currentFile st)) (Types.stCurH st))
+    total = Types.tshow (length (Types.stTour st))
+  in
+    case Tour.stepPosition st here of
+      Just (i, j, size)
+        | size > 1 -> "tour " <> Types.tshow (i + 1) <> "/" <> total <> " · " <> Types.tshow (j + 1) <> "/" <> Types.tshow size
+        | otherwise -> "tour " <> Types.tshow (i + 1) <> "/" <> total
+      Nothing -> "tour · " <> total <> " steps"
 
 pendingSeg :: Types.St -> Types.FileView -> T.Text
 pendingSeg st fv =

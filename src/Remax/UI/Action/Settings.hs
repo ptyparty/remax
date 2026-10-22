@@ -25,6 +25,7 @@ import Remax.Config qualified as Config
 import Remax.DiffModel qualified as DiffModel
 import Remax.Git qualified as Git
 import Remax.Store qualified as Store
+import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Model.Load qualified as Load
 import Remax.Vi qualified as Vi
@@ -153,14 +154,19 @@ installMode st mode = do
       Git.Ref _ -> Types.stTreeMode st
   MonadIO.liftIO (Store.finishPass (Types.stConn st) (Types.stPassId st))
   newPass <- MonadIO.liftIO (Store.beginPass (Types.stConn st) (Types.repoText st) (Git.modeLabel mode))
+  MonadIO.liftIO (Tour.recordView (Types.stConn st) (Types.stRoot st) (Types.rebaseEffMode (Types.stRebase st) mode))
+  tour <- MonadIO.liftIO (Tour.loadTourFor (Types.stConn st) (Types.stRoot st) (Types.rebaseEffMode (Types.stRebase st) mode))
   State.modify $ \s ->
-    s
-      { Types.stMode = mode
-      , Types.stTreeMode = treeMode
-      , Types.stPassId = newPass
-      , Types.stFiles = if changedSubject then [] else Types.stFiles s
-      , Types.stOpened = if changedSubject then Set.empty else Types.stOpened s
-      }
+    Tour.installTour
+      tour
+      s
+        { Types.stMode = mode
+        , Types.stTreeMode = treeMode
+        , Types.stPassId = newPass
+        , Types.stFiles = if changedSubject then [] else Types.stFiles s
+        , Types.stOpened = if changedSubject then Set.empty else Types.stOpened s
+        , Types.stWalk = if Types.stWalk s == Types.WalkTour && null tour then Types.WalkPending else Types.stWalk s
+        }
   Load.forceGitRefresh
   refreshed <- State.get
   Monad.unless

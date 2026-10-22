@@ -58,6 +58,7 @@ data RowItem = RowItem
   { riRow :: DiffModel.RowR
   , riPoint :: Int
   , riNotes :: [Types.NoteLine]
+  , riGuide :: [Types.NoteLine]
   , riEmph :: [(Int, Int)]
   }
 
@@ -67,6 +68,7 @@ data WindowView = WindowView
   , wvCursorOut :: Int
   , wvItems :: [RowItem]
   , wvNoteRows :: [[Types.NoteLine]]
+  , wvGuideRows :: [[Types.NoteLine]]
   }
 
 data RowPaint = RowPaint
@@ -93,7 +95,9 @@ renderFile paneWidth screenRows st fv =
     -- scrolls before the cursor reaches the top or bottom edge; virtual
     -- note rows above the cursor shift where it lands in the rendering
     cursorIn = wvCursorOut view - wvLo view
-    notesAbove = sum (map length (take cursorIn (wvNoteRows view)))
+    notesAbove =
+      sum (map length (take cursorIn (wvNoteRows view)))
+        + sum (map length (take (cursorIn + 1) (wvGuideRows view)))
     cursorRender = cursorIn + notesAbove
     scrollOff = Config.cfgScrolloff (Types.stConfig st)
     marginTop = max 0 (cursorRender - scrollOff)
@@ -137,6 +141,8 @@ windowView paneWidth screenRows st fv =
       drop 1 (scanr (\row acc -> Maybe.fromMaybe acc (DiffModel.rNewRow row)) seedPoint windowed)
     noteRows =
       take (hi - lo) (drop lo (View.shownNoteLines (View.noteTextWidth paneWidth fv) st rows))
+    guideRows =
+      take (hi - lo) (drop lo (View.shownGuideLines (View.noteTextWidth paneWidth fv) st rows))
     -- worked out once for the whole file when the rows were built, so
     -- the marks are the same wherever the window happens to sit
     emphs = take (hi - lo) (drop lo (Types.fvEmph fv))
@@ -145,15 +151,16 @@ windowView paneWidth screenRows st fv =
       { wvLo = lo
       , wvHi = hi
       , wvCursorOut = cursorOut
-      , wvItems = List.zipWith4 RowItem windowed points noteRows emphs
+      , wvItems = List.zipWith5 RowItem windowed points noteRows guideRows emphs
       , wvNoteRows = noteRows
+      , wvGuideRows = guideRows
       }
 
 -- One row's images: the line itself, then any note rows folded under
 -- it, paired with whether the cursor sits on this line. Counting the
 -- cursor's screen row off the images that precede it is how the
 -- cursor stays with its line whatever the notes above it do.
-rowImages :: Int -> Types.St -> Types.FileView -> Ink.PenSet -> Int -> Int -> RowItem -> ([V.Image], Bool)
+rowImages :: Int -> Types.St -> Types.FileView -> Ink.PenSet -> Int -> Int -> RowItem -> ([V.Image], [V.Image], Bool)
 rowImages paneWidth st fv pens numW hOff item =
   let
     r = riRow item
@@ -194,7 +201,7 @@ rowImages paneWidth st fv pens numW hOff item =
         , contentInk paint (Modal.charSelection ed) (riEmph item) r
         ]
   in
-    (lineImg : map (noteInk paneWidth paint) (riNotes item), isCursor)
+    (map (guideInk paneWidth paint) (riGuide item), lineImg : map (noteInk paneWidth paint) (riNotes item), isCursor)
 
 rowSelected :: Maybe (Int, Int) -> DiffModel.RowR -> Int -> Bool
 rowSelected lineSel r point =
@@ -302,6 +309,19 @@ removedInk rowPens marks shown left =
 
 -- the reviewer's note renders inline as virtual rows under
 -- the line it annotates — visible where the feedback lives
+guideInk :: Int -> RowPaint -> Types.NoteLine -> V.Image
+guideInk paneWidth paint nl =
+  let
+    attr = Ink.penFor (rpPens paint) Attrs.guideAttr
+    lead = if Types.nlOpens nl then "\9656 " else "  "
+    body = T.replicate (rpNumW paint + 4) " " <> lead <> Types.nlText nl
+  in
+    Ink.spanInk
+      paneWidth
+      [ \left -> Ink.inkT left (Ink.penFor (rpPens paint) (rpBarName paint)) (T.singleton (rpBarGlyph paint))
+      , \left -> Ink.fitRow attr left (Ink.inkT left attr body)
+      ]
+
 noteInk :: Int -> RowPaint -> Types.NoteLine -> V.Image
 noteInk paneWidth paint nl =
   let
@@ -327,18 +347,18 @@ noteInk paneWidth paint nl =
 -- the cursor's screen row, or nothing at all when the window
 -- carries no row for the cursor's line — an all-removed file
 -- owns no buffer rows, and nothing there can wear a cursor
-cursorScreenRow :: [([V.Image], Bool)] -> Maybe Int
+cursorScreenRow :: [([V.Image], [V.Image], Bool)] -> Maybe Int
 cursorScreenRow blocks =
   let
     findY _ [] = Nothing
-    findY y ((imgs, isCursor) : rest) =
+    findY y ((above, imgs, isCursor) : rest) =
       if isCursor
-        then Just y
-        else findY (y + length imgs) rest
+        then Just (y + length above)
+        else findY (y + length above + length imgs) rest
   in
     findY (0 :: Int) blocks
 
-composeBody :: Types.St -> Types.FileView -> Int -> Int -> Ink.PenSet -> [([V.Image], Bool)] -> V.Image
+composeBody :: Types.St -> Types.FileView -> Int -> Int -> Ink.PenSet -> [([V.Image], [V.Image], Bool)] -> V.Image
 composeBody st fv screenRows hi pens blocks =
   let
     -- always leave border tail below the window so the divider
@@ -350,7 +370,7 @@ composeBody st fv screenRows hi pens blocks =
         (min (Types.fvRowCount fv - hi) (View.windowRowsFor screenRows))
         (max 60 screenRows)
     bodyRows =
-      concatMap fst blocks
+      concatMap (\(above, imgs, _) -> above ++ imgs) blocks
         ++ [V.charFill (Types.stBorder st) '\9614' (1 :: Int) tailRows]
     -- every row filled out to the width of the widest, so no
     -- attribute runs on past the text it belongs to

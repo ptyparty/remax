@@ -33,6 +33,7 @@ import Remax.Store qualified as Store
 import Remax.Theme qualified as Theme
 import Remax.TreeSitter qualified as TS
 import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
 import Remax.UI.Draw qualified as Draw
@@ -49,6 +50,7 @@ data Startup = Startup
   , suHighlighters :: TS.HighlighterTable
   , suThreads :: Map.Map T.Text [Store.Post]
   , suNoteGroups :: Map.Map T.Text T.Text
+  , suTour :: [Store.TourStep]
   , suConfig :: Config.Config
   , suRebase :: Maybe Git.RebaseStatus
   , suBranch :: Maybe T.Text
@@ -78,7 +80,7 @@ runReview mode root roots story = do
       st0 = initialState startup mode root roots story watchMode dirWatch clip alreadyThere
     startBeats chan
     vty <- buildVty
-    Brick.customMain vty buildVty (Just chan) (app (suTheme startup)) (parkAtStart st0)
+    Brick.customMain vty buildVty (Just chan) (app (suTheme startup)) (parkAtStart (Tour.installTour (suTour startup) st0))
   Store.finishPass (suConn startup) (Types.stPassId final)
   printSummary final
 
@@ -95,6 +97,8 @@ loadStartup mode root = do
   noteGroups0 <- Store.loadNoteGroups conn (T.pack root)
   cfg <- Config.loadConfig
   rebase0 <- Git.rebaseStatus root
+  Tour.recordView conn root (Types.rebaseEffMode rebase0 mode)
+  tour0 <- Tour.loadTourFor conn root (Types.rebaseEffMode rebase0 mode)
   (branch0, head0) <- Git.subjectPlace (Types.rebaseEffMode rebase0 mode) root
   passId <- Store.beginPass conn (T.pack root) (Git.modeLabel mode)
   theme <- Theme.loadHelixTheme
@@ -108,6 +112,7 @@ loadStartup mode root = do
       , suHighlighters = hls
       , suThreads = threads0
       , suNoteGroups = noteGroups0
+      , suTour = tour0
       , suConfig = cfg
       , suRebase = rebase0
       , suBranch = branch0
@@ -172,6 +177,10 @@ initialState startup mode root roots story watchMode dirWatch clip alreadyThere 
     , Types.stTraySeen = (0, 0)
     , Types.stNotePopup = Nothing
     , Types.stThreads = suThreads startup
+    , Types.stTour = suTour startup
+    , Types.stTourKeys = Map.empty
+    , Types.stTourNotes = Map.empty
+    , Types.stTourLast = Nothing
     , Types.stNoteGroups = suNoteGroups startup
     , Types.stSpace = False
     , Types.stConfig = suConfig startup

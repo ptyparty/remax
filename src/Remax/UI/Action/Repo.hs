@@ -21,6 +21,7 @@ import Remax.Git qualified as Git
 import Remax.Store qualified as Store
 import Remax.UI.Action.Rebase qualified as Rebase
 import Remax.UI.Core.Jobs qualified as Jobs
+import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
 import Remax.UI.Model.Load qualified as Load
@@ -72,6 +73,8 @@ switchRepo target = do
               groups <- Store.loadNoteGroups conn (T.pack target)
               rebase <- Git.rebaseStatus target
               (branch, headAt) <- Git.subjectPlace (Types.rebaseEffMode rebase mode) target
+              Tour.recordView conn target (Types.rebaseEffMode rebase mode)
+              tour <- Tour.loadTourFor conn target (Types.rebaseEffMode rebase mode)
               files <-
                 fmap
                   (map (Verdict.recountFile verdicts threads))
@@ -84,7 +87,7 @@ switchRepo target = do
               -- and the rest of it in the background, so the first change in a
               -- directory nothing is changed in yet is noticed here too
               Watch.watchTracked (Types.stWatch st) target
-              pure (verdicts, threads, groups, rebase, branch, headAt, files)
+              pure (verdicts, threads, groups, rebase, branch, headAt, files, tour)
           Jobs.startJob ("opening " <> T.pack (FilePath.takeFileName target)) work $ \outcome ->
             case outcome of
               Left err -> Jobs.jobFailed "opening" err
@@ -107,49 +110,52 @@ arriveAt ::
   , Maybe T.Text
   , Maybe (T.Text, T.Text)
   , [Types.FileView]
+  , [Store.TourStep]
   ) ->
   Brick.EventM Types.Name Types.St ()
 arriveAt target remembered saved mode passId loaded = do
   let
-    (verdicts, threads, groups, rebase, branch, headAt, files) = loaded
+    (verdicts, threads, groups, rebase, branch, headAt, files, tour) = loaded
   State.modify $ \s ->
-    s
-      { Types.stRoot = target
-      , Types.stEpoch = Types.stEpoch s + 1
-      , Types.stRefreshing = False
-      , Types.stGitQueued = False
-      , Types.stReloading = Map.empty
-      , Types.stHighlighting = Nothing
-      , Types.stFiles = files
-      , Types.stVerdicts = verdicts
-      , Types.stThreads = threads
-      , Types.stCountedVerdicts = verdicts
-      , Types.stCountedThreads = threads
-      , Types.stNoteGroups = groups
-      , Types.stRebase = rebase
-      , Types.stBranch = branch
-      , Types.stHead = headAt
-      , Types.stPassId = passId
-      , Types.stMode = mode
-      , Types.stTreeMode = case Git.subjectOf mode of
-          Git.WorkingTree -> mode
-          Git.Ref _ -> Git.VsRef "HEAD"
-      , Types.stPlaces = saved
-      , -- it listed the repository we just left; bringing it back
-        -- here would offer files that are not in front of us
-        Types.stLastSelector = Nothing
-      , Types.stCurF = 0
-      , Types.stCurH = 0
-      , Types.stWritten = Set.empty
-      , Types.stAltFile = Nothing
-      , Types.stAnchor = maybe Nothing Types.rpAnchor remembered
-      , Types.stOpened = maybe Set.empty Types.rpOpened remembered
-      , Types.stWalk = maybe (Types.stWalk s) Types.rpWalk remembered
-      , Types.stGrepNav = Nothing
-      , Types.stCmdFiles = []
-      , Types.stCmdDirs = []
-      , Types.stCmdRefs = []
-      }
+    Tour.installTour
+      tour
+      s
+        { Types.stRoot = target
+        , Types.stEpoch = Types.stEpoch s + 1
+        , Types.stRefreshing = False
+        , Types.stGitQueued = False
+        , Types.stReloading = Map.empty
+        , Types.stHighlighting = Nothing
+        , Types.stFiles = files
+        , Types.stVerdicts = verdicts
+        , Types.stThreads = threads
+        , Types.stCountedVerdicts = verdicts
+        , Types.stCountedThreads = threads
+        , Types.stNoteGroups = groups
+        , Types.stRebase = rebase
+        , Types.stBranch = branch
+        , Types.stHead = headAt
+        , Types.stPassId = passId
+        , Types.stMode = mode
+        , Types.stTreeMode = case Git.subjectOf mode of
+            Git.WorkingTree -> mode
+            Git.Ref _ -> Git.VsRef "HEAD"
+        , Types.stPlaces = saved
+        , -- it listed the repository we just left; bringing it back
+          -- here would offer files that are not in front of us
+          Types.stLastSelector = Nothing
+        , Types.stCurF = 0
+        , Types.stCurH = 0
+        , Types.stWritten = Set.empty
+        , Types.stAltFile = Nothing
+        , Types.stAnchor = maybe Nothing Types.rpAnchor remembered
+        , Types.stOpened = maybe Set.empty Types.rpOpened remembered
+        , Types.stWalk = maybe (Types.stWalk s) Types.rpWalk remembered
+        , Types.stGrepNav = Nothing
+        , Types.stCmdFiles = []
+        , Types.stCmdDirs = []
+        , Types.stCmdRefs = []
+        }
   case remembered of
     Just place -> restorePlace place
     Nothing -> do

@@ -32,6 +32,7 @@ import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Action.Tree qualified as TreeAction
 import Remax.UI.Action.TreeKeys qualified as TreeKeys
 import Remax.UI.Action.Verdicts qualified as VerdictAction
+import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
 import Remax.UI.Core.View qualified as View
@@ -128,6 +129,17 @@ reanchorBody = do
           Just vp -> Brick.setTop (Brick.viewportScroll Types.BodyVP) (max 0 (Brick._vpTop vp - moved))
           Nothing -> pure ()
 
+startTour :: Brick.EventM Types.Name Types.St ()
+startTour = do
+  State.modify (\s -> s {Types.stWalk = Types.WalkTour})
+  st <- State.get
+  case Tour.tourOrder st of
+    (first : _) -> do
+      Nav.parkAnchor (fst first) (snd first)
+      State.modify (\s -> s {Types.stTourLast = Just first})
+      Types.setMsg ("tour started \8212 " <> Types.tshow (length (Types.stTour st)) <> " steps, ]/[ follow it")
+    [] -> Types.setMsg "a tour arrived but none of its hunks are in this view"
+
 handleEvent :: Brick.BrickEvent Types.Name Types.REvent -> Brick.EventM Types.Name Types.St ()
 handleEvent brickEvent =
   case brickEvent of
@@ -142,7 +154,9 @@ handleEvent brickEvent =
       st <- State.get
       threads <- MonadIO.liftIO (Store.loadThreads (Types.stConn st) (Types.repoText st))
       groups <- MonadIO.liftIO (Store.loadNoteGroups (Types.stConn st) (Types.repoText st))
-      State.modify (\s -> s {Types.stThreads = threads, Types.stNoteGroups = groups})
+      steps <- MonadIO.liftIO (Tour.loadTourFor (Types.stConn st) (Types.stRoot st) (Types.effectiveMode st))
+      State.modify (\s -> Tour.installTour steps s {Types.stThreads = threads, Types.stNoteGroups = groups})
+      Monad.when (null (Types.stTour st) && not (null steps)) startTour
     Brick.AppEvent (Types.Attending seen) -> do
       State.modify (\s -> s {Types.stAttending = seen, Types.stThrob = Types.stThrob s + 1})
       Load.pollSubject
