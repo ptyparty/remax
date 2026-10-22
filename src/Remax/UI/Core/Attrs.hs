@@ -13,6 +13,9 @@ module Remax.UI.Core.Attrs
   , watchingAttr
   , wordChangeAttr
   , selAttr
+  , pendingWashAttr
+  , flaggedWashAttr
+  , questionedWashAttr
   , curRunAttr
   , msgAttr
   , hintAttr
@@ -69,6 +72,9 @@ headerAttr
   , watchingAttr
   , wordChangeAttr
   , selAttr
+  , pendingWashAttr
+  , flaggedWashAttr
+  , questionedWashAttr
   , dimAttr
   , curRunAttr
   , norAttr
@@ -135,6 +141,9 @@ ctxMarkAttr = Brick.attrName "ctxMark"
 removedTextAttr = Brick.attrName "removedText"
 watchingAttr = Brick.attrName "watching"
 wordChangeAttr = Brick.attrName "wordChange"
+pendingWashAttr = Brick.attrName "pendingWash"
+flaggedWashAttr = Brick.attrName "flaggedWash"
+questionedWashAttr = Brick.attrName "questionedWash"
 selAttr = Brick.attrName "selection"
 dimAttr = Brick.attrName "dim"
 curRunAttr = Brick.attrName "currentRun"
@@ -283,6 +292,9 @@ mkAttrMap mth =
       , -- only a background, so the syntax colour underneath survives
         (wordChangeAttr, V.defAttr `V.withBackColor` wordWash)
       , (selAttr, selection)
+      , (pendingWashAttr, V.defAttr `V.withBackColor` pendingWash)
+      , (flaggedWashAttr, V.defAttr `V.withBackColor` flaggedWash)
+      , (questionedWashAttr, V.defAttr `V.withBackColor` questionedWash)
       , (dimAttr, BrickUtil.fg inkDim)
       , (curRunAttr, BrickUtil.fg inkMidBlue)
       , (norAttr, BrickUtil.fg inkText)
@@ -339,7 +351,7 @@ inkText = V.linearColor (0xb4 :: Int) 0xb4 0xaa
 inkFlag = V.linearColor (0xcf :: Int) 0x8a 0x6a
 trayFileInk = V.linearColor (0xd8 :: Int) 0xd3 0xc0
 
-surfFloat, surfSel, surfGuide, inkTeal, cursorWash, wordWash, hairInk, meterRail, matchGold :: V.Color
+surfFloat, surfSel, surfGuide, inkTeal, cursorWash, wordWash, pendingWash, flaggedWash, questionedWash, hairInk, meterRail, matchGold :: V.Color
 -- Only used when the theme names no background at all, so there is
 -- nothing to measure a lift from.
 surfFloat = V.linearColor (0x15 :: Int) 0x15 0x15
@@ -347,7 +359,10 @@ surfSel = V.linearColor (0x24 :: Int) 0x24 0x30
 surfGuide = V.linearColor (0x1c :: Int) 0x2e 0x2e
 inkTeal = V.linearColor (0x9f :: Int) 0xd8 0xd0
 cursorWash = V.linearColor (0x3a :: Int) 0x33 0x25
-wordWash = V.linearColor (0x3d :: Int) 0x35 0x4a
+wordWash = V.linearColor (0x1e :: Int) 0x2c 0x3e
+pendingWash = V.linearColor (0x0e :: Int) 0x10 0x15
+flaggedWash = V.linearColor (0x24 :: Int) 0x17 0x1b
+questionedWash = V.linearColor (0x22 :: Int) 0x1f 0x14
 hairInk = V.linearColor (0x2c :: Int) 0x2c 0x2c
 meterRail = V.linearColor (0x3a :: Int) 0x3f 0x3a
 matchGold = V.linearColor (0xfa :: Int) 0xd0 0x7a

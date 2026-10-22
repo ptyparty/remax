@@ -169,13 +169,17 @@ rowImages paneWidth st fv pens numW hOff item =
     isCurRun = DiffModel.rRunIx r == Just curH
     isCursor = DiffModel.rNewRow r == Just (fst (Modal.cursorRC ed))
     inSel = rowSelected (Modal.selectionRows ed) r (riPoint item)
+    verdict = Maybe.listToMaybe (Maybe.mapMaybe (`Map.lookup` Types.stVerdicts st) (Verdict.rowFeedbackKeys r))
     paint =
       RowPaint
         { rpPens = pens
         , -- a selected line reads every attribute it draws against a map
           -- whose default is the selection, so tokens that set only a
           -- foreground pick the highlight up behind them
-          rpRowPens = if inSel then Ink.penUnder Attrs.selAttr pens else pens
+          rpRowPens =
+            if inSel
+              then Ink.penUnder Attrs.selAttr pens
+              else maybe pens (`Ink.penUnder` pens) (verdictWash r verdict)
         , -- the first gutter column doubles as the border between tray
           -- and body: drawn on every row, in the highlight color across
           -- the current hunk's rows; the second column carries the
@@ -185,13 +189,12 @@ rowImages paneWidth st fv pens numW hOff item =
         , rpNumW = numW
         , rpHOff = hOff
         , rpIsCursor = isCursor
-        , rpVerdict =
-            Maybe.listToMaybe (Maybe.mapMaybe (`Map.lookup` Types.stVerdicts st) (Verdict.rowFeedbackKeys r))
+        , rpVerdict = verdict
         }
     -- reviewed lines keep their full syntax colors; the gutter dot
     -- and the tray checkmark already say "answered for", and dimming
     -- whole regions made the buffer feel murky
-    lineImg =
+    drawn =
       Ink.spanInk
         paneWidth
         [ barInk paint
@@ -200,8 +203,22 @@ rowImages paneWidth st fv pens numW hOff item =
         , markInk paint r
         , contentInk paint (Modal.charSelection ed) (riEmph item) r
         ]
+    lineImg =
+      if not inSel && Maybe.isJust (verdictWash r verdict)
+        then Ink.fitRow (Ink.penPlain (rpRowPens paint)) paneWidth drawn
+        else drawn
   in
     (map (guideInk paneWidth paint) (riGuide item), lineImg : map (noteInk paneWidth paint) (riNotes item), isCursor)
+
+verdictWash :: DiffModel.RowR -> Maybe Store.Verdict -> Maybe Brick.AttrName
+verdictWash r verdict =
+  if DiffModel.rMark r == ' '
+    then Nothing
+    else case verdict of
+      Nothing -> Just Attrs.pendingWashAttr
+      Just Store.Flagged -> Just Attrs.flaggedWashAttr
+      Just Store.Questioned -> Just Attrs.questionedWashAttr
+      Just Store.Reviewed -> Nothing
 
 rowSelected :: Maybe (Int, Int) -> DiffModel.RowR -> Int -> Bool
 rowSelected lineSel r point =
