@@ -69,16 +69,19 @@ settleKeys path keys = do
   Monad.when (Config.cfgSettle (Types.stConfig st) && not (null keys)) $ do
     let
       chan = Types.stChan st
-      idle = Map.null (Types.stSettling st)
+      beat = Types.stSettleBeat st
+      tick = do
+        Concurrent.threadDelay settleUs
+        left <- IORef.atomicModifyIORef' beat (\n -> (max 0 (n - 1), n - 1))
+        Monad.void (BChan.writeBChanNonBlocking chan Types.Settle)
+        Monad.when (left > 0) tick
     State.modify $ \s ->
       s
         { Types.stSettling = foldr (\k m -> Map.insert k Attrs.settleFrames m) (Types.stSettling s) keys
         , Types.stSettleFile = Just path
         }
-    Monad.when idle . Monad.void . MonadIO.liftIO . Concurrent.forkIO $
-      Monad.replicateM_ Attrs.settleFrames $ do
-        Concurrent.threadDelay settleUs
-        Monad.void (BChan.writeBChanNonBlocking chan Types.Settle)
+    owed <- MonadIO.liftIO (IORef.atomicModifyIORef' beat (\n -> (Attrs.settleFrames, n)))
+    Monad.when (owed <= 0) (Monad.void (MonadIO.liftIO (Concurrent.forkIO tick)))
 
 startJob :: T.Text -> IO a -> (Either T.Text a -> Brick.EventM Types.Name Types.St ()) -> Brick.EventM Types.Name Types.St ()
 startJob label work finish = do
