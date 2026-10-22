@@ -253,7 +253,7 @@ handleNotePopupKey ev np0 = do
       case Modal.edMode (Types.npEd np) of
         Modal.Insert ->
           case Modal.handleInsert ev (Types.npEd np) of
-            Modal.InsertHandled ed -> setNotePopupEd (wrapNoteLine (popupWrapCol st0 np) ed)
+            Modal.InsertHandled ed -> setNotePopupEd ed
             Modal.InsertExit ed -> setNotePopupEd ed
             Modal.InsertUnhandled -> pure ()
         -- a half-typed vi command owns its next key here too, so `f⏎`
@@ -278,12 +278,6 @@ notePopupNormalKey st np ev =
       case Config.cfgKeys (Types.stConfig st) of
         Config.KeysVi -> notePopupVi st np ev
         _ -> Monad.forM_ (Modal.handleNormal ev (Types.npEd np)) setNotePopupEd
-
-popupWrapCol :: Types.St -> Types.NotePopup -> Int
-popupWrapCol st np =
-  case Types.npPurpose np of
-    Types.NoteFor _ _ -> Config.cfgNoteWrap (Types.stConfig st)
-    Types.AmendMessage _ -> 72
 
 -- Backing out of a note that ! or ? opened takes the mark with it.
 -- The verdict was made by that same keystroke and has not been
@@ -326,37 +320,6 @@ notePopupVi st np ev =
     Vi.ViDone keys ed -> do
       State.modify (\s -> s {Types.stVi = keys})
       setNotePopupEd ed
-
--- Auto-fill for the note popup: typing past the popup width breaks the
--- line at the last space, and the cursor rides the remainder down.
--- A single overlong word is left alone.
-wrapNoteLine :: Int -> Modal.EdState -> Modal.EdState
-wrapNoteLine noteWrapCol ed =
-  let
-    (row, col) = Modal.cursorRC ed
-    ls = Modal.bufferLines ed
-    line = case drop row ls of
-      (l : _) -> l
-      [] -> ""
-    breakAt =
-      T.findIndex (== ' ') (T.reverse (T.take (noteWrapCol + 1) line))
-  in
-    if T.length line <= noteWrapCol
-      then ed
-      else case breakAt of
-        Nothing -> ed
-        Just fromEnd ->
-          let
-            at = noteWrapCol - fromEnd
-            keep = T.take at line
-            rest = T.drop (at + 1) line
-            wrapped = take row ls ++ (keep : rest : drop (row + 1) ls)
-            cursor =
-              if col > at
-                then (row + 1, col - at - 1)
-                else (row, col)
-          in
-            ed {Modal.edZipper = Z.moveCursor cursor (Z.textZipper wrapped Nothing)}
 
 -- What the popup is about to do. The old chrome never said: a fresh
 -- note, a rewrite of your own latest post, and a follow-up to somebody
