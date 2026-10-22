@@ -151,6 +151,11 @@ another file is picked up when you visit it.
   lines on a rose one and questioned lines on an amber one, all light
   enough that the syntax colors read through — so on a re-review the
   eye lands on what still needs attention without reading the gutter.
+  Accepting lines gives them a brief green glow that fades into the
+  plain background over a quarter of a second, and the progress meters
+  in the status line and the file's tray row glow with it — so the
+  reward is on screen even when the jump lands in another file
+  (`settle = 0` turns it off).
 - Status line: a quiet mode chip (`● nor` / `● ins`), the top-level
   declaration the cursor is inside, the overall progress meter
   (`▰▰▰▰▱▱▱▱▱ 4/9`), transient messages, and a short hint. The tray shows each hunk's enclosing
@@ -453,6 +458,7 @@ keys = helix          # helix | vi | emacs
 scrolloff = 5         # rows kept visible around the cursor
 note-wrap = 58        # auto-fill column in the note popup
 note-on-flag = 1      # ! and ? open the note popup immediately
+settle = 1            # accepted lines glow green for a moment as they clear
 split-threshold = 20  # hunks at or under this never split
 piece-min = 6         # smaller pieces merge forward (within a function)
 piece-max = 32        # bigger pieces keep splitting

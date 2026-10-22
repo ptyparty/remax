@@ -190,29 +190,41 @@ meterCells done total =
   in
     (cells, filled)
 
-meterW :: Int -> Int -> Brick.Widget Types.Name
-meterW done total =
+meterW :: Maybe Int -> Int -> Int -> Brick.Widget Types.Name
+meterW glow done total =
   let
     (cells, filled) = meterCells done total
+    (steady, fresh) = meterSplit glow filled
+    countAttr = maybe Attrs.hintAttr Attrs.settleInkAttr glow
   in
     Brick.hBox
-      [ Brick.withAttr Attrs.meterOnAttr (Brick.txt (T.replicate filled "\9648"))
+      [ Brick.withAttr Attrs.meterOnAttr (Brick.txt (T.replicate steady "\9648"))
+      , Brick.withAttr (maybe Attrs.meterOnAttr Attrs.settleInkAttr glow) (Brick.txt (T.replicate fresh "\9648"))
       , Brick.withAttr Attrs.meterOffAttr (Brick.txt (T.replicate (cells - filled) "\9649"))
-      , Brick.withAttr Attrs.hintAttr (Brick.txt (" " <> Types.tshow done <> "/" <> Types.tshow total))
+      , Brick.withAttr countAttr (Brick.txt (" " <> Types.tshow done <> "/" <> Types.tshow total))
       ]
 
-meterInk :: PenSet -> Int -> Int -> Int -> V.Image
-meterInk pens width done total =
+meterInk :: PenSet -> Maybe Int -> Int -> Int -> Int -> V.Image
+meterInk pens glow width done total =
   let
     (cells, filled) = meterCells done total
+    (steady, fresh) = meterSplit glow filled
+    countAttr = maybe Attrs.hintAttr Attrs.settleInkAttr glow
   in
     spanInk
       width
-      [ \left -> inkT left (penFor pens Attrs.meterOnAttr) (T.replicate filled "\9648")
+      [ \left -> inkT left (penFor pens Attrs.meterOnAttr) (T.replicate steady "\9648")
+      , \left -> inkT left (penFor pens (maybe Attrs.meterOnAttr Attrs.settleInkAttr glow)) (T.replicate fresh "\9648")
       , \left -> inkT left (penFor pens Attrs.meterOffAttr) (T.replicate (cells - filled) "\9649")
       , \left ->
-          inkT left (penFor pens Attrs.hintAttr) (" " <> Types.tshow done <> "/" <> Types.tshow total)
+          inkT left (penFor pens countAttr) (" " <> Types.tshow done <> "/" <> Types.tshow total)
       ]
+
+meterSplit :: Maybe Int -> Int -> (Int, Int)
+meterSplit glow filled =
+  case glow of
+    Just _ | filled > 0 -> (filled - 1, 1)
+    _ -> (filled, 0)
 
 meterTextWidth :: Int -> Int -> Int
 meterTextWidth done total =

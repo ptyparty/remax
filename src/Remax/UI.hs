@@ -193,6 +193,8 @@ initialState startup mode root roots story watchMode dirWatch clip alreadyThere 
     , Types.stComposing = Nothing
     , Types.stAttending = ([], [])
     , Types.stThrob = 0
+    , Types.stSettling = Map.empty
+    , Types.stSettleFile = Nothing
     , Types.stBusy = []
     , Types.stRepoInfo = Map.empty
     , Types.stCountedVerdicts = suVerdicts startup

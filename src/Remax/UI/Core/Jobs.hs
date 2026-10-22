@@ -7,6 +7,7 @@ module Remax.UI.Core.Jobs
   , startJob
   , jobFailed
   , withSlot
+  , settleKeys
   ) where
 
 import Brick qualified as Brick
@@ -17,7 +18,10 @@ import Control.Monad qualified as Monad
 import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
 import Data.IORef qualified as IORef
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Remax.Config qualified as Config
+import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Types qualified as Types
 
 -- Load files on a few workers at once: each one costs a git spawn for
@@ -55,6 +59,26 @@ forBounded workers f xs = do
 
 pulseUs :: Int
 pulseUs = 120000
+
+settleUs :: Int
+settleUs = 40000
+
+settleKeys :: FilePath -> [T.Text] -> Brick.EventM Types.Name Types.St ()
+settleKeys path keys = do
+  st <- State.get
+  Monad.when (Config.cfgSettle (Types.stConfig st) && not (null keys)) $ do
+    let
+      chan = Types.stChan st
+      idle = Map.null (Types.stSettling st)
+    State.modify $ \s ->
+      s
+        { Types.stSettling = foldr (\k m -> Map.insert k Attrs.settleFrames m) (Types.stSettling s) keys
+        , Types.stSettleFile = Just path
+        }
+    Monad.when idle . Monad.void . MonadIO.liftIO . Concurrent.forkIO $
+      Monad.replicateM_ Attrs.settleFrames $ do
+        Concurrent.threadDelay settleUs
+        Monad.void (BChan.writeBChanNonBlocking chan Types.Settle)
 
 startJob :: T.Text -> IO a -> (Either T.Text a -> Brick.EventM Types.Name Types.St ()) -> Brick.EventM Types.Name Types.St ()
 startJob label work finish = do

@@ -16,6 +16,9 @@ module Remax.UI.Core.Attrs
   , pendingWashAttr
   , flaggedWashAttr
   , questionedWashAttr
+  , settleAttr
+  , settleInkAttr
+  , settleFrames
   , curRunAttr
   , msgAttr
   , hintAttr
@@ -144,6 +147,29 @@ wordChangeAttr = Brick.attrName "wordChange"
 pendingWashAttr = Brick.attrName "pendingWash"
 flaggedWashAttr = Brick.attrName "flaggedWash"
 questionedWashAttr = Brick.attrName "questionedWash"
+
+settleFrames :: Int
+settleFrames = 6
+
+settleAttr :: Int -> Brick.AttrName
+settleAttr frame = Brick.attrName ("settle" ++ show (max 1 (min settleFrames frame)))
+
+settleInkAttr :: Int -> Brick.AttrName
+settleInkAttr frame = Brick.attrName ("settleInk" ++ show (max 1 (min settleFrames frame)))
+
+settleInk :: Int -> V.Color
+settleInk frame =
+  let
+    toward base peak = base + ((peak - base) * frame) `div` settleFrames
+  in
+    V.linearColor (toward (0x84 :: Int) 0xc8) (toward 0xa7 0xf4) (toward 0x75 0xb0)
+
+settleShade :: Int -> V.Color
+settleShade frame =
+  let
+    scale v = (v * frame) `div` settleFrames
+  in
+    V.linearColor (scale (0x22 :: Int)) (scale 0x3c) (scale 0x2c)
 selAttr = Brick.attrName "selection"
 dimAttr = Brick.attrName "dim"
 curRunAttr = Brick.attrName "currentRun"
@@ -329,8 +355,11 @@ mkAttrMap mth =
       , (meterOffAttr, BrickUtil.fg meterRail)
       , (hairAttr, BrickUtil.fg hairInk)
       ]
+    settlePairs =
+      map (\n -> (settleAttr n, V.defAttr `V.withBackColor` settleShade n)) [1 .. settleFrames]
+        ++ map (\n -> (settleInkAttr n, BrickUtil.fg (settleInk n))) [1 .. settleFrames]
   in
-    Brick.attrMap baseAttr (tsPairs ++ uiPairs)
+    Brick.attrMap baseAttr (tsPairs ++ uiPairs ++ settlePairs)
 
 -- The Quiet Ink · Tinted palette: jellybeans-adjacent literals, chosen
 -- in the temperaments mockups. linearColor keeps true 24-bit values;

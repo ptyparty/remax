@@ -28,6 +28,7 @@ module Remax.UI.Core.Types
   , effectiveMode
   , rebaseShown
   , whenWritable
+  , settleLevel
   , readOnlyMsg
   , fileDir
   , clampH
@@ -92,6 +93,7 @@ data REvent
     Attending ([T.Text], [T.Text])
   | Tick
   | Pulse
+  | Settle
   | JobDone T.Text (Brick.EventM Name St ())
 
 -- The one-line prompt at the bottom of the screen: / search or : command.
@@ -288,6 +290,8 @@ data St = St
   , stComposing :: Maybe T.Text -- repository we told the store is mid-note
   , stAttending :: ([T.Text], [T.Text]) -- repositories agents wait on / work on
   , stThrob :: !Int -- which frame the watching indicator is on
+  , stSettling :: Map.Map T.Text Int -- accepted keys still glowing, frames left
+  , stSettleFile :: Maybe FilePath -- the file those keys belong to
   , stBusy :: [T.Text]
   , stRepoInfo :: Map.Map FilePath [T.Text]
   , stCountedVerdicts :: Map.Map T.Text Store.Verdict
@@ -356,6 +360,10 @@ whenWritable act = do
   case Git.writable (effectiveMode st) of
     Right grant -> act grant
     Left tip -> setMsg (readOnlyMsg tip)
+
+settleLevel :: St -> Maybe Int
+settleLevel st =
+  if Map.null (stSettling st) then Nothing else Just (maximum (Map.elems (stSettling st)))
 
 readOnlyMsg :: T.Text -> T.Text
 readOnlyMsg tip =
