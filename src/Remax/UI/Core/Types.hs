@@ -298,6 +298,7 @@ data St = St
   , stCountedThreads :: Map.Map T.Text [Store.Post]
   , stHighlighting :: Maybe FilePath
   , stJobs :: IORef.IORef Int
+  , stSettleBeat :: IORef.IORef Int -- frames the settle timer still owes
   , stWorkSlots :: Concurrent.QSem
   , stEpoch :: !Int
   , stReloading :: Map.Map FilePath Bool

@@ -59,6 +59,7 @@ data Startup = Startup
   , suTheme :: Maybe Theme.HelixTheme
   , suChan :: BChan.BChan Types.REvent
   , suJobs :: IORef.IORef Int
+  , suSettleBeat :: IORef.IORef Int
   , suSlots :: Concurrent.QSem
   }
 
@@ -104,6 +105,7 @@ loadStartup mode root = do
   theme <- Theme.loadHelixTheme
   chan <- BChan.newBChan 64
   jobs <- IORef.newIORef (0 :: Int)
+  settleBeat <- IORef.newIORef (0 :: Int)
   slots <- Concurrent.newQSem 2
   pure
     Startup
@@ -121,6 +123,7 @@ loadStartup mode root = do
       , suTheme = theme
       , suChan = chan
       , suJobs = jobs
+      , suSettleBeat = settleBeat
       , suSlots = slots
       }
 
@@ -201,6 +204,7 @@ initialState startup mode root roots story watchMode dirWatch clip alreadyThere 
     , Types.stCountedThreads = suThreads startup
     , Types.stHighlighting = Nothing
     , Types.stJobs = suJobs startup
+    , Types.stSettleBeat = suSettleBeat startup
     , Types.stWorkSlots = suSlots startup
     , Types.stEpoch = 0
     , Types.stReloading = Map.empty
