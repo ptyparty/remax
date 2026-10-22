@@ -17,6 +17,7 @@ import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Remax.CommitMessage qualified as CommitMessage
 import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
 import Remax.UI.Core.Types qualified as Types
@@ -158,7 +159,7 @@ amendHead = Types.whenWritable $ \_ -> do
     Left e -> Types.setMsg e
     Right (msg, target) -> do
       let
-        ls = if T.null (T.strip msg) then [""] else T.lines msg
+        ls = if T.null (T.strip msg) then [""] else CommitMessage.unfill msg
         ed = Modal.newEdState 0 ls
       State.modify
         ( \s ->
@@ -172,9 +173,12 @@ applyAmendMessage :: Types.AmendTarget -> T.Text -> Brick.EventM Types.Name Type
 applyAmendMessage target text
   | T.null text = Types.setMsg "empty commit message — amend cancelled"
   | otherwise =
-      case target of
-        Types.AmendStoppedCommit -> setStoppedMessage text
-        Types.AmendHead folding -> amendHeadCommit folding text
+      let
+        filled = CommitMessage.fill text
+      in
+        case target of
+          Types.AmendStoppedCommit -> setStoppedMessage filled
+          Types.AmendHead folding -> amendHeadCommit folding filled
 
 setStoppedMessage :: T.Text -> Brick.EventM Types.Name Types.St ()
 setStoppedMessage text = Types.whenWritable $ \grant -> do
