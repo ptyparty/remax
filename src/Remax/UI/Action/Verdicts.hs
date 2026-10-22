@@ -51,15 +51,15 @@ cycleWalkFilter = do
   st <- State.get
   let
     next = Types.nextWalkFilter (Types.stWalk st)
-    chosen = if next == Types.WalkTour && null (Types.stTour st) then Types.nextWalkFilter next else next
+    chosen = if next == Types.WalkTour && Maybe.isJust (Tour.tourAbsence st) then Types.nextWalkFilter next else next
   setWalkFilter chosen
 
 setWalkFilter :: Types.WalkFilter -> Brick.EventM Types.Name Types.St ()
 setWalkFilter chosen = do
   st <- State.get
-  if chosen == Types.WalkTour && null (Types.stTour st)
-    then Types.setMsg "no tour recorded for this view"
-    else do
+  case (chosen, Tour.tourAbsence st) of
+    (Types.WalkTour, Just why) -> Types.setMsg why
+    _ -> do
       State.modify (\s -> s {Types.stWalk = chosen, Types.stMsg = walkMsg chosen})
       Nav.scrollTrayToCurrent
 
@@ -74,9 +74,10 @@ resumeTour = do
       _
         | here `elem` ordered -> Just here
         | otherwise -> Maybe.listToMaybe ordered
-  case target of
-    Nothing -> Types.setMsg "no tour recorded for this view"
-    Just (f, h) -> landOnTour "back on the tour" (f, h)
+  case (Tour.tourAbsence st, target) of
+    (Just why, _) -> Types.setMsg why
+    (Nothing, Nothing) -> Types.setMsg "the tour's hunks are no longer in this view"
+    (Nothing, Just (f, h)) -> landOnTour "back on the tour" (f, h)
 
 gotoTourStep :: Int -> Brick.EventM Types.Name Types.St ()
 gotoTourStep n = do

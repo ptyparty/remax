@@ -683,6 +683,9 @@ installRefresh before refresh = do
   Monad.when gitMoved (MonadIO.liftIO (Watch.watchTracked (Types.stWatch latest) (Types.stRoot latest)))
   applyChangeSet remaining
   State.modify (\s -> Tour.installTour (Types.stTour s) s)
+  settled <- State.get
+  Monad.when (Types.stWalk settled == Types.WalkTour && not (null (Types.stTour settled)) && null (Tour.tourOrder settled)) $
+    State.modify (\s -> s {Types.stWalk = Types.WalkPending, Types.stMsg = "the tour's hunks left the view \8212 walking pending hunks"})
 
 mergeLive :: Git.Subject -> Map.Map FilePath Types.FileView -> Types.FileView -> Types.FileView
 mergeLive subject current fv =

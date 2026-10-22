@@ -5,6 +5,7 @@ module Remax.UI.Core.Tour
   , installTour
   , recordView
   , tourOrder
+  , tourAbsence
   , stepGroups
   , stepPosition
   ) where
@@ -56,6 +57,12 @@ stepGroups st =
 
 tourOrder :: Types.St -> [(Int, Int)]
 tourOrder = concat . stepGroups
+
+tourAbsence :: Types.St -> Maybe T.Text
+tourAbsence st
+  | null (Types.stTour st) = Just "no tour recorded for this view"
+  | null (tourOrder st) = Just "the tour's hunks are no longer in this view"
+  | otherwise = Nothing
 
 stepPosition :: Types.St -> (Int, Int) -> Maybe (Int, Int, Int)
 stepPosition st here =
