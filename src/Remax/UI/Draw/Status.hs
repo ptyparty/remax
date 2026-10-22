@@ -132,4 +132,4 @@ meterSeg st =
   in
     if total == 0
       then Brick.txt ""
-      else Brick.txt "  " <+> Ink.meterW (total - pending) total
+      else Brick.txt "  " <+> Ink.meterW (Types.settleLevel st) (total - pending) total

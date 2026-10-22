@@ -14,6 +14,7 @@ import Control.Monad qualified as Monad
 import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
 import Data.List qualified as List
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Graphics.Vty qualified as V
 import Remax.Clipboard qualified as Clipboard
@@ -129,6 +130,9 @@ reanchorBody = do
           Just vp -> Brick.setTop (Brick.viewportScroll Types.BodyVP) (max 0 (Brick._vpTop vp - moved))
           Nothing -> pure ()
 
+settleStep :: Int -> Maybe Int
+settleStep n = if n <= 1 then Nothing else Just (n - 1)
+
 startTour :: Brick.EventM Types.Name Types.St ()
 startTour = do
   State.modify (\s -> s {Types.stWalk = Types.WalkTour})
@@ -162,6 +166,8 @@ handleEvent brickEvent =
       Load.pollSubject
     Brick.AppEvent Types.Tick -> Nav.scrollHunkIntoView
     Brick.AppEvent Types.Pulse -> State.modify (\s -> s {Types.stThrob = Types.stThrob s + 1})
+    Brick.AppEvent Types.Settle ->
+      State.modify (\s -> s {Types.stSettling = Map.mapMaybe settleStep (Types.stSettling s)})
     Brick.AppEvent (Types.JobDone label finish) -> do
       State.modify (\s -> s {Types.stBusy = List.delete label (Types.stBusy s)})
       finish

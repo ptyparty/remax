@@ -65,6 +65,7 @@ data Config = Config
   , cfgIgnoreWs :: Bool -- compare lines with their whitespace removed
   , cfgWordDiff :: Bool -- mark the words that differ within a changed line (on)
   , cfgUntracked :: Bool -- show files git does not track yet (on)
+  , cfgSettle :: Bool -- accepted lines glow briefly as their wash clears (on)
   , cfgSplit :: DiffModel.SplitConfig
   }
 
@@ -78,6 +79,7 @@ defaultConfig =
     , cfgIgnoreWs = False
     , cfgWordDiff = True
     , cfgUntracked = True
+    , cfgSettle = True
     , cfgSplit = DiffModel.defaultSplitConfig
     }
 
@@ -185,6 +187,7 @@ fromEntries entries =
       , cfgIgnoreWs = getInt "ignore-whitespace" (0 :: Int) /= 0
       , cfgWordDiff = getInt "word-diff" (1 :: Int) /= 0
       , cfgUntracked = getInt "untracked" (1 :: Int) /= 0
+      , cfgSettle = getInt "settle" (1 :: Int) /= 0
       , cfgSplit =
           DiffModel.SplitConfig
             { DiffModel.splitThreshold =

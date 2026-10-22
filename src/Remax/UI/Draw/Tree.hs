@@ -213,7 +213,7 @@ meterCell st path =
             total = length (Types.fvRuns fv)
             done = length (filter (not . Verdict.runPending (Types.stVerdicts st)) (Types.fvRuns fv))
           in
-            treeCell treeMeterW (Ink.meterW done total)
+            treeCell treeMeterW (Ink.meterW Nothing done total)
     _ -> treeCell treeMeterW (Brick.txt " ")
 
 fromCell :: Maybe Git.PathStat -> [BrickTypes.Widget Types.Name]

@@ -110,7 +110,8 @@ trayFileImage st pens width fi fv =
     -- the meter is pushed to the right of what the name leaves,
     -- with the gap in front of it rather than behind
     gap = width - V.imageWidth nameImg - V.imageWidth endImg
-    meterImg = Ink.meterInk pens gap done total
+    glow = if Types.stSettleFile st == Just (Types.fvPath fv) then Types.settleLevel st else Nothing
+    meterImg = Ink.meterInk pens glow gap done total
   in
     Ink.fitRow (Ink.penPlain pens) width $
       V.horizCat
