@@ -203,8 +203,11 @@ tourBar st =
               within = if size > 1 then "  \183  hunk " <> Types.tshow (j + 1) <> "/" <> Types.tshow size <> " of this stop" else ""
             in
               " \9656 stop " <> Types.tshow (i + 1) <> "/" <> total <> within <> "  \183  " <> stop
-          Nothing ->
-            " \9656 tour of " <> total <> " stops  \183  off the trail \8212 :tour returns to it, ] goes to the first stop"
+          Nothing
+            | null (Tour.tourOrder st) ->
+                " \9656 tour of " <> total <> " stops  \183  none of its hunks are in this view any more"
+            | otherwise ->
+                " \9656 tour of " <> total <> " stops  \183  off the trail \8212 :tour returns to it, ] goes to the first stop"
       in
         Just (Brick.withDefAttr Attrs.guideAttr (Brick.padRight Brick.Max (Brick.txt text)))
     _ -> Nothing
