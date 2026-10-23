@@ -6,6 +6,7 @@ module Remax.UI.Action.Verdicts
   , setWalkFilter
   , resumeTour
   , gotoTourStep
+  , askTour
   , showCommitPopup
   , revertTarget
   , acceptSelection
@@ -78,6 +79,21 @@ resumeTour = do
     (Just why, _) -> Types.setMsg why
     (Nothing, Nothing) -> Types.setMsg "the tour's hunks are no longer in this view"
     (Nothing, Just (f, h)) -> landOnTour "back on the tour" (f, h)
+
+askTour :: T.Text -> Brick.EventM Types.Name Types.St ()
+askTour prompt = do
+  st <- State.get
+  let
+    mode = Types.effectiveMode st
+    here = Types.repoText st
+    (waiting, working) = Types.stAttending st
+    attended = here `elem` waiting || here `elem` working
+  MonadIO.liftIO (Store.askTour (Types.stConn st) here (Git.subjectText mode) (Git.modeToText mode) prompt)
+  Types.setMsg
+    ( if attended
+        then "tour requested \8212 the agent watching this review will post one"
+        else "tour requested \8212 no agent is watching this review yet; it will see the request when it next looks"
+    )
 
 gotoTourStep :: Int -> Brick.EventM Types.Name Types.St ()
 gotoTourStep n = do

@@ -349,6 +349,8 @@ app theme =
           out = V.outputIface vty
         Monad.when (V.supportsMode out V.BracketedPaste) $
           MonadIO.liftIO (V.setMode out V.BracketedPaste True)
+        Monad.when (V.supportsMode out V.Mouse) $
+          MonadIO.liftIO (V.setMode out V.Mouse True)
     , Brick.appAttrMap = const (Attrs.mkAttrMap theme)
     }
 

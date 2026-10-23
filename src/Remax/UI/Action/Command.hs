@@ -198,6 +198,7 @@ runCommand input =
     ["revert"] -> VerdictAction.revertTarget
     ["walk"] -> VerdictAction.cycleWalkFilter
     ["tour"] -> VerdictAction.resumeTour
+    ("tour" : "ask" : rest) -> VerdictAction.askTour (T.unwords rest)
     ["tour", n] | Just k <- lineAddress n -> VerdictAction.gotoTourStep k
     ["walk", which] -> setWalkNamed which
     ["resolve"] -> NoteAction.unnoteCmd

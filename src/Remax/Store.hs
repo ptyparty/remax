@@ -53,6 +53,10 @@ module Remax.Store
   , clearTour
   , appendTourStep
   , loadTour
+  , TourRequest (..)
+  , askTour
+  , tourRequests
+  , clearTourRequest
   ) where
 
 import Control.Monad qualified as Monad
@@ -201,6 +205,15 @@ openStore = do
     \  PRIMARY KEY (repo, subject, seq))"
   SQLite.execute_
     conn
+    "CREATE TABLE IF NOT EXISTS tour_request (\
+    \  repo TEXT NOT NULL,\
+    \  subject TEXT NOT NULL,\
+    \  mode TEXT NOT NULL,\
+    \  prompt TEXT NOT NULL,\
+    \  asked_at TEXT NOT NULL DEFAULT (datetime('now')),\
+    \  PRIMARY KEY (repo, subject))"
+  SQLite.execute_
+    conn
     "CREATE TABLE IF NOT EXISTS tour_hunk (\
     \  repo TEXT NOT NULL,\
     \  subject TEXT NOT NULL,\
@@ -337,6 +350,36 @@ loadTour conn repo subject = do
     [ TourStep {tourSeq = s, tourAuthor = a, tourNote = n, tourKeys = Map.findWithDefault [] s bySeq}
     | (s, a, n) <- steps
     ]
+
+data TourRequest = TourRequest
+  { requestSubject :: T.Text
+  , requestMode :: T.Text
+  , requestPrompt :: T.Text
+  , requestAskedAt :: T.Text
+  }
+  deriving (Eq, Show)
+
+askTour :: SQLite.Connection -> T.Text -> T.Text -> T.Text -> T.Text -> IO ()
+askTour conn repo subject mode prompt =
+  SQLite.execute
+    conn
+    "INSERT INTO tour_request (repo, subject, mode, prompt) VALUES (?, ?, ?, ?)\
+    \ ON CONFLICT(repo, subject) DO UPDATE SET\
+    \   mode = excluded.mode, prompt = excluded.prompt, asked_at = datetime('now')"
+    (repo, subject, mode, prompt)
+
+tourRequests :: SQLite.Connection -> T.Text -> IO [TourRequest]
+tourRequests conn repo = do
+  rows <-
+    SQLite.query
+      conn
+      "SELECT subject, mode, prompt, asked_at FROM tour_request WHERE repo = ? ORDER BY asked_at"
+      (SQLite.Only repo)
+  pure (map (\(s, m, p, at) -> TourRequest {requestSubject = s, requestMode = m, requestPrompt = p, requestAskedAt = at}) rows)
+
+clearTourRequest :: SQLite.Connection -> T.Text -> T.Text -> IO ()
+clearTourRequest conn repo subject =
+  SQLite.execute conn "DELETE FROM tour_request WHERE repo = ? AND subject = ?" (repo, subject)
 
 loadVerdicts :: SQLite.Connection -> T.Text -> IO (Map.Map T.Text Verdict)
 loadVerdicts conn repo = do
