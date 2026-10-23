@@ -15,6 +15,7 @@ import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Graphics.Vty qualified as V
 import Remax.Clipboard qualified as Clipboard
@@ -39,6 +40,7 @@ import Remax.UI.Core.Verdict qualified as Verdict
 import Remax.UI.Core.View qualified as View
 import Remax.UI.Model.Load qualified as Load
 import Remax.UI.Model.Nav qualified as Nav
+import Remax.UI.Model.Tray qualified as TrayModel
 import Remax.Vi qualified as Vi
 import System.FilePath ((</>))
 import System.FilePath qualified as FilePath
@@ -130,6 +132,42 @@ reanchorBody = do
           Just vp -> Brick.setTop (Brick.viewportScroll Types.BodyVP) (max 0 (Brick._vpTop vp - moved))
           Nothing -> pure ()
 
+data WheelTarget = WheelBody | WheelTray | WheelNowhere
+
+wheelTargetOf :: Types.Name -> WheelTarget
+wheelTargetOf name =
+  case name of
+    Types.BodyVP -> WheelBody
+    Types.TrayVP -> WheelTray
+    Types.TheCursor -> WheelNowhere
+
+handleWheel :: WheelTarget -> V.Button -> Brick.EventM Types.Name Types.St ()
+handleWheel target button = do
+  st <- State.get
+  let
+    step = case button of
+      V.BScrollUp -> Just (-1)
+      V.BScrollDown -> Just 1
+      _ -> Nothing
+    overlay =
+      Maybe.isJust (Types.stPicker st)
+        || Maybe.isJust (Types.stNotePopup st)
+        || Maybe.isJust (Types.stTree st)
+        || Maybe.isJust (Types.stPrompt st)
+    arrow d = handleEvent (Brick.VtyEvent (V.EvKey (if d > 0 then V.KDown else V.KUp) []))
+  case step of
+    Nothing -> pure ()
+    Just d
+      | overlay -> arrow d
+      | otherwise ->
+          case target of
+            WheelTray -> Brick.vScrollBy (Brick.viewportScroll Types.TrayVP) (wheelLines * d)
+            WheelBody -> Monad.replicateM_ wheelLines (arrow d)
+            WheelNowhere -> pure ()
+
+wheelLines :: Int
+wheelLines = 3
+
 settleStep :: Int -> Maybe Int
 settleStep n = if n <= 1 then Nothing else Just (n - 1)
 
@@ -171,6 +209,14 @@ handleEvent brickEvent =
     Brick.AppEvent (Types.JobDone label finish) -> do
       State.modify (\s -> s {Types.stBusy = List.delete label (Types.stBusy s)})
       finish
+    Brick.MouseDown name button _ _ -> handleWheel (wheelTargetOf name) button
+    Brick.MouseUp {} -> pure ()
+    Brick.VtyEvent (V.EvMouseDown col _ button _) -> do
+      st <- State.get
+      let
+        overTray = Types.stTray st && not (null (Types.stFiles st)) && col < TrayModel.trayWidth
+      handleWheel (if overTray then WheelTray else WheelBody) button
+    Brick.VtyEvent (V.EvMouseUp {}) -> pure ()
     Brick.VtyEvent ev -> do
       st <- State.get
       -- messages are transient: any keystroke clears the old one, and a
@@ -202,7 +248,6 @@ handleEvent brickEvent =
                     handleIdleGo ev
                 | null (Types.stFiles st) -> handleIdleKey ev
                 | otherwise -> handleModalKey ev
-    _ -> pure ()
 
 -- The helix-style space menu: Space, then one key; anything unlisted
 -- just cancels. Dispatch reads spaceMenuEntries, which is also what the

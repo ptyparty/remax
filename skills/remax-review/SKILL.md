@@ -55,14 +55,21 @@ the human says they are done reviewing, or closes the session.
 remax -C /path/to/repo list --awaiting agent --json
 ```
 
-This prints the conversations waiting on you (run it from anywhere —
-`-C` points at the target). Drop `--awaiting agent` to see every
-conversation, including ones you have answered and ones with no note
-yet. Each entry is one conversation: the lines a note was written
-across, and the thread about them. Shape:
+This prints what is waiting on you (run it from anywhere — `-C` points
+at the target). Drop `--awaiting agent` to see every conversation,
+including ones you have answered and ones with no note yet. **Two kinds
+of thing can be waiting**: `tour_requests`, where the reviewer asked
+you for a guided tour of the view they have open (see *Giving a tour*),
+and `conversations`, each the lines a note was written across and the
+thread about them. An empty `conversations` with a non-empty
+`tour_requests` is work. Shape:
 
 ```json
 {"repo": "/path/to/repo",
+ "tour_requests": [
+   {"repo": "/path/to/repo", "view": "feature vs b9045d7",
+    "ref": "feature", "base": "b9045d7", "prompt": "schema changes first",
+    "asked_at": "2026-10-22 19:48:58"}],
  "commits": {"8b36d626c": "Lists the air carriers an integration supports"},
  "conversations": [
    {"id": "3f9c…",
@@ -183,8 +190,12 @@ The rename keeps `$FEEDBACK` holding the last complete listing while
 the next wait runs. Reading it mid-wait gives you what you last saw
 rather than an empty file.
 
-Only the reviewer wakes a wait. Your replies and edits are not a change
-to it, so you never need to wait twice to get past your own work.
+Only the reviewer wakes a wait: a verdict, a note, or a `:tour ask`.
+Your replies and edits are not a change to it, so you never need to
+wait twice to get past your own work. When it wakes, act on
+**everything** in the listing, `tour_requests` included — a request
+you skip is already recorded as seen, and no later wait will show it
+again.
 
 The state file is where remax keeps a fingerprint of the listing you were
 last shown. Without it a wait measures change from the moment it starts,
@@ -288,6 +299,22 @@ When the human asks you to walk them through a change — present it,
 explain it, "give me a tour" — build one and remax walks them along it.
 This is the one thing you post *before* being asked about a line.
 
+They can also ask from inside remax. A `tour_requests` entry in
+`list --json` (or a `tour requested for …` line in the text listing) is
+that ask, and it wakes a `list --wait` like a flag does:
+
+```json
+{"tour_requests": [
+   {"repo": "/path/to/repo", "view": "feature vs b9045d7",
+    "ref": "feature", "base": "b9045d7", "prompt": "schema changes first",
+    "asked_at": "2026-10-22 03:10:41"}]}
+```
+
+Answer it with the tour below, passing `--ref` and `--base` exactly as
+the request gives them (both `null` means the working tree: pass no
+flags). `prompt` is their brief; follow it. Posting `tour begin` for
+that view clears the request.
+
 ```sh
 remax -C "$REPO" hunks --json
 ```
@@ -352,7 +379,8 @@ tip is the safe fallback.
   run `remax forget` unless the human explicitly asks.
 - Post a tour only when asked for one; `tour begin` discards the
   previous tour for that view.
-- An empty `conversations` list means no outstanding feedback.
+- An empty `conversations` list with an empty `tour_requests` list
+  means no outstanding feedback. A tour request on its own is work.
 - Under `watch`, keep one `list --wait` in flight and start a fresh one
   each time it wakes you. With none running you are only as current as
   the last time you asked. Without `watch`, do not start one at all —

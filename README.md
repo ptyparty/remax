@@ -199,6 +199,7 @@ Normal mode:
 | `Enter` | **accept the selection as reviewed** — a selection is required, so what you accept is always visibly highlighted (`X Enter` for the hunk you're looking at). Completing a hunk jumps to the next pending one; a partial mark steps to the next line |
 | `!` / `?` | flag-to-return-to / question — the selection's lines, or the whole current hunk with none. The note popup opens immediately for the reason (`note-on-flag = 0` in the config turns that off); discarding it (`Ctrl-c`, or `Esc` from its normal mode) cancels the mark as well, since the verdict has not been explained yet — save an empty note to keep the mark without one. The jump to the next hunk waits until the popup closes, and never happens if the mark is cancelled |
 | `]` / `[` | next / previous hunk, crossing file boundaries |
+| mouse wheel | three lines at a time: moves the cursor in the body (so the view follows as it does for `j`/`k`), scrolls the tray over the tray, and steps a picker or popup one row |
 | `/`, `n` / `N` | search the file (literal, helix-shaped: the match becomes the selection); repeat forward / back, wrapping |
 | `Space /` | project-wide search (`git grep` behind the picker; also `:grep TEXT`; in `:ref` and `:commit` mode it searches the reviewed commit rather than the working tree): type, pick a hit, Enter jumps to the file and line with the match selected — and `n`/`N` then walk the **hit list across files** without re-searching (a fresh `/` or `*` returns them to in-file duty). The results box stretches to the pane width so lines keep their context |
 | `:` | the command line — see below |
@@ -335,6 +336,7 @@ note popup keeps its modal keys in either keymap.
 | `:message` | the full message of the commit under review, as `Space c` shows it |
 | `:walk tour` | follow the tour an agent posted for this view (see *A guided tour*); `]`/`[` step through it and the header counts the steps |
 | `:tour` / `:tour N` | get back on the tour: `:tour` returns to the stop you last visited (or the one under the cursor, or the first), `:tour N` jumps to stop N. Either way the walk follows the tour again |
+| `:tour ask [TEXT]` | ask the agent watching this review for a tour of the view you have open, with TEXT as the brief ("schema changes first"). The request shows up in the agent's `remax list`, wakes a `list --wait`, and carries the exact ref flags for the view, so the tour lands where you are looking |
 | `:mode head` / `:mode unstaged` / `:mode untracked` | the classic change sets |
 | `:rebase [REF]` | start a commit-by-commit review pass (below) |
 | `:continue` | fold this stop's edits into the stopped commit and advance — *everything* dirty at the stop counts, including edits made through `$EDITOR` or by an agent, since the stop started clean |
@@ -423,9 +425,10 @@ so agents pick it up.
 ### A guided tour
 
 An agent can present a change rather than wait to be asked about it.
-Ask it in its own terminal — "give me a tour of the commit I have open,
-schema first" — and it builds one out of the change set as your session
-sees it:
+Ask from inside the session with `:tour ask schema changes first`, or
+in the agent's own terminal — "give me a tour of the commit I have
+open" — and it builds one out of the change set as your session sees
+it:
 
 ```sh
 remax -C /path/to/repo hunks --json        # the hunks, one id each

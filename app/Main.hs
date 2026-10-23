@@ -343,6 +343,7 @@ tourBegin args = do
   Monad.forM_ roots $ \root -> do
     mode <- agentMode conn root flags
     Store.clearTour conn (T.pack root) (Git.subjectText mode)
+    Store.clearTourRequest conn (T.pack root) (Git.subjectText mode)
     putStrLn ("tour cleared for " ++ T.unpack (Git.modeLabel mode) ++ (if length roots > 1 then " in " ++ FilePath.takeFileName root else ""))
 
 tourStep :: [String] -> IO ()
@@ -574,7 +575,8 @@ list options = do
   let
     digest = do
       rows <- mapM (Store.punchRows conn . T.pack) roots
-      pure (reviewerDigest (listAwaiting options) (concat rows))
+      asked <- mapM (\r -> fmap (map ((,) r)) (Store.tourRequests conn (T.pack r))) roots
+      pure (Set.union (reviewerDigest (listAwaiting options) (concat rows)) (requestDigest (listAwaiting options) (concat asked)))
     news before now =
       case listAwaiting options of
         Nothing -> now /= before
@@ -649,18 +651,30 @@ list options = do
           pure (repo, map (describe fileLines) shown)
       )
       found
+  asked <- mapM (\r -> fmap (map ((,) r)) (Store.tourRequests conn (T.pack r))) roots
   let
     asJson = fmt == ListJson
     subjects = Punch.commitSubjects (concatMap snd found)
     nonEmpty = filter (not . null . snd) listed
+    requests = filter (requestWanted (listAwaiting options) . snd) (concat asked)
     scope = case roots of
       [only] -> only
       _ -> here
   if asJson
-    then TIO.putStrLn (punchJson (T.pack scope) subjects listed)
-    else
+    then TIO.putStrLn (punchJson (T.pack scope) subjects listed requests)
+    else do
+      Monad.forM_ requests $ \(repo, request) ->
+        TIO.putStrLn
+          ( "tour requested for "
+              <> maybe (Store.requestMode request) Git.modeLabel (Git.modeFromText (Store.requestMode request))
+              <> (if length roots > 1 then " in " <> T.pack (FilePath.takeFileName repo) else "")
+              <> (if T.null (Store.requestPrompt request) then "" else ": " <> Store.requestPrompt request)
+              <> "  ("
+              <> requestFlags request
+              <> ")"
+          )
       if null nonEmpty
-        then putStrLn $
+        then Monad.when (null requests) . putStrLn $
           case listAwaiting options of
             Nothing -> "No flagged or questioned lines recorded for this repository."
             Just party -> "No conversations awaiting " ++ T.unpack (Store.awaitingText party) ++ "."
@@ -670,6 +684,44 @@ list options = do
           Monad.when (length roots > 1) $
             putStrLn ("── " ++ FilePath.takeFileName repo ++ " ──")
           printConversations subjects described
+
+-- A tour request is the reviewer asking the agent for something, so it
+-- is news for an agent and for anyone listing everything.
+requestWanted :: Maybe Store.Awaiting -> Store.TourRequest -> Bool
+requestWanted party _ =
+  case party of
+    Nothing -> True
+    Just Store.AwaitingAgent -> True
+    Just _ -> False
+
+requestDigest :: Maybe Store.Awaiting -> [(FilePath, Store.TourRequest)] -> Set.Set T.Text
+requestDigest party asked =
+  Set.fromList (map (uncurry requestJson) (filter (requestWanted party . snd) asked))
+
+-- The ref flags that reproduce the requested view for hunks and tour.
+requestFlags :: Store.TourRequest -> T.Text
+requestFlags request =
+  case Git.modeFromText (Store.requestMode request) of
+    Just (Git.AtRef rr) -> "--ref " <> Git.rrTip rr <> " --base " <> Git.rrBase rr
+    Just (Git.VsRef ref) -> "--base " <> ref
+    _ -> "working tree"
+
+requestJson :: FilePath -> Store.TourRequest -> T.Text
+requestJson repo request =
+  let
+    (ref, base) = case Git.modeFromText (Store.requestMode request) of
+      Just (Git.AtRef rr) -> (jsonString (Git.rrTip rr), jsonString (Git.rrBase rr))
+      Just (Git.VsRef r) -> ("null", jsonString r)
+      _ -> ("null", "null")
+  in
+    jsonObject
+      [ ("repo", jsonString (T.pack repo))
+      , ("view", jsonString (maybe (Store.requestMode request) Git.modeLabel (Git.modeFromText (Store.requestMode request))))
+      , ("ref", ref)
+      , ("base", base)
+      , ("prompt", jsonString (Store.requestPrompt request))
+      , ("asked_at", jsonString (Store.requestAskedAt request))
+      ]
 
 data Described = Described
   { describedConversation :: Punch.Conversation
@@ -773,8 +825,8 @@ reply target text = do
 -- Conversations have their own repo, because a listing can now span
 -- several: an agent aggregating a story's feedback needs to know which
 -- checkout each conversation lives in before it can act on any of it.
-punchJson :: T.Text -> Map.Map T.Text T.Text -> [(FilePath, [Described])] -> T.Text
-punchJson scope subjects listed =
+punchJson :: T.Text -> Map.Map T.Text T.Text -> [(FilePath, [Described])] -> [(FilePath, Store.TourRequest)] -> T.Text
+punchJson scope subjects listed requests =
   let
     lineJson line =
       jsonObject
@@ -808,6 +860,7 @@ punchJson scope subjects listed =
   in
     jsonObject
       [ ("repo", jsonString scope)
+      , ("tour_requests", jsonArray (map (uncurry requestJson) requests))
       , ("commits", commits)
       ,
         ( "conversations"
