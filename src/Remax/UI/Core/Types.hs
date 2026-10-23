@@ -12,6 +12,7 @@ module Remax.UI.Core.Types
   , NotePopup (..)
   , RepoPlace (..)
   , WalkFilter (..)
+  , TourMark (..)
   , walkCycle
   , walkLabel
   , nextWalkFilter
@@ -152,6 +153,14 @@ data RepoPlace = RepoPlace
   , rpAnchor :: Maybe (FilePath, Int)
   }
 
+data TourMark = TourMark
+  { tmStop :: Int
+  , tmTotal :: Int
+  , tmTitle :: Maybe T.Text
+  , tmNote :: Maybe T.Text
+  }
+  deriving (Eq)
+
 data WalkFilter = WalkAll | WalkPending | WalkUnresolved | WalkTour
   deriving (Eq)
 
@@ -274,7 +283,7 @@ data St = St
   , stThreads :: Map.Map T.Text [Store.Post] -- note conversations by line key, posts in order
   , stTour :: [Store.TourStep]
   , stTourKeys :: Map.Map T.Text Int
-  , stTourNotes :: Map.Map T.Text [Store.Post]
+  , stTourMarks :: Map.Map T.Text TourMark
   , stTourLast :: Maybe (Int, Int)
   , -- which named group each noted key belongs to. Two notes worded the
     -- same are two notes, and only the name says so.

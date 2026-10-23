@@ -23,7 +23,18 @@ import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
 
 loadTourFor :: SQLite.Connection -> FilePath -> Git.ReviewMode -> IO [Store.TourStep]
-loadTourFor conn root mode = Store.loadTour conn (T.pack root) (Git.subjectText mode)
+loadTourFor conn root mode = do
+  known <- Store.tourSubjects conn (T.pack root)
+  spellings <- Git.sameCommitSubjects root mode known
+  firstTour conn (T.pack root) spellings
+
+firstTour :: SQLite.Connection -> T.Text -> [T.Text] -> IO [Store.TourStep]
+firstTour conn repo spellings =
+  case spellings of
+    [] -> pure []
+    (s : rest) -> do
+      steps <- Store.loadTour conn repo s
+      if null steps then firstTour conn repo rest else pure steps
 
 recordView :: SQLite.Connection -> FilePath -> Git.ReviewMode -> IO ()
 recordView conn root mode = Store.recordView conn (T.pack root) (Git.modeToText mode)
@@ -33,14 +44,19 @@ installTour steps st =
   let
     keyed step = map (\k -> (k, Store.tourSeq step)) (Store.tourKeys step)
     placed = st {Types.stTour = steps, Types.stTourKeys = Map.fromList (concatMap keyed steps)}
-    post step = Store.Post {Store.postAuthor = Store.tourAuthor step, Store.postBody = Store.tourNote step}
-    leadKeys step grp =
+    total = length steps
+    mark i step note =
+      Types.TourMark {Types.tmStop = i, Types.tmTotal = total, Types.tmTitle = Store.tourTitle step, Types.tmNote = note}
+    hunkKeys pair = maybe [] DiffModel.runKeys (Verdict.runAt placed pair)
+    marksFor (i, step, grp) =
       case grp of
-        (first : _) | Just r <- Verdict.runAt placed first -> DiffModel.runKeys r
-        _ -> Store.tourKeys step
-    noted = concat (zipWith (\step grp -> map (\k -> (k, [post step])) (leadKeys step grp)) steps (stepGroups placed))
+        [] -> map (\k -> (k, mark i step (Just (Store.tourNote step)))) (Store.tourKeys step)
+        (lead : rest) ->
+          map (\k -> (k, mark i step (Just (Store.tourNote step)))) (hunkKeys lead)
+            ++ map (\k -> (k, mark i step Nothing)) (concatMap hunkKeys rest)
+    marks = concatMap marksFor (zip3 [1 ..] steps (stepGroups placed))
   in
-    placed {Types.stTourNotes = Map.fromListWith (flip (++)) noted}
+    placed {Types.stTourMarks = Map.fromList marks}
 
 stepGroups :: Types.St -> [[(Int, Int)]]
 stepGroups st =

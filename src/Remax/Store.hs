@@ -53,6 +53,7 @@ module Remax.Store
   , clearTour
   , appendTourStep
   , loadTour
+  , tourSubjects
   , TourRequest (..)
   , askTour
   , tourRequests
@@ -202,6 +203,7 @@ openStore = do
     \  author TEXT NOT NULL,\
     \  note TEXT NOT NULL,\
     \  created_at TEXT NOT NULL DEFAULT (datetime('now')),\
+    \  title TEXT,\
     \  PRIMARY KEY (repo, subject, seq))"
   SQLite.execute_
     conn
@@ -246,6 +248,11 @@ migrate conn = do
     SQLite.execute_ conn "ALTER TABLE line_verdict ADD COLUMN reply TEXT"
   Monad.unless ("ref" `elem` names) $
     SQLite.execute_ conn "ALTER TABLE line_verdict ADD COLUMN ref TEXT"
+  stepCols <-
+    SQLite.query_ conn "PRAGMA table_info(tour_step)" ::
+      IO [(Int, T.Text, T.Text, Int, Maybe T.Text, Int)]
+  Monad.unless ("title" `elem` map (\(_, name, _, _, _, _) -> name) stepCols) $
+    SQLite.execute_ conn "ALTER TABLE tour_step ADD COLUMN title TEXT"
   postCols <-
     SQLite.query_ conn "PRAGMA table_info(note_post)" ::
       IO [(Int, T.Text, T.Text, Int, Maybe T.Text, Int)]
@@ -298,10 +305,22 @@ sessionView conn repo = do
 data TourStep = TourStep
   { tourSeq :: Int
   , tourAuthor :: T.Text
+  , tourTitle :: Maybe T.Text
   , tourNote :: T.Text
   , tourKeys :: [T.Text]
   }
   deriving (Eq, Show)
+
+tourSubjects :: SQLite.Connection -> T.Text -> IO [T.Text]
+tourSubjects conn repo = do
+  rows <-
+    SQLite.query
+      conn
+      "SELECT subject FROM tour_step WHERE repo = ?\
+      \ UNION SELECT subject FROM tour_request WHERE repo = ?"
+      (repo, repo) ::
+      IO [SQLite.Only T.Text]
+  pure (map SQLite.fromOnly rows)
 
 clearTour :: SQLite.Connection -> T.Text -> T.Text -> IO ()
 clearTour conn repo subject =
@@ -309,8 +328,8 @@ clearTour conn repo subject =
     SQLite.execute conn "DELETE FROM tour_hunk WHERE repo = ? AND subject = ?" (repo, subject)
     SQLite.execute conn "DELETE FROM tour_step WHERE repo = ? AND subject = ?" (repo, subject)
 
-appendTourStep :: SQLite.Connection -> T.Text -> T.Text -> T.Text -> T.Text -> [T.Text] -> IO Int
-appendTourStep conn repo subject author note keys =
+appendTourStep :: SQLite.Connection -> T.Text -> T.Text -> T.Text -> Maybe T.Text -> T.Text -> [T.Text] -> IO Int
+appendTourStep conn repo subject author title note keys =
   SQLite.withTransaction conn $ do
     rows <-
       SQLite.query
@@ -322,8 +341,8 @@ appendTourStep conn repo subject author note keys =
       seq_ = maybe 1 ((+ 1) . SQLite.fromOnly) (Maybe.listToMaybe rows)
     SQLite.execute
       conn
-      "INSERT INTO tour_step (repo, subject, seq, author, note) VALUES (?, ?, ?, ?, ?)"
-      (repo, subject, seq_, author, note)
+      "INSERT INTO tour_step (repo, subject, seq, author, title, note) VALUES (?, ?, ?, ?, ?, ?)"
+      (repo, subject, seq_, author, title, note)
     SQLite.executeMany
       conn
       "INSERT OR IGNORE INTO tour_hunk (repo, subject, seq, key) VALUES (?, ?, ?, ?)"
@@ -335,9 +354,9 @@ loadTour conn repo subject = do
   steps <-
     SQLite.query
       conn
-      "SELECT seq, author, note FROM tour_step WHERE repo = ? AND subject = ? ORDER BY seq"
+      "SELECT seq, author, title, note FROM tour_step WHERE repo = ? AND subject = ? ORDER BY seq"
       (repo, subject) ::
-      IO [(Int, T.Text, T.Text)]
+      IO [(Int, T.Text, Maybe T.Text, T.Text)]
   keys <-
     SQLite.query
       conn
@@ -346,10 +365,9 @@ loadTour conn repo subject = do
       IO [(Int, T.Text)]
   let
     bySeq = Map.fromListWith (++) (map (\(s, k) -> (s, [k])) keys)
-  pure
-    [ TourStep {tourSeq = s, tourAuthor = a, tourNote = n, tourKeys = Map.findWithDefault [] s bySeq}
-    | (s, a, n) <- steps
-    ]
+    toStep (s, a, t, n) =
+      TourStep {tourSeq = s, tourAuthor = a, tourTitle = t, tourNote = n, tourKeys = Map.findWithDefault [] s bySeq}
+  pure (map toStep steps)
 
 data TourRequest = TourRequest
   { requestSubject :: T.Text

@@ -168,7 +168,7 @@ usage =
   \                                     it, one id per hunk; with no ref flags,\n\
   \                                     whatever the open session is viewing\n\
   \       remax [-C DIR] tour begin [ref flags]\n\
-  \       remax [-C DIR] tour step [ref flags] ID[,ID...] NOTE...\n\
+  \       remax [-C DIR] tour step [ref flags] [--title WORDS] ID[,ID...] NOTE...\n\
   \       remax [-C DIR] tour clear [ref flags]\n\
   \                                     guide the reviewer through the change:\n\
   \                                     begin empties the tour, each step names\n\
@@ -342,19 +342,23 @@ tourBegin args = do
   conn <- Store.openStore
   Monad.forM_ roots $ \root -> do
     mode <- agentMode conn root flags
-    Store.clearTour conn (T.pack root) (Git.subjectText mode)
-    Store.clearTourRequest conn (T.pack root) (Git.subjectText mode)
+    known <- Store.tourSubjects conn (T.pack root)
+    spellings <- Git.sameCommitSubjects root mode known
+    Monad.forM_ spellings $ \subject -> do
+      Store.clearTour conn (T.pack root) subject
+      Store.clearTourRequest conn (T.pack root) subject
     putStrLn ("tour cleared for " ++ T.unpack (Git.modeLabel mode) ++ (if length roots > 1 then " in " ++ FilePath.takeFileName root else ""))
 
 tourStep :: [String] -> IO ()
 tourStep args = do
-  (flags, positional) <- either Exit.die pure (takeFlags refFlags args)
+  (flags, positional) <- either Exit.die pure (takeFlags ("--title" : refFlags) args)
   (idsArg, noteWords) <- case positional of
     (ids : rest@(_ : _)) -> pure (ids, rest)
     _ -> Exit.die "tour step wants ID[,ID...] followed by the note"
   let
     ids = filter (not . T.null) (T.splitOn "," (T.pack idsArg))
     note = T.pack (unwords noteWords)
+    title = fmap T.pack (Map.lookup "--title" flags)
   roots <- targetRepos
   conn <- Store.openStore
   cfg <- Config.loadConfig
@@ -370,7 +374,7 @@ tourStep args = do
       let
         missing = filter (`notElem` map Hunks.hunkId chosen) ids
       Monad.unless (null missing) (Exit.die ("No hunk with id " ++ T.unpack (T.intercalate ", " missing)))
-      seq_ <- Store.appendTourStep conn (T.pack root) (Git.subjectText mode) "tour" note (concatMap Hunks.hunkKeys chosen)
+      seq_ <- Store.appendTourStep conn (T.pack root) (Git.subjectText mode) "tour" title note (concatMap Hunks.hunkKeys chosen)
       putStrLn ("step " ++ show seq_ ++ ": " ++ show (length chosen) ++ " hunk(s)")
 
 -- for a directory that merely holds repositories, which is what a story
