@@ -309,24 +309,27 @@ shownGuideLines :: Int -> Types.St -> [DiffModel.RowR] -> [[Types.NoteLine]]
 shownGuideLines width st rows =
   let
     guideOf r =
-      Maybe.listToMaybe (Maybe.mapMaybe (`Map.lookup` Types.stTourNotes st) (Verdict.rowFeedbackKeys r))
+      Maybe.listToMaybe (Maybe.mapMaybe (`Map.lookup` Types.stTourMarks st) (Verdict.rowFeedbackKeys r))
     guides = map guideOf rows
     prevs = Nothing : guides
-    postLines post =
+    room = max 12 (width - 2)
+    fold ln = case Modal.greedyWrap room (T.words ln) of
+      [] -> [""]
+      wss -> map T.unwords wss
+    markLines mk =
       let
-        room = max 12 (width - 2)
-        fold ln = case Modal.greedyWrap room (T.words ln) of
-          [] -> [""]
-          wss -> map T.unwords wss
+        header =
+          "stop "
+            <> Types.tshow (Types.tmStop mk)
+            <> "/"
+            <> Types.tshow (Types.tmTotal mk)
+            <> maybe "" ("  \183  " <>) (Types.tmTitle mk)
+        body = maybe [] (concatMap fold . T.lines) (Types.tmNote mk)
       in
-        case concatMap fold (T.lines (Store.postBody post)) of
-          [] -> []
-          (first : rest) ->
-            Types.NoteLine (Store.postAuthor post) True first
-              : map (Types.NoteLine (Store.postAuthor post) False) rest
+        Types.NoteLine "tour" True header : map (Types.NoteLine "tour" False) body
     pick (mprev, mg) = case mg of
-      Just posts
-        | mprev /= Just posts -> concatMap postLines posts
+      Just mk
+        | mprev /= Just mk -> markLines mk
       _ -> []
   in
     map pick (zip prevs guides)

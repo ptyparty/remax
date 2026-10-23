@@ -440,11 +440,13 @@ remax -C /path/to/repo tour step ID,ID "The two call sites it changed"
 With no ref flags the commands follow whatever your open session is
 viewing, so a tour of `:ref feature` or `:commit abc123` lands on the
 right hunks without the agent being told; `--ref REF [--base BASE]` and
-`--base REF` name a view outright. The moment the first step lands your
+`--base REF` name a view outright, and any spelling of the same commit
+reaches the same session, a branch name or a sha alike. The moment the first step lands your
 session switches to `:walk tour`: `]`/`[` follow the steps in order,
 the header counts `tour 2/5`, a bar under the header names the stop
-you are on, and each stop's note shows above its hunk on its own
-background. Notes are narration, not feedback: they never count as
+you are on, and every hunk in a stop carries a header above it on its
+own background — `stop 2/5` plus the stop's title when the agent gave
+one — with the stop's note under the header on its first hunk. Notes are narration, not feedback: they never count as
 outstanding and nothing waits on them.
 Space p or `:walk pending` leaves the tour; a file switch, a grep hit
 or Space a can wander off it too. `:tour` brings you back to the last

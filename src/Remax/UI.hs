@@ -182,7 +182,7 @@ initialState startup mode root roots story watchMode dirWatch clip alreadyThere 
     , Types.stThreads = suThreads startup
     , Types.stTour = suTour startup
     , Types.stTourKeys = Map.empty
-    , Types.stTourNotes = Map.empty
+    , Types.stTourMarks = Map.empty
     , Types.stTourLast = Nothing
     , Types.stNoteGroups = suNoteGroups startup
     , Types.stSpace = False

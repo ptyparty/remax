@@ -9,6 +9,7 @@ module Remax.Git
   , writable
   , subjectPlace
   , subjectText
+  , sameCommitSubjects
   , modeLabel
   , modeToText
   , modeFromText
@@ -902,6 +903,36 @@ resolveShort root ref = do
     Process.readProcessWithExitCode
       "git"
       ["-C", root, "rev-parse", "--short=10", "--verify", "--quiet", T.unpack ref ++ "^{commit}"]
+      ""
+  pure $ case (code, T.strip (T.pack out)) of
+    (Exit.ExitSuccess, sha) | not (T.null sha) -> Just sha
+    _ -> Nothing
+
+-- The spellings among the given subjects that name the view's commit:
+-- the exact spelling first, then any other that resolves to the same
+-- commit, so a tour posted for a sha is found by a session on the
+-- branch, and the other way round. A working-tree view only matches
+-- itself.
+sameCommitSubjects :: FilePath -> ReviewMode -> [T.Text] -> IO [T.Text]
+sameCommitSubjects root mode subjects = do
+  let
+    mine = subjectText mode
+    others = filter (/= mine) subjects
+  case subjectOf mode of
+    WorkingTree -> pure [mine]
+    Ref tip -> do
+      target <- resolveFull root tip
+      resolved <- mapM (\s -> fmap ((,) s) (resolveFull root s)) others
+      let
+        same (s, r) = if Maybe.isJust r && r == target then Just s else Nothing
+      pure (mine : Maybe.mapMaybe same resolved)
+
+resolveFull :: FilePath -> T.Text -> IO (Maybe T.Text)
+resolveFull root ref = do
+  (code, out, _) <-
+    Process.readProcessWithExitCode
+      "git"
+      ["-C", root, "rev-parse", "--verify", "--quiet", T.unpack ref ++ "^{commit}"]
       ""
   pure $ case (code, T.strip (T.pack out)) of
     (Exit.ExitSuccess, sha) | not (T.null sha) -> Just sha

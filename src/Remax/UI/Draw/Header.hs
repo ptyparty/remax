@@ -199,10 +199,12 @@ tourBar st =
         text = case Tour.stepPosition st here of
           Just (i, j, size) ->
             let
-              stop = Maybe.fromMaybe "" (fmap stepLead (Types.safeIdx steps i))
+              step = Types.safeIdx steps i
+              title = maybe "" ("  \183  " <>) (step >>= Store.tourTitle)
+              stop = Maybe.fromMaybe "" (fmap stepLead step)
               within = if size > 1 then "  \183  hunk " <> Types.tshow (j + 1) <> "/" <> Types.tshow size <> " of this stop" else ""
             in
-              " \9656 stop " <> Types.tshow (i + 1) <> "/" <> total <> within <> "  \183  " <> stop
+              " \9656 stop " <> Types.tshow (i + 1) <> "/" <> total <> title <> within <> "  \183  " <> stop
           Nothing
             | null (Tour.tourOrder st) ->
                 " \9656 tour of " <> total <> " stops  \183  none of its hunks are in this view any more"

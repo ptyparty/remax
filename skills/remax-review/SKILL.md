@@ -313,7 +313,10 @@ that ask, and it wakes a `list --wait` like a flag does:
 Answer it with the tour below, passing `--ref` and `--base` exactly as
 the request gives them (both `null` means the working tree: pass no
 flags). `prompt` is their brief; follow it. Posting `tour begin` for
-that view clears the request.
+that view clears the request. Spelling the commit differently — the
+branch name where the reviewer has a sha open, or a sha where they have
+the branch — still reaches them, since remax matches tours by the
+commit they resolve to.
 
 ```sh
 remax -C "$REPO" hunks --json
@@ -331,9 +334,15 @@ its call sites).
 
 ```sh
 remax -C "$REPO" tour begin
-remax -C "$REPO" tour step ID "Start with the new table; everything else hangs off it"
-remax -C "$REPO" tour step ID,ID,ID "The three call sites the signature change touched"
+remax -C "$REPO" tour step --title "the new table" ID "Start here; everything else hangs off it"
+remax -C "$REPO" tour step --title "call sites" ID,ID,ID "The three call sites the signature change touched"
 ```
+
+`--title` is a few words naming the stop. Every hunk in the stop gets a
+header reading `stop 3/12 · call sites`, so a reviewer who lands on
+one of its hunks out of order still knows where they are; the note
+itself shows only on the first hunk. Give every stop a title when the
+tour has more than a handful.
 
 `tour begin` empties any earlier tour for that view. Each `tour step`
 appends one stop; the reviewer's session switches to following the
