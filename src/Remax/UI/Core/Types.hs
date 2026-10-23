@@ -13,6 +13,9 @@ module Remax.UI.Core.Types
   , RepoPlace (..)
   , WalkFilter (..)
   , TourMark (..)
+  , Anchor (..)
+  , anchorAt
+  , anchorHunkIn
   , walkCycle
   , walkLabel
   , nextWalkFilter
@@ -150,8 +153,41 @@ data RepoPlace = RepoPlace
   , rpHunk :: Int
   , rpWalk :: WalkFilter
   , rpOpened :: Set.Set FilePath
-  , rpAnchor :: Maybe (FilePath, Int)
+  , rpAnchor :: Maybe Anchor
   }
+
+-- The hunk under review, remembered by content as well as by position:
+-- a refresh can re-split a file and move hunk numbers about, and the
+-- keys are what find the same lines again afterwards.
+data Anchor = Anchor
+  { anPath :: FilePath
+  , anHunk :: Int
+  , anKeys :: [T.Text]
+  }
+
+anchorAt :: FileView -> Int -> Anchor
+anchorAt fv h =
+  let
+    clamped = clampH (fvRuns fv) h
+  in
+    Anchor
+      { anPath = fvPath fv
+      , anHunk = clamped
+      , anKeys = maybe [] DiffModel.runKeys (safeIdx (fvRuns fv) clamped)
+      }
+
+-- Where the anchored hunk sits now: the run sharing the most of its
+-- keys, falling back to the remembered position when none do.
+anchorHunkIn :: Anchor -> FileView -> Int
+anchorHunkIn an fv =
+  let
+    wanted = Set.fromList (anKeys an)
+    overlap r = length (filter (`Set.member` wanted) (DiffModel.runKeys r))
+    scored = zip (map overlap (fvRuns fv)) [0 ..]
+  in
+    case filter ((> 0) . fst) scored of
+      [] -> clampH (fvRuns fv) (anHunk an)
+      hits -> snd (maximum hits)
 
 data TourMark = TourMark
   { tmStop :: Int
@@ -317,7 +353,7 @@ data St = St
   , stSearchDir :: Int -- which way / (or vi's ?) last searched: 1 or -1
   , stDeferAdvance :: Bool -- hold the post-mark jump until the note popup closes
   , stAltFile :: Maybe (FilePath, Int) -- where Space a bounces back to
-  , stAnchor :: Maybe (FilePath, Int) -- the hunk under review; ' returns here
+  , stAnchor :: Maybe Anchor -- the hunk under review; ' returns here
   , stGrepNav :: Maybe (T.Text, [(FilePath, Int)], Int) -- grep hits n/N walk
   , stInfoPopup :: Maybe (T.Text, T.Text) -- read-only text popup: title, body
   , stKill :: T.Text -- session-wide kill/yank slot, shared across files
