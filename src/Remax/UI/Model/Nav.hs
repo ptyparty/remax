@@ -380,8 +380,7 @@ parkAnchor f h = do
   st <- State.get
   case Types.currentFileMay st of
     Just fv ->
-      State.modify $ \s ->
-        s {Types.stAnchor = Just (Types.fvPath fv, Types.clampH (Types.fvRuns fv) (Types.stCurH st))}
+      State.modify $ \s -> s {Types.stAnchor = Just (Types.anchorAt fv (Types.stCurH st))}
     Nothing -> pure ()
 
 -- ': jump back to the hunk under review, wherever the investigation
@@ -391,10 +390,12 @@ jumpToAnchor :: Brick.EventM Types.Name Types.St ()
 jumpToAnchor = do
   st <- State.get
   case Types.stAnchor st of
-    Just (path, h) ->
-      case List.findIndex ((== path) . Types.fvPath) (Types.stFiles st) of
-        Just f -> parkM f h
-        Nothing -> Types.setMsg ("anchored file left the session: " <> T.pack path)
+    Just an ->
+      case List.findIndex ((== Types.anPath an) . Types.fvPath) (Types.stFiles st) of
+        Just f -> do
+          parkM f (maybe 0 (Types.anchorHunkIn an) (Types.safeIdx (Types.stFiles st) f))
+          Types.setMsg "back at the hunk under review"
+        Nothing -> Types.setMsg ("anchored file left the session: " <> T.pack (Types.anPath an))
     Nothing -> parkM (Types.stCurF st) (Types.stCurH st)
 
 -- :N — park the cursor on line N of the current file, 1-based.
@@ -430,7 +431,7 @@ setCurrentHunkHere = do
       State.modify (\s -> s {Types.stCurH = h, Types.stMsg = " "})
       moved <- State.get
       case Types.currentFileMay moved of
-        Just fv -> State.modify (\s -> s {Types.stAnchor = Just (Types.fvPath fv, h)})
+        Just fv -> State.modify (\s -> s {Types.stAnchor = Just (Types.anchorAt fv h)})
         Nothing -> pure ()
 
 selectCurrentHunk :: Brick.EventM Types.Name Types.St ()

@@ -239,7 +239,7 @@ parkAtStart st0 =
       in
         parked
           { Types.stAnchor =
-              fmap (\fv -> (Types.fvPath fv, Types.stCurH parked)) (Types.currentFileMay parked)
+              fmap (\fv -> Types.anchorAt fv (Types.stCurH parked)) (Types.currentFileMay parked)
           }
     Nothing -> st0
 
