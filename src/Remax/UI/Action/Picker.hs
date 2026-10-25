@@ -6,6 +6,7 @@ module Remax.UI.Action.Picker
   , openBufferPicker
   , openBasePicker
   , refreshRangePicker
+  , refreshRangePickerAfter
   , openRepoPicker
   , openBranchPicker
   , openRefPicker
@@ -164,13 +165,14 @@ openRangePicker pr = do
         Right (Right check) -> Types.RangeChecked check
 
 setRangeFacts :: Types.RangeFacts -> Brick.EventM Types.Name Types.St ()
-setRangeFacts facts =
+setRangeFacts facts = do
   State.modify $ \s ->
     case Types.stPicker s of
       Just pk
         | Types.PickRange rp <- Types.pkMode pk ->
             s {Types.stPicker = Just pk {Types.pkMode = Types.PickRange rp {Types.rpFacts = facts}}}
       _ -> s
+  refreshRangePicker
 
 checkRange :: FilePath -> T.Text -> [T.Text] -> IO (Either GitHub.GhFailure Types.RangeCheck)
 checkRange root repo pushed = do
@@ -189,6 +191,20 @@ refreshRangePicker = do
       | Types.PickRange rp <- Types.pkMode pk ->
           State.modify (\s -> s {Types.stPicker = Just (onFirstTarget (replaceRepoRows (rangeRows st rp) pk))})
     _ -> pure ()
+
+refreshRangePickerAfter :: Brick.EventM Types.Name Types.St () -> Brick.EventM Types.Name Types.St ()
+refreshRangePickerAfter action = do
+  before <- State.gets rangeSnapshot
+  action
+  after <- State.gets rangeSnapshot
+  Monad.when (before /= after) refreshRangePicker
+
+rangeSnapshot :: Types.St -> Maybe PullPoll.Snapshot
+rangeSnapshot st =
+  case Types.stPicker st of
+    Just pk
+      | Types.PickRange _ <- Types.pkMode pk -> Types.ppSnapshot (Types.stPullPoll st)
+    _ -> Nothing
 
 data RangeTarget
   = RangeBase
