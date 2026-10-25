@@ -282,7 +282,7 @@ openRefPicker = do
 openPullPicker :: Brick.EventM Types.Name Types.St ()
 openPullPicker = do
   st <- State.get
-  known <- PullAction.cachedRepoName st
+  known <- MonadIO.liftIO (GitHub.cachedRepoName (Types.stConn st) (Types.stRoot st))
   State.modify $ \s ->
     s {Types.stPicker = Just (pullPickerWith ["loading open pull requests from gh\8230"] (Types.Picker Types.PickPull "" [] [] [] 0 Set.empty))}
   Jobs.startJob "listing pull requests" (listOpenPulls (Types.stRoot st) (GitHub.repoCached known)) $ \outcome -> do
@@ -295,7 +295,7 @@ openPullPicker = do
           Right (Right (repo, [])) -> Left ["no open pull requests on " <> repo]
           Right (Right (_, pulls)) -> Right (pullPickerRows latest pulls)
       case outcome of
-        Right (Right (repo, _)) -> PullAction.rememberRepoName known repo
+        Right (Right (repo, _)) -> MonadIO.liftIO (GitHub.rememberRepoName (Types.stConn latest) known repo)
         _ -> pure ()
       case Types.stPicker latest of
         Just pk | Types.PickPull <- Types.pkMode pk ->
