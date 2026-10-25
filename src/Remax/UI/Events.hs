@@ -29,6 +29,7 @@ import Remax.UI.Action.Menus qualified as Menus
 import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Picker qualified as PickerAction
+import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Action.Search qualified as Search
 import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Action.Tree qualified as TreeAction
@@ -202,6 +203,7 @@ handleEvent brickEvent =
     Brick.AppEvent (Types.Attending seen) -> do
       State.modify (\s -> s {Types.stAttending = seen, Types.stThrob = Types.stThrob s + 1})
       Load.pollSubject
+      PullAction.pollPullIfDue
     Brick.AppEvent Types.Tick -> Nav.scrollHunkIntoView
     Brick.AppEvent Types.Pulse -> State.modify (\s -> s {Types.stThrob = Types.stThrob s + 1})
     Brick.AppEvent Types.Settle ->

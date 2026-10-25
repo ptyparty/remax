@@ -5,6 +5,7 @@ module Remax.UI.Core.Jobs
   ( forMaybeBounded
   , forBounded
   , startJob
+  , startQuietJob
   , jobFailed
   , withSlot
   , settleKeys
@@ -97,9 +98,13 @@ startJob label work finish = do
   State.modify (\s -> s {Types.stBusy = Types.stBusy s ++ [label]})
   first <- MonadIO.liftIO (IORef.atomicModifyIORef' jobs (\n -> (n + 1, n == 0)))
   Monad.when first (Monad.void (MonadIO.liftIO (Concurrent.forkIO beat)))
+  startQuietJob label (work `Exception.finally` IORef.atomicModifyIORef' jobs (\n -> (n - 1, ()))) finish
+
+startQuietJob :: T.Text -> IO a -> (Either T.Text a -> Brick.EventM Types.Name Types.St ()) -> Brick.EventM Types.Name Types.St ()
+startQuietJob label work finish = do
+  chan <- State.gets Types.stChan
   Monad.void . MonadIO.liftIO . Concurrent.forkIO $ do
     got <- Exception.try work
-    IORef.atomicModifyIORef' jobs (\n -> (n - 1, ()))
     BChan.writeBChan chan . Types.JobDone label . finish $
       case got of
         Right result -> Right result
