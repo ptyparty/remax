@@ -278,7 +278,6 @@ historyRows rp snap =
   let
     commits = PullPoll.snapshotCommits snap
     total = length commits
-    shas = map PullPoll.pullCommitSha commits
     age = whenText (Types.rpNow rp)
     commitRow i c =
       RangeRow
@@ -296,25 +295,35 @@ historyRows rp snap =
         , rangeWhat = pushedWhat rp fp
         , rangeWhen = age (PullPoll.forcePushAt fp)
         }
+    reviewWhat review = "my last review \183 " <> reviewEvent (PullPoll.reviewSummaryState review)
     reviewRow review =
       let
         sha = PullPoll.reviewSummaryCommit review
         at = PullPoll.reviewSummarySubmittedAt review
       in
         RangeRow
-          { rangeTarget = if sha `elem` shas then RangeCommit sha else RangePushed sha
+          { rangeTarget = RangePushed sha
           , rangeAt = at
           , rangeSha = sha
-          , rangeWhat = "my last review \183 " <> reviewEvent (PullPoll.reviewSummaryState review)
+          , rangeWhat = reviewWhat review
           , rangeWhen = age at
           }
-    reviewRows = case Types.rpFacts rp of
-      Types.RangeChecked check -> map reviewRow (Maybe.maybeToList (lastReviewOf (Types.rcViewer check) snap))
-      _ -> []
+    headRows =
+      zipWith commitRow [1 :: Int ..] commits
+        ++ map pushedRow (PullPoll.snapshotForcePushes snap)
+    reviewed = case Types.rpFacts rp of
+      Types.RangeChecked check -> lastReviewOf (Types.rcViewer check) snap
+      _ -> Nothing
+    reviewedOn review row = rangeSha row == PullPoll.reviewSummaryCommit review
+    markReview review row
+      | reviewedOn review row = row {rangeWhat = rangeWhat row <> " \183 " <> reviewWhat review}
+      | otherwise = row
   in
-    zipWith commitRow [1 :: Int ..] commits
-      ++ map pushedRow (PullPoll.snapshotForcePushes snap)
-      ++ reviewRows
+    case reviewed of
+      Just review
+        | any (reviewedOn review) headRows -> map (markReview review) headRows
+        | otherwise -> headRows ++ [reviewRow review]
+      Nothing -> headRows
 
 pushedWhat :: Types.RangePicker -> PullPoll.ForcePush -> T.Text
 pushedWhat rp fp =
