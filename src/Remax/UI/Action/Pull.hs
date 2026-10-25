@@ -3,8 +3,6 @@
 module Remax.UI.Action.Pull
   ( openPull
   , refreshPullMeta
-  , cachedRepoName
-  , rememberRepoName
   , pollPullIfDue
   , pollPullNow
   , PullFreshness (..)
@@ -30,7 +28,7 @@ import Remax.UI.Model.Load qualified as Load
 openPull :: Int -> Brick.EventM Types.Name Types.St ()
 openPull n = do
   st <- State.get
-  known <- cachedRepoName st
+  known <- MonadIO.liftIO (GitHub.cachedRepoName (Types.stConn st) (Types.stRoot st))
   let
     label = "opening PR #" <> Types.tshow n
   Jobs.startJob label (GitHub.openPull (Types.stRoot st) (GitHub.repoCached known) n) $ \outcome -> do
@@ -40,7 +38,7 @@ openPull n = do
         Left err -> Jobs.jobFailed label err
         Right (Left failure) -> Types.setMsg ("! " <> GitHub.failureText failure)
         Right (Right opened) -> do
-          rememberRepoName known (GitHub.openedRepo opened)
+          MonadIO.liftIO (GitHub.rememberRepoName (Types.stConn latest) known (GitHub.openedRepo opened))
           State.modify (\s -> s {Types.stPullMeta = Just (GitHub.openedMeta opened), Types.stPullPoll = Types.noPullPoll})
           Settings.setMode (GitHub.openedMode opened)
           Types.setMsg ("PR #" <> Types.tshow n <> " \183 " <> GitHub.metaTitle (GitHub.openedMeta opened))
@@ -66,14 +64,6 @@ refreshPullMeta = do
             Right (Left failure) -> Types.setMsg ("! " <> GitHub.failureText failure)
             Right (Right meta) -> State.modify (\s -> s {Types.stPullMeta = Just meta})
     _ -> pure ()
-
-cachedRepoName :: Types.St -> Brick.EventM Types.Name Types.St GitHub.RepoName
-cachedRepoName st = MonadIO.liftIO (GitHub.cachedRepoName (Types.stConn st) (Types.stRoot st))
-
-rememberRepoName :: GitHub.RepoName -> T.Text -> Brick.EventM Types.Name Types.St ()
-rememberRepoName known name = do
-  st <- State.get
-  MonadIO.liftIO (GitHub.rememberRepoName (Types.stConn st) known name)
 
 pullPollSeconds :: Double
 pullPollSeconds = 10
