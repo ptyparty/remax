@@ -32,6 +32,7 @@ import Data.Text qualified as T
 import Graphics.Vty qualified as V
 
 import Remax.Modal qualified as Modal
+import Remax.SoftWrap qualified as SoftWrap
 import Remax.Zipper qualified as Z
 
 -- Operators: everything that waits for a motion or a text object.
@@ -267,10 +268,23 @@ normalKey keys ev ed =
       V.EvKey (V.KChar 'F') [] -> ViPending keys {viWait = WaitFind FindBack}
       V.EvKey (V.KChar 't') [] -> ViPending keys {viWait = WaitFind FindTill}
       V.EvKey (V.KChar 'T') [] -> ViPending keys {viWait = WaitFind FindTillBack}
+      _
+        | SoftWrap.WrappedRows _ <- Modal.edRowLayout ed
+        , Just dir <- rowStep ev ->
+            done (Modal.plainMove (Modal.rowsBy (dir * count) ed) ed)
       _ ->
         case motionFor keys count ev ed of
           Just s -> done (moveOver s ed)
           Nothing -> ViUnhandled
+
+rowStep :: V.Event -> Maybe Int
+rowStep ev =
+  case ev of
+    V.EvKey (V.KChar 'j') [] -> Just 1
+    V.EvKey V.KDown [] -> Just 1
+    V.EvKey (V.KChar 'k') [] -> Just (-1)
+    V.EvKey V.KUp [] -> Just (-1)
+    _ -> Nothing
 
 -- Waiting for an operator's motion ------------------------------------------------
 
