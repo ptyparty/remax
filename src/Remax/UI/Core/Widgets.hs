@@ -70,7 +70,7 @@ cornerFrame title hint body =
       -- one column in from the right, and one row up from the status line
       x = max 0 (BrickTypes.availWidth ctx - V.imageWidth img - 1)
       y = max 0 (BrickTypes.availHeight ctx - V.imageHeight img - 1)
-    BrickTypes.render (Brick.translateBy (Brick.Location (x, y)) (Brick.raw img))
+    BrickTypes.render (Brick.raw (V.translate x y img))
 
 -- A read-only text popup (full commit messages and kin); any key closes.
 infoPopupLayer :: T.Text -> T.Text -> BrickTypes.Widget Types.Name
