@@ -155,10 +155,10 @@ data Cached a = Cached
 data PollCache = PollCache
   { pollCachePull :: Int
   , cacheHead :: Maybe (Cached PullHead)
-  , cacheReviewComments :: Maybe (Cached [ReviewComment])
-  , cacheConversation :: Maybe (Cached [ConversationComment])
-  , cacheReviews :: Maybe (Cached [ReviewSummary])
-  , cacheCommits :: Maybe (Cached [PullCommit])
+  , cacheReviewComments :: Maybe [Cached [ReviewComment]]
+  , cacheConversation :: Maybe [Cached [ConversationComment]]
+  , cacheReviews :: Maybe [Cached [ReviewSummary]]
+  , cacheCommits :: Maybe [Cached [PullCommit]]
   , cacheGraph :: Maybe GraphAnswer
   }
 
@@ -221,11 +221,11 @@ freshSnapshot pr cache = do
       { snapshotPull = Git.prNumber pr
       , snapshotHead = h
       , snapshotChecks = graphChecks graph
-      , snapshotConversation = maybe [] cachedValue (cacheConversation cache)
-      , snapshotReviews = maybe [] cachedValue (cacheReviews cache)
-      , snapshotCommits = maybe [] cachedValue (cacheCommits cache)
+      , snapshotConversation = pagedRows (cacheConversation cache)
+      , snapshotReviews = pagedRows (cacheReviews cache)
+      , snapshotCommits = pagedRows (cacheCommits cache)
       , snapshotForcePushes = graphForcePushes graph
-      , snapshotReviewComments = maybe [] cachedValue (cacheReviewComments cache)
+      , snapshotReviewComments = pagedRows (cacheReviewComments cache)
       , snapshotThreads = graphThreads graph
       }
 
@@ -236,12 +236,11 @@ fetchAll root pr cache = do
     n = T.pack (show (Git.prNumber pr))
     pulls = "repos/" <> repo <> "/pulls/" <> n
     issue = "repos/" <> repo <> "/issues/" <> n
-    page = "?per_page=100"
   awaitHeads <- inBackground (fetchCached root pulls headJq parseHead (cacheHead cache))
-  awaitComments <- inBackground (fetchCached root (pulls <> "/comments" <> page) reviewCommentJq (traverse reviewCommentRow) (cacheReviewComments cache))
-  awaitConversation <- inBackground (fetchCached root (issue <> "/comments" <> page) conversationJq (traverse conversationRow) (cacheConversation cache))
-  awaitReviews <- inBackground (fetchCached root (pulls <> "/reviews" <> page) reviewJq (traverse reviewRow) (cacheReviews cache))
-  awaitCommits <- inBackground (fetchCached root (pulls <> "/commits" <> page) commitJq (traverse commitRow) (cacheCommits cache))
+  awaitComments <- inBackground (fetchPages root (pulls <> "/comments") reviewCommentJq reviewCommentRow (cacheReviewComments cache))
+  awaitConversation <- inBackground (fetchPages root (issue <> "/comments") conversationJq conversationRow (cacheConversation cache))
+  awaitReviews <- inBackground (fetchPages root (pulls <> "/reviews") reviewJq reviewRow (cacheReviews cache))
+  awaitCommits <- inBackground (fetchPages root (pulls <> "/commits") commitJq commitRow (cacheCommits cache))
   graph <- fetchGraph root pr (cacheGraph cache)
   heads <- awaitHeads
   comments <- awaitComments
@@ -274,6 +273,35 @@ inBackground act = do
   pure $ do
     got <- Concurrent.readMVar slot
     either (\e -> Exception.throwIO (e :: Exception.SomeException)) pure got
+
+pagedRows :: Maybe [Cached [a]] -> [a]
+pagedRows = foldMap (concatMap cachedValue)
+
+pageSize :: Int
+pageSize = 100
+
+fetchPages ::
+  FilePath ->
+  T.Text ->
+  T.Text ->
+  ([T.Text] -> Maybe a) ->
+  Maybe [Cached [a]] ->
+  IO (Either GitHub.GhFailure (Freshness, [Cached [a]]))
+fetchPages root path jq row known = do
+  let
+    pagePath k = path <> "?per_page=" <> T.pack (show pageSize) <> "&page=" <> T.pack (show (k :: Int))
+    go k remembered = do
+      got <- fetchCached root (pagePath k) jq (traverse row) (Maybe.listToMaybe remembered)
+      case got of
+        Right (freshness, page)
+          | length (cachedValue page) == pageSize -> fmap (fmap ((freshness, page) :)) (go (k + 1) (drop 1 remembered))
+          | otherwise -> pure (Right [(freshness, page)])
+        Left failure -> pure (Left failure)
+    sameCount pages = if fmap length known == Just (length pages) then Unchanged else Changed
+  fetched <- go 1 (Maybe.fromMaybe [] known)
+  pure $ do
+    pages <- fetched
+    Right (foldr ((<>) . fst) (sameCount pages) pages, map snd pages)
 
 fetchCached ::
   FilePath ->
@@ -398,34 +426,84 @@ commitRow cells =
 readId :: T.Text -> Maybe DataInt.Int64
 readId t = fmap fromIntegral (Git.readCount t)
 
+threadsSelection :: T.Text -> T.Text
+threadsSelection after =
+  "reviewThreads(first: "
+    <> T.pack (show pageSize)
+    <> after
+    <> ") { pageInfo { hasNextPage endCursor }\
+       \ nodes { id isResolved comments(first: 1) { nodes { databaseId } } } }"
+
 graphQuery :: T.Text
 graphQuery =
   "query($owner: String!, $name: String!, $number: Int!) {\
-  \ repository(owner: $owner, name: $name) { pullRequest(number: $number) {\
-  \ reviewThreads(first: 100) { nodes { id isResolved comments(first: 1) { nodes { databaseId } } } }\
-  \ timelineItems(itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT], last: 50) { nodes {\
-  \ ... on HeadRefForcePushedEvent { createdAt beforeCommit { oid } afterCommit { oid } } } }\
-  \ commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } } } } }"
+  \ repository(owner: $owner, name: $name) { pullRequest(number: $number) { "
+    <> threadsSelection ""
+    <> " timelineItems(itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT], last: 50) { nodes {\
+       \ ... on HeadRefForcePushedEvent { createdAt beforeCommit { oid } afterCommit { oid } } } }\
+       \ commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } } } } }"
+
+threadsQuery :: T.Text
+threadsQuery =
+  "query($owner: String!, $name: String!, $number: Int!, $cursor: String!) {\
+  \ repository(owner: $owner, name: $name) { pullRequest(number: $number) { "
+    <> threadsSelection ", after: $cursor"
+    <> " } } }"
+
+threadsJq :: T.Text -> T.Text
+threadsJq threads =
+  "["
+    <> threads
+    <> ".nodes[] | [\"T\", .id, (.isResolved | tostring), ((.comments.nodes[0].databaseId // \"\") | tostring)]]\
+       \ + [[\"P\", ("
+    <> threads
+    <> ".pageInfo.hasNextPage | tostring), ("
+    <> threads
+    <> ".pageInfo.endCursor // \"\")]]"
 
 graphJq :: T.Text
 graphJq =
-  ".data.repository.pullRequest as $p\
-  \ | ([$p.reviewThreads.nodes[] | [\"T\", .id, (.isResolved | tostring), ((.comments.nodes[0].databaseId // \"\") | tostring)]]\
-  \ + [$p.timelineItems.nodes[] | [\"F\", (.createdAt // \"\"), (.beforeCommit.oid // \"\"), (.afterCommit.oid // \"\")]]\
-  \ + [$p.commits.nodes[] | [\"C\", .commit.oid, (.commit.statusCheckRollup.state // \"\")]])\
-  \ | .[] | @tsv"
+  ".data.repository.pullRequest as $p | ("
+    <> threadsJq "$p.reviewThreads"
+    <> " + [$p.timelineItems.nodes[] | [\"F\", (.createdAt // \"\"), (.beforeCommit.oid // \"\"), (.afterCommit.oid // \"\")]]\
+       \ + [$p.commits.nodes[] | [\"C\", .commit.oid, (.commit.statusCheckRollup.state // \"\")]])\
+       \ | .[] | @tsv"
+
+threadsPageJq :: T.Text
+threadsPageJq = "(" <> threadsJq ".data.repository.pullRequest.reviewThreads" <> ") | .[] | @tsv"
+
+nextThreadCursor :: T.Text -> Maybe T.Text
+nextThreadCursor raw =
+  let
+    cursor cells = case cells of
+      ["P", "true", c] | not (T.null c) -> Just c
+      _ -> Nothing
+  in
+    Maybe.listToMaybe (Maybe.mapMaybe cursor (GitHub.tsvRows raw))
 
 fetchGraph :: FilePath -> Git.PullRequest -> Maybe GraphAnswer -> IO (Either GitHub.GhFailure (Freshness, GraphAnswer))
 fetchGraph root pr known = do
   let
     (owner, rest) = T.breakOn "/" (Git.prRepo pr)
     fields = [("owner", owner), ("name", T.drop 1 rest), ("number", T.pack (show (Git.prNumber pr)))]
-  got <- GitHub.graphql root graphQuery fields (Just graphJq)
-  pure $ case got of
+  got <- graphPages root fields Nothing
+  pure $ case fmap (T.intercalate "\n") got of
     Left failure -> Left failure
     Right raw
       | fmap graphRaw known == Just raw -> Right (Unchanged, Maybe.fromMaybe (graphAnswer raw) known)
       | otherwise -> Right (Changed, graphAnswer raw)
+
+graphPages :: FilePath -> [(T.Text, T.Text)] -> Maybe T.Text -> IO (Either GitHub.GhFailure [T.Text])
+graphPages root fields after = do
+  got <- case after of
+    Nothing -> GitHub.graphql root graphQuery fields (Just graphJq)
+    Just cursor -> GitHub.graphql root threadsQuery (fields ++ [("cursor", cursor)]) (Just threadsPageJq)
+  case got of
+    Left failure -> pure (Left failure)
+    Right raw ->
+      case nextThreadCursor raw of
+        Nothing -> pure (Right [raw])
+        Just cursor -> fmap (fmap (raw :)) (graphPages root fields (Just cursor))
 
 graphAnswer :: T.Text -> GraphAnswer
 graphAnswer raw =
