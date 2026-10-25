@@ -346,7 +346,7 @@ pullPickerRows st pulls =
       [ Types.tshow (GitHub.rowNumber p)
       , GitHub.rowAuthor p
       , (if GitHub.rowDraft p then "draft " else "") <> GitHub.rowTitle p
-      , ageText (GitHub.rowAgeSeconds p)
+      , PullAction.shortAge (GitHub.rowAgeSeconds p)
       , checksGlyph (GitHub.rowChecks p)
       , reviewWord (GitHub.rowReview p) <> (if openNumber == Just (GitHub.rowNumber p) then "  \8592 open" else "")
       ]
@@ -356,14 +356,6 @@ pullPickerRows st pulls =
     row p cs = pickerRow (Types.tshow (GitHub.rowNumber p)) (Widgets.columnRow widths cs) (T.unwords cs)
   in
     pickerRow "" (Widgets.columnRow widths header) "" : zipWith row pulls cells
-
-ageText :: Int -> T.Text
-ageText secs
-  | secs < 60 = Types.tshow secs <> "s"
-  | secs < 3600 = Types.tshow (secs `div` 60) <> "m"
-  | secs < 86400 = Types.tshow (secs `div` 3600) <> "h"
-  | secs < 86400 * 60 = Types.tshow (secs `div` 86400) <> "d"
-  | otherwise = Types.tshow (secs `div` (86400 * 30)) <> "mo"
 
 checksGlyph :: GitHub.Checks -> T.Text
 checksGlyph checks =

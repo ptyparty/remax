@@ -126,6 +126,7 @@ executable remax
       Remax.Hunks
       Remax.Key
       Remax.Modal
+      Remax.PullPoll
       Remax.Punch
       Remax.Store
       Remax.Theme

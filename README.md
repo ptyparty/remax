@@ -413,6 +413,15 @@ and the git bar becomes `#N branch→base · head…base · review · checks`.
 as anywhere else. Bare `:pr` while a pull request is open names `:pr
 list`, the way to pick another. `:mode tree` returns to the working tree.
 
+While a pull request is open the session polls GitHub about every ten
+seconds. It asks for the pull request, its review comments, conversation,
+reviews and commits with the ETag of the previous answer, so an unchanged
+answer costs no rate limit, and asks GraphQL for the review threads,
+force-pushes and checks. When the head moves, the session fetches it again
+and re-lists the files. The header shows `↻ 4s` and the status line
+`↻ synced 4s`, the age of the last successful poll. A failing poll turns both to `⚠ stale 2m`, and
+the status line names the reason. Each list reads its first 100 entries.
+
 ## Working with agents
 
 The review loop closes with coding agents. An agent's edits stream into

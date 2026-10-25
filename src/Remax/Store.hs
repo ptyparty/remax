@@ -47,6 +47,11 @@ module Remax.Store
   , punchRows
   , repoRows
   , deleteFiles
+  , PullNumber (..)
+  , RemoteThreadId (..)
+  , CommentId (..)
+  , ReviewId (..)
+  , Resolution (..)
   , recordView
   , sessionView
   , cachedRepoName
@@ -1055,6 +1060,21 @@ deleteFiles conn repo files =
   in
     SQLite.withTransaction conn $
       mapM_ batch (chunks 400 files)
+
+newtype PullNumber = PullNumber {pullNumberToInt :: Int}
+  deriving (Eq, Ord, Show)
+
+newtype RemoteThreadId = RemoteThreadId {remoteThreadIdToText :: T.Text}
+  deriving (Eq, Ord, Show)
+
+newtype CommentId = CommentId {commentIdToInt64 :: DataInt.Int64}
+  deriving (Eq, Ord, Show)
+
+newtype ReviewId = ReviewId {reviewIdToInt64 :: DataInt.Int64}
+  deriving (Eq, Ord, Show)
+
+data Resolution = Unresolved | Resolved
+  deriving (Eq, Show)
 
 chunks :: Int -> [a] -> [[a]]
 chunks _ [] = []

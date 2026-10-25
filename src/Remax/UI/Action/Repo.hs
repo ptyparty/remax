@@ -157,6 +157,7 @@ arriveAt target remembered saved mode passId loaded = do
         , Types.stCmdDirs = []
         , Types.stCmdRefs = []
         , Types.stPullMeta = Nothing
+        , Types.stPullPoll = Types.noPullPoll
         , Types.stBaseAt = Nothing
         }
   case remembered of

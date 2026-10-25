@@ -12,6 +12,7 @@ import Data.Text qualified as T
 import Remax.Config qualified as Config
 import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
+import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Ink qualified as Ink
 import Remax.UI.Core.Types qualified as Types
@@ -31,6 +32,7 @@ statusBar st =
     Brick.withDefAttr Attrs.statusAttr $
       modeChip st
         <+> pollChip st
+        <+> pullChip st
         <+> declSeg st
         <+> meterSeg st
         <+> Brick.txt "  "
@@ -88,6 +90,15 @@ pollChip st =
   if Types.stWatchMode st == Types.PollingWatch
     then Brick.withAttr Attrs.watchPollAttr (Brick.txt " \9888 poll ")
     else Brick.txt ""
+
+pullChip :: Types.St -> Brick.Widget Types.Name
+pullChip st =
+  case PullAction.pullFreshness st of
+    Nothing -> Brick.txt ""
+    Just PullAction.AwaitingFirstPoll -> Brick.withAttr Attrs.hintAttr (Brick.txt " \8635 syncing ")
+    Just (PullAction.SyncedAgo secs) -> Brick.withAttr Attrs.hintAttr (Brick.txt (" \8635 synced " <> PullAction.shortAge secs <> " "))
+    Just (PullAction.StaleSince age reason) ->
+      Brick.withAttr Attrs.watchPollAttr (Brick.txt (" " <> PullAction.staleText age <> " \183 " <> reason <> " "))
 
 declSeg :: Types.St -> Brick.Widget Types.Name
 declSeg st =

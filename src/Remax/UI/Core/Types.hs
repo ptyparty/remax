@@ -51,6 +51,9 @@ module Remax.UI.Core.Types
   , TreeView (..)
   , TreeOp (..)
   , FileAction (..)
+  , PollFlight (..)
+  , PullPoll (..)
+  , noPullPoll
   ) where
 
 import Brick qualified as Brick
@@ -72,6 +75,7 @@ import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.Highlight qualified as Highlight
 import Remax.Modal qualified as Modal
+import Remax.PullPoll qualified as PullPoll
 import Remax.Store qualified as Store
 import Remax.Tree qualified as Tree
 import Remax.TreeSitter qualified as TS
@@ -369,8 +373,34 @@ data St = St
   , stStory :: Maybe FilePath -- the folder they sit in, when this is a story
   , stPlaces :: Map.Map FilePath RepoPlace -- where you were in each
   , stPullMeta :: Maybe GitHub.PullMeta
+  , stPullPoll :: PullPoll
   , stBaseAt :: Maybe T.Text -- short sha of a pull request's diff base
   }
+
+data PollFlight = PollIdle | PollRunning
+  deriving (Eq, Show)
+
+data PullPoll = PullPoll
+  { ppCache :: Maybe PullPoll.PollCache
+  , ppSnapshot :: Maybe PullPoll.Snapshot
+  , ppFlight :: PollFlight
+  , ppStarted :: Double
+  , ppLastOk :: Maybe Double
+  , ppFailure :: Maybe T.Text
+  , ppNow :: Double
+  }
+
+noPullPoll :: PullPoll
+noPullPoll =
+  PullPoll
+    { ppCache = Nothing
+    , ppSnapshot = Nothing
+    , ppFlight = PollIdle
+    , ppStarted = 0
+    , ppLastOk = Nothing
+    , ppFailure = Nothing
+    , ppNow = 0
+    }
 
 repoText :: St -> T.Text
 repoText = T.pack . stRoot

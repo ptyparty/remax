@@ -218,6 +218,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stSearchDir = 1
     , Types.stDeferAdvance = False
     , Types.stPullMeta = pullMeta
+    , Types.stPullPoll = Types.noPullPoll
     , Types.stBaseAt = Nothing
     , Types.stAltFile = Nothing
     , Types.stAnchor = Nothing
@@ -359,6 +360,7 @@ app theme =
           MonadIO.liftIO (V.setMode out V.Mouse True)
         seeded <- State.gets Types.stPullMeta
         Monad.when (Maybe.isNothing seeded) PullAction.refreshPullMeta
+        PullAction.pollPullNow
     , Brick.appAttrMap = const (Attrs.mkAttrMap theme)
     }
 

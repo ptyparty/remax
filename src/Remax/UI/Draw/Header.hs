@@ -16,6 +16,7 @@ import Data.Text qualified as T
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.Store qualified as Store
+import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
@@ -129,7 +130,7 @@ headerBar :: Types.St -> Brick.Widget Types.Name
 headerBar st =
   let
     lead = " remax · " <> Git.modeLabel (Types.stMode st) <> " · "
-    trailing = [rebaseSeg st, watchSeg st, busySeg st]
+    trailing = [rebaseSeg st, pullSeg st, watchSeg st, busySeg st]
   in
     Brick.withDefAttr Attrs.headerAttr . Brick.padRight Brick.Max $
       case Types.currentFileMay st of
@@ -161,6 +162,15 @@ watchSeg st =
     case mine of
       Nothing -> Brick.txt ""
       Just (glyph, label) -> glyphSeg glyph label
+
+pullSeg :: Types.St -> Brick.Widget Types.Name
+pullSeg st =
+  case PullAction.pullFreshness st of
+    Nothing -> Brick.txt ""
+    Just PullAction.AwaitingFirstPoll -> Brick.txt "  \183  \8635 \8230"
+    Just (PullAction.SyncedAgo secs) -> Brick.txt ("  \183  \8635 " <> PullAction.shortAge secs)
+    Just (PullAction.StaleSince age _) ->
+      Brick.txt "  \183  " <+> Brick.withAttr Attrs.conflictAttr (Brick.txt (PullAction.staleText age))
 
 busySeg :: Types.St -> Brick.Widget Types.Name
 busySeg st =

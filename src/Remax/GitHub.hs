@@ -24,6 +24,10 @@ module Remax.GitHub
   , openedMode
   , openPull
   , checkoutPull
+  , checksFromRollup
+  , tsvRows
+  , RefsMove (..)
+  , refreshPullRefs
   ) where
 
 import Control.Exception qualified as Exception
@@ -56,6 +60,14 @@ failureText failure =
 
 runGh :: FilePath -> [T.Text] -> IO (Either GhFailure T.Text)
 runGh root args = do
+  got <- runGhOutput root args
+  pure $ case got of
+    Left failure -> Left failure
+    Right (Exit.ExitSuccess, out, _) -> Right out
+    Right (Exit.ExitFailure _, _, err) -> Left (classify (T.strip err))
+
+runGhOutput :: FilePath -> [T.Text] -> IO (Either GhFailure (Exit.ExitCode, T.Text, T.Text))
+runGhOutput root args = do
   environment <- Env.getEnvironment
   let
     quiet = [("GH_PROMPT_DISABLED", "1"), ("GH_NO_UPDATE_NOTIFIER", "1")]
@@ -67,8 +79,7 @@ runGh root args = do
   got <- Exception.try (Process.readCreateProcessWithExitCode p "")
   pure $ case got of
     Left e -> let _ = (e :: Exception.IOException) in Left GhMissing
-    Right (Exit.ExitSuccess, out, _) -> Right (T.pack out)
-    Right (Exit.ExitFailure _, _, err) -> Left (classify (T.strip (T.pack err)))
+    Right (code, out, err) -> Right (code, T.pack out, T.pack err)
 
 classify :: T.Text -> GhFailure
 classify err =
@@ -102,8 +113,14 @@ conditionalGet root path etag jq = do
   let
     etagArgs = maybe [] (\e -> ["-H", "If-None-Match: " <> e]) etag
     jqArgs = maybe [] (\q -> ["--jq", q]) jq
-  got <- runGh root (["api", "-i"] ++ etagArgs ++ jqArgs ++ [path])
-  pure (fmap readConditional got)
+  got <- runGhOutput root (["api", "-i"] ++ etagArgs ++ jqArgs ++ [path])
+  pure $ case got of
+    Left failure -> Left failure
+    Right (Exit.ExitSuccess, out, _) -> Right (readConditional out)
+    Right (Exit.ExitFailure _, out, err) ->
+      case readConditional out of
+        NotModified -> Right NotModified
+        Modified _ -> Left (classify (T.strip err))
 
 readConditional :: T.Text -> Conditional
 readConditional out =
@@ -199,6 +216,16 @@ checksJq =
   \ elif any($c[]; ((.status // \"COMPLETED\") != \"COMPLETED\") or ((.state // \"\") == \"PENDING\") or ((.state // \"\") == \"EXPECTED\")) then \"running\"\
   \ else \"pass\" end)"
 
+checksFromRollup :: T.Text -> Checks
+checksFromRollup state =
+  case state of
+    "SUCCESS" -> ChecksPass
+    "FAILURE" -> ChecksFail
+    "ERROR" -> ChecksFail
+    "PENDING" -> ChecksRunning
+    "EXPECTED" -> ChecksRunning
+    _ -> ChecksNone
+
 data ReviewState
   = NotReviewed
   | Commented
@@ -282,7 +309,24 @@ pullRow viewer cells =
     _ -> Nothing
 
 unescapeTsv :: T.Text -> T.Text
-unescapeTsv = T.replace "\\t" " " . T.replace "\\n" " " . T.replace "\\r" "" . T.replace "\\\\" "\\"
+unescapeTsv = T.replace "\t" " " . T.replace "\n" " " . T.replace "\r" "" . tsvField
+
+tsvRows :: T.Text -> [[T.Text]]
+tsvRows = map (map tsvField . T.splitOn "\t") . filter (not . T.null) . T.lines
+
+tsvField :: T.Text -> T.Text
+tsvField =
+  let
+    go cs =
+      case cs of
+        '\\' : 'n' : rest -> '\n' : go rest
+        '\\' : 't' : rest -> '\t' : go rest
+        '\\' : 'r' : rest -> '\r' : go rest
+        '\\' : '\\' : rest -> '\\' : go rest
+        c : rest -> c : go rest
+        [] -> []
+  in
+    T.pack . go . T.unpack
 
 data PullMeta = PullMeta
   { metaNumber :: Int
@@ -422,3 +466,17 @@ fetchPull root remote n baseBranch = do
 
 checkoutPull :: FilePath -> T.Text -> Int -> IO (Either GhFailure ())
 checkoutPull root repo n = fmap (fmap (const ())) (runGh root ["pr", "checkout", T.pack (show n), "-R", repo])
+
+data RefsMove = RefsInPlace | RefsFetched
+
+refreshPullRefs :: FilePath -> T.Text -> Int -> T.Text -> T.Text -> IO (Either GhFailure RefsMove)
+refreshPullRefs root repo n baseBranch headSha = do
+  (code, out, _) <- Process.readProcessWithExitCode "git" ["-C", root, "rev-parse", "--verify", "--quiet", T.unpack (Git.pullHeadRef n)] ""
+  case (code, T.strip (T.pack out)) of
+    (Exit.ExitSuccess, sha) | sha == headSha -> pure (Right RefsInPlace)
+    _ -> do
+      remote <- remoteFor root repo
+      fetched <- fetchPull root remote n baseBranch
+      pure $ case fetched of
+        Left e -> Left (classify e)
+        Right () -> Right RefsFetched
