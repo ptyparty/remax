@@ -32,6 +32,7 @@ module Remax.Modal
   , nextPos
   , prevPos
   , plainMove
+  , rowsBy
   , greedyWrap
   , selectionRows
   , charSelection
@@ -66,6 +67,7 @@ import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Graphics.Vty qualified as V
+import Remax.SoftWrap qualified as SoftWrap
 import Remax.Zipper qualified as Z
 
 data Mode = Normal | Insert
@@ -127,6 +129,7 @@ data EdState = EdState
   , edInsertEntry :: Maybe InsertEntry -- how the open insert session began
   , edRecording :: [V.Event] -- keys of the open insert session, reversed
   , edLastInsert :: Maybe (InsertEntry, [V.Event]) -- what '.' replays
+  , edRowLayout :: SoftWrap.RowLayout
   }
 
 hasPending :: EdState -> Bool
@@ -168,6 +171,7 @@ newEdState row ls =
     , edInsertEntry = Nothing
     , edRecording = []
     , edLastInsert = Nothing
+    , edRowLayout = SoftWrap.LineRows
     }
 
 bufferLines :: EdState -> [T.Text]
@@ -259,10 +263,10 @@ handlePlain ev st =
       V.EvKey V.KLeft [] -> move Z.moveLeft
       V.EvKey (V.KChar 'l') [] -> move Z.moveRight
       V.EvKey V.KRight [] -> move Z.moveRight
-      V.EvKey (V.KChar 'j') [] -> move Z.moveDown
-      V.EvKey V.KDown [] -> move Z.moveDown
-      V.EvKey (V.KChar 'k') [] -> move Z.moveUp
-      V.EvKey V.KUp [] -> move Z.moveUp
+      V.EvKey (V.KChar 'j') [] -> move (rowsBy 1 st)
+      V.EvKey V.KDown [] -> move (rowsBy 1 st)
+      V.EvKey (V.KChar 'k') [] -> move (rowsBy (-1) st)
+      V.EvKey V.KUp [] -> move (rowsBy (-1) st)
       V.EvKey (V.KChar 'w') [] -> Just (selectMove wordForwardSel st)
       V.EvKey (V.KChar 'e') [] -> Just (selectMove wordEndSel st)
       V.EvKey (V.KChar 'b') [] -> Just (selectMove wordBackSel st)
@@ -668,6 +672,14 @@ plainMove :: (Z.TextZipper T.Text -> Z.TextZipper T.Text) -> EdState -> EdState
 plainMove f st
   | edExtend st = st {edZipper = f (edZipper st)}
   | otherwise = (collapse st) {edZipper = f (edZipper st)}
+
+rowsBy :: Int -> EdState -> Z.TextZipper T.Text -> Z.TextZipper T.Text
+rowsBy n st z =
+  case edRowLayout st of
+    SoftWrap.LineRows ->
+      foldr ($) z (replicate (abs n) (if n < 0 then Z.moveUp else Z.moveDown))
+    SoftWrap.WrappedRows width ->
+      Z.moveCursor (SoftWrap.rowsFrom width n (Z.getText z) (Z.cursorPosition z)) z
 
 -- Word motions: the traversed span becomes the selection (anchor at the
 -- old cursor), matching helix's selection-first model.
@@ -1118,8 +1130,8 @@ handleInsert ev st =
       V.EvKey V.KDel [] -> edit Z.deleteChar
       V.EvKey V.KLeft [] -> edit Z.moveLeft
       V.EvKey V.KRight [] -> edit Z.moveRight
-      V.EvKey V.KUp [] -> edit Z.moveUp
-      V.EvKey V.KDown [] -> edit Z.moveDown
+      V.EvKey V.KUp [] -> edit (rowsBy (-1) st)
+      V.EvKey V.KDown [] -> edit (rowsBy 1 st)
       V.EvPaste bytes -> edit (Z.insertMany (TE.decodeUtf8Lenient bytes))
       _ -> InsertUnhandled
 

@@ -8,11 +8,11 @@ module Remax.UI.Draw.Notes
 import Brick ((<+>))
 import Brick qualified as Brick
 import Brick.Types qualified as BrickTypes
-import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Remax.Modal qualified as Modal
+import Remax.SoftWrap qualified as SoftWrap
 import Remax.Store qualified as Store
 import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Rebase qualified as Rebase
@@ -32,12 +32,12 @@ notePopupLayer st np =
     BrickTypes.Widget BrickTypes.Greedy BrickTypes.Greedy $ do
       ctx <- BrickTypes.getContext
       let
-        boxWidth = min 90 (max 50 (BrickTypes.availWidth ctx - 20))
+        boxWidth = NoteAction.popupBoxWidth (BrickTypes.availWidth ctx)
         bodyRows = max 6 (BrickTypes.availHeight ctx - 14)
         -- the editor keeps its room first; the transcript takes what is
         -- left, and gives up its oldest posts to fit rather than
         -- squeezing the box you are typing in
-        rows = softRows (max 1 (boxWidth - 1)) (Modal.bufferLines ed)
+        rows = SoftWrap.softRows (NoteAction.popupRowWidth boxWidth) (Modal.bufferLines ed)
         editorRows = max 3 (min 10 (length rows + 1))
         budget = bodyRows - editorRows - length targetRows - 1
         transcript = transcriptRows (boxWidth - 2) budget (NoteAction.transcriptPosts thread)
@@ -137,63 +137,27 @@ amendHeadRows st folding
 
 -- selections paint here the same way they do in the main buffer:
 -- whole rows for x, column spans for v
-noteBodyWidget :: Modal.EdState -> [SoftRow] -> BrickTypes.Widget Types.Name
+noteBodyWidget :: Modal.EdState -> [SoftWrap.SoftRow] -> BrickTypes.Widget Types.Name
 noteBodyWidget ed rows =
   BrickTypes.Widget BrickTypes.Greedy BrickTypes.Greedy $ do
     ctx <- BrickTypes.getContext
     let
       (cr, cc) = Modal.cursorRC ed
-      (cursorIx, cursorRow) = cursorSoftRow cr cc rows
+      (cursorIx, cursorRow) = SoftWrap.cursorSoftRow cr cc rows
       height = max 1 (BrickTypes.availHeight ctx)
       top = max 0 (cursorIx - height + 1)
-      cursorAt = Brick.Location (cc - srStart cursorRow, cursorIx - top)
+      cursorAt = Brick.Location (cc - SoftWrap.srStart cursorRow, cursorIx - top)
     BrickTypes.render $
       Brick.showCursor Types.TheCursor cursorAt $
         Brick.vBox (map (paintSoftRow ed) (take height (drop top rows)))
 
-data RowEnd = LineContinues | LineEnds
-
-data SoftRow = SoftRow
-  { srLine :: Int
-  , srStart :: Int
-  , srText :: T.Text
-  , srEnd :: RowEnd
-  }
-
-softRows :: Int -> [T.Text] -> [SoftRow]
-softRows width ls = concat (zipWith (lineSoftRows width) [0 ..] ls)
-
-lineSoftRows :: Int -> Int -> T.Text -> [SoftRow]
-lineSoftRows width i =
-  let
-    go start t
-      | T.compareLength t width /= GT = [SoftRow i start t LineEnds]
-      | otherwise =
-          let
-            cut = case T.findIndex (== ' ') (T.reverse (T.take (width + 1) t)) of
-              Just fromEnd | fromEnd < width -> width + 1 - fromEnd
-              _ -> width
-            (row, rest) = T.splitAt cut t
-          in
-            SoftRow i start row LineContinues : go (start + cut) rest
-  in
-    go 0
-
-cursorSoftRow :: Int -> Int -> [SoftRow] -> (Int, SoftRow)
-cursorSoftRow cr cc rows =
-  let
-    pick found (ix, r) =
-      if srLine r == cr && srStart r <= cc then (ix, r) else found
-  in
-    List.foldl' pick (0, SoftRow cr 0 T.empty LineEnds) (zip [0 ..] (takeWhile (\r -> srLine r <= cr) rows))
-
-paintSoftRow :: Modal.EdState -> SoftRow -> BrickTypes.Widget Types.Name
+paintSoftRow :: Modal.EdState -> SoftWrap.SoftRow -> BrickTypes.Widget Types.Name
 paintSoftRow ed row =
   let
-    text = srText row
+    text = SoftWrap.srText row
     plain = Brick.txt (Widgets.padT text)
     inLineSel = case Modal.selectionRows ed of
-      Just (a, b) -> srLine row >= a && srLine row <= b
+      Just (a, b) -> SoftWrap.srLine row >= a && SoftWrap.srLine row <= b
       Nothing -> False
   in
     if inLineSel
@@ -202,16 +166,16 @@ paintSoftRow ed row =
         Nothing -> plain
         Just (start, mEnd) -> selectedLine text start mEnd
 
-spanFor :: Maybe ((Int, Int), (Int, Int)) -> SoftRow -> Maybe (Int, Maybe Int)
+spanFor :: Maybe ((Int, Int), (Int, Int)) -> SoftWrap.SoftRow -> Maybe (Int, Maybe Int)
 spanFor charSel row = do
   ((lr, lc), (hr, hc)) <- charSel
   let
-    i = srLine row
-    start = if i == lr then lc - srStart row else 0
-    end = if i == hr then Just (hc - srStart row) else Nothing
-    pastRow = case srEnd row of
-      LineContinues -> start >= T.length (srText row)
-      LineEnds -> False
+    i = SoftWrap.srLine row
+    start = if i == lr then lc - SoftWrap.srStart row else 0
+    end = if i == hr then Just (hc - SoftWrap.srStart row) else Nothing
+    pastRow = case SoftWrap.srEnd row of
+      SoftWrap.LineContinues -> start >= T.length (SoftWrap.srText row)
+      SoftWrap.LineEnds -> False
   if i < lr || i > hr || pastRow || maybe False (< 0) end
     then Nothing
     else Just (max 0 start, end)

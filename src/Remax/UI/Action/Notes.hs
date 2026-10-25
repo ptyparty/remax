@@ -7,6 +7,8 @@ module Remax.UI.Action.Notes
   , unnoteCmd
   , openNotePopup
   , handleNotePopupKey
+  , popupBoxWidth
+  , popupRowWidth
   , NoteAct (..)
   , noteAct
   , transcriptPosts
@@ -25,6 +27,7 @@ import Graphics.Vty qualified as V
 import Remax.Config qualified as Config
 import Remax.DiffModel qualified as DiffModel
 import Remax.Modal qualified as Modal
+import Remax.SoftWrap qualified as SoftWrap
 import Remax.Store qualified as Store
 import Remax.UI.Action.Conversation qualified as Conversation
 import Remax.UI.Action.Rebase qualified as Rebase
@@ -243,8 +246,14 @@ setNotePopupEd ed = do
 handleNotePopupKey :: V.Event -> Types.NotePopup -> Brick.EventM Types.Name Types.St ()
 handleNotePopupKey ev np0 = do
   st0 <- State.get
+  columns <- View.terminalColumns
   let
-    np = np0 {Types.npEd = (Types.npEd np0) {Modal.edKill = Types.stKill st0}}
+    layout = SoftWrap.WrappedRows (popupRowWidth (popupBoxWidth columns))
+    np =
+      np0
+        { Types.npEd =
+            (Types.npEd np0) {Modal.edKill = Types.stKill st0, Modal.edRowLayout = layout}
+        }
   case ev of
     -- discard works from either popup mode; nobody should need to leave
     -- insert just to bail out
@@ -263,6 +272,12 @@ handleNotePopupKey ev np0 = do
           , Vi.viBusy (Types.stVi st0) ->
               notePopupVi st0 np ev
         Modal.Normal -> notePopupNormalKey st0 np ev
+
+popupBoxWidth :: Int -> Int
+popupBoxWidth columns = min 90 (max 50 (columns - 20))
+
+popupRowWidth :: Int -> Int
+popupRowWidth boxWidth = max 1 (boxWidth - 1)
 
 notePopupNormalKey :: Types.St -> Types.NotePopup -> V.Event -> Brick.EventM Types.Name Types.St ()
 notePopupNormalKey st np ev =

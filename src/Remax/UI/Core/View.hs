@@ -11,6 +11,7 @@ module Remax.UI.Core.View
   , declName
   , windowRowsFor
   , terminalRows
+  , terminalColumns
   , windowSpanFor
   , bodyWindow
   , gutterWidth
@@ -189,6 +190,12 @@ terminalRows = do
   vty <- Brick.getVtyHandle
   (_, rows) <- MonadIO.liftIO (V.displayBounds (V.outputIface vty))
   pure rows
+
+terminalColumns :: Brick.EventM Types.Name Types.St Int
+terminalColumns = do
+  vty <- Brick.getVtyHandle
+  (columns, _) <- MonadIO.liftIO (V.displayBounds (V.outputIface vty))
+  pure columns
 
 -- How many display rows the body draws at once, and how close the cursor
 -- may come to an edge before the window is moved.
