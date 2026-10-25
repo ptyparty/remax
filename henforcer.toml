@@ -277,6 +277,18 @@ qualified = { qualifiedPost = true }
 alias = "Clock"
 
 [[forAnyModule.allowedQualifications]]
+module = "Data.Time.Format"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "TimeFormat"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.Time.Format.ISO8601"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "ISO8601"
+
+[[forAnyModule.allowedQualifications]]
 module = "Data.Version"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }

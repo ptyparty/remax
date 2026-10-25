@@ -211,6 +211,7 @@ handleEvent brickEvent =
     Brick.AppEvent (Types.JobDone label finish) -> do
       State.modify (\s -> s {Types.stBusy = List.delete label (Types.stBusy s)})
       finish
+      PickerAction.refreshRangePicker
     Brick.MouseDown name button _ _ -> handleWheel (wheelTargetOf name) button
     Brick.MouseUp {} -> pure ()
     Brick.VtyEvent (V.EvMouseDown col _ button _) -> do
@@ -422,8 +423,8 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar '?') [] -> NoteAction.markThenNote Store.Questioned
         V.EvKey (V.KChar 'r') [] -> VerdictAction.clearVerdictBySelection
         V.EvKey (V.KChar 'R') [] -> VerdictAction.clearVerdictBySelection
-        V.EvKey (V.KChar ']') [] -> Nav.switchRun 1
-        V.EvKey (V.KChar '[') [] -> Nav.switchRun (-1)
+        V.EvKey (V.KChar ']') [] -> PullAction.walkRun 1
+        V.EvKey (V.KChar '[') [] -> PullAction.walkRun (-1)
         V.EvKey (V.KChar 'x') [] -> Nav.selectCurrentHunk
         V.EvKey (V.KChar 'p') [] -> VerdictAction.cycleWalkFilter
         V.EvKey (V.KChar 'w') [] -> Settings.toggleIgnoreWs
@@ -522,8 +523,8 @@ helixNormalKey i fv ed ev = do
     V.EvKey (V.KChar '!') [] -> NoteAction.markThenNote Store.Flagged
     V.EvKey (V.KChar '?') [] -> NoteAction.markThenNote Store.Questioned
     V.EvKey (V.KChar 'R') [] -> VerdictAction.clearVerdictBySelection
-    V.EvKey (V.KChar ']') [] -> Nav.switchRun 1
-    V.EvKey (V.KChar '[') [] -> Nav.switchRun (-1)
+    V.EvKey (V.KChar ']') [] -> PullAction.walkRun 1
+    V.EvKey (V.KChar '[') [] -> PullAction.walkRun (-1)
     V.EvKey (V.KChar '/') [] -> Search.openSearchPrompt 1
     V.EvKey (V.KChar ':') [] -> Command.openCmdPrompt
     V.EvKey (V.KChar '*') [] -> Search.searchWordUnderCursor
@@ -564,8 +565,8 @@ handleViKey i ed ev = do
       case ev of
         V.EvKey (V.KChar '\t') [] ->
           State.modify (\s -> s {Types.stTray = not (Types.stTray s)})
-        V.EvKey (V.KChar ']') [] -> Nav.switchRun 1
-        V.EvKey (V.KChar '[') [] -> Nav.switchRun (-1)
+        V.EvKey (V.KChar ']') [] -> PullAction.walkRun 1
+        V.EvKey (V.KChar '[') [] -> PullAction.walkRun (-1)
         V.EvKey (V.KChar ')') [] -> Open.switchFile 1
         V.EvKey (V.KChar '(') [] -> Open.switchFile (-1)
         V.EvKey (V.KChar '{') [] ->

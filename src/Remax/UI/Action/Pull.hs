@@ -9,6 +9,10 @@ module Remax.UI.Action.Pull
   , pullFreshness
   , shortAge
   , staleText
+  , reviewHeadAgainst
+  , reviewPushedHead
+  , startCommitWalk
+  , walkRun
   ) where
 
 import Brick qualified as Brick
@@ -24,6 +28,7 @@ import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Core.Jobs qualified as Jobs
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Model.Load qualified as Load
+import Remax.UI.Model.Nav qualified as Nav
 
 openPull :: Int -> Brick.EventM Types.Name Types.St ()
 openPull n = do
@@ -54,11 +59,7 @@ refreshPullMeta = do
         label = "reading PR #" <> Types.tshow n
       Jobs.startJob label (GitHub.viewPull (Types.stRoot st) (Git.prRepo pr) n) $ \outcome -> do
         latest <- State.get
-        let
-          stillOpen = case Git.subjectOf (Types.stMode latest) of
-            Git.Pull now _ -> Git.prNumber now == n
-            _ -> False
-        Monad.when (Types.stEpoch latest == Types.stEpoch st && stillOpen) $
+        Monad.when (Types.stEpoch latest == Types.stEpoch st && onPull latest n) $
           case outcome of
             Left err -> Jobs.jobFailed label err
             Right (Left failure) -> Types.setMsg ("! " <> GitHub.failureText failure)
@@ -98,11 +99,7 @@ finishPoll :: Int -> Int -> Either T.Text (Either GitHub.GhFailure PullPoll.Poll
 finishPoll epoch n outcome = do
   latest <- State.get
   modifyPoll (\pp -> pp {Types.ppFlight = Types.PollIdle})
-  let
-    stillOpen = case Git.subjectOf (Types.stMode latest) of
-      Git.Pull now _ -> Git.prNumber now == n
-      _ -> False
-  Monad.when (Types.stEpoch latest == epoch && stillOpen) $
+  Monad.when (Types.stEpoch latest == epoch && onPull latest n) $
     case outcome of
       Left err -> pollFailed err
       Right (Left failure) -> pollFailed (GitHub.failureText failure)
@@ -128,6 +125,12 @@ applyPolled polled = do
   case PullPoll.polledHead polled of
     GitHub.RefsFetched -> Load.refreshGit
     GitHub.RefsInPlace -> pure ()
+
+onPull :: Types.St -> Int -> Bool
+onPull st n =
+  case Git.subjectOf (Types.stMode st) of
+    Git.Pull pr _ -> Git.prNumber pr == n
+    _ -> False
 
 modifyPoll :: (Types.PullPoll -> Types.PullPoll) -> Brick.EventM Types.Name Types.St ()
 modifyPoll f = State.modify (\s -> s {Types.stPullPoll = f (Types.stPullPoll s)})
@@ -161,3 +164,87 @@ shortAge secs
 
 staleText :: Maybe Int -> T.Text
 staleText age = "\9888 stale" <> maybe "" (\secs -> " " <> shortAge secs) age
+
+noPullOpen :: T.Text
+noPullOpen = "no pull request open \8212 :pr opens one"
+
+reviewHeadAgainst :: T.Text -> Brick.EventM Types.Name Types.St ()
+reviewHeadAgainst base = do
+  st <- State.get
+  case Git.subjectOf (Types.stMode st) of
+    Git.Pull pr _ ->
+      Settings.setMode (Git.AtPull pr {Git.prTip = Git.pullHeadRef (Git.prNumber pr), Git.prBase = base} Git.ReadOnly)
+    _ -> Types.setMsg noPullOpen
+
+reviewPushedHead :: T.Text -> Brick.EventM Types.Name Types.St ()
+reviewPushedHead sha = do
+  st <- State.get
+  case Git.subjectOf (Types.stMode st) of
+    Git.Pull pr _ -> do
+      let
+        n = Git.prNumber pr
+        label = "fetching " <> T.take 7 sha
+      Jobs.startJob label (GitHub.keepPushedHead (Types.stRoot st) (Git.prRepo pr) n sha) $ \outcome -> do
+        latest <- State.get
+        Monad.when (Types.stEpoch latest == Types.stEpoch st && onPull latest n) $
+          case outcome of
+            Left err -> Jobs.jobFailed label err
+            Right (Left failure) -> Types.setMsg ("! " <> T.take 7 sha <> " is neither here nor on GitHub: " <> GitHub.failureText failure)
+            Right (Right ref) -> reviewHeadAgainst ref
+    _ -> Types.setMsg noPullOpen
+
+startCommitWalk :: Brick.EventM Types.Name Types.St ()
+startCommitWalk = do
+  st <- State.get
+  case (Types.stMode st, Types.ppSnapshot (Types.stPullPoll st)) of
+    (Git.AtPull pr Git.ReadOnly, Just snap)
+      | PullPoll.snapshotPull snap == Git.prNumber pr ->
+          case PullPoll.snapshotCommits snap of
+            [] -> Types.setMsg ("PR #" <> Types.tshow (Git.prNumber pr) <> " has no commits")
+            commits -> walkTo Types.CommitWalk {Types.cwPull = pr, Types.cwCommits = commits, Types.cwIndex = 0}
+    (Git.AtPull _ Git.ReadOnly, _) -> Types.setMsg "the PR's commits are still loading from GitHub \8212 :pr commits again in a moment"
+    (Git.AtPull _ Git.Checkout, _) -> Types.setMsg "the commit walk is read-only \8212 :pr review returns to the fetched head"
+    _ -> Types.setMsg noPullOpen
+
+walkTo :: Types.CommitWalk -> Brick.EventM Types.Name Types.St ()
+walkTo walk =
+  case Types.safeIdx (Types.cwCommits walk) (Types.cwIndex walk) of
+    Nothing -> pure ()
+    Just commit -> do
+      let
+        sha = PullPoll.pullCommitSha commit
+        pr = Types.cwPull walk
+      Settings.setMode (Git.AtPull pr {Git.prTip = sha, Git.prBase = sha <> "^"} Git.ReadOnly)
+      Types.setMsg
+        ( "commit "
+            <> Types.tshow (Types.cwIndex walk + 1)
+            <> "/"
+            <> Types.tshow (length (Types.cwCommits walk))
+            <> " \183 "
+            <> PullPoll.pullCommitSubject commit
+        )
+
+walkRun :: Int -> Brick.EventM Types.Name Types.St ()
+walkRun d = do
+  st <- State.get
+  let
+    step = Nav.planRun st d
+    atEdge = case step of
+      Nav.RunTo _ -> False
+      Nav.RunWraps _ -> True
+      Nav.RunEmpty _ -> True
+  case Types.pullCommitWalk st of
+    Just walk | atEdge -> stepCommit walk d
+    _ -> Nav.takeRun step
+
+stepCommit :: Types.CommitWalk -> Int -> Brick.EventM Types.Name Types.St ()
+stepCommit walk d =
+  let
+    next = Types.cwIndex walk + signum d
+    total = length (Types.cwCommits walk)
+    position i = "commit " <> Types.tshow i <> "/" <> Types.tshow total
+  in
+    case (next < 0, next >= total) of
+      (True, _) -> Types.setMsg (position (1 :: Int) <> " is the PR's first \8212 :base reviews a range")
+      (_, True) -> Types.setMsg (position total <> " is the PR's last \8212 :base reviews a range")
+      _ -> walkTo walk {Types.cwIndex = next}

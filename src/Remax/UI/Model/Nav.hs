@@ -12,7 +12,9 @@ module Remax.UI.Model.Nav
   , parkM
   , scrollHunkIntoView
   , scrollTrayToCurrent
-  , switchRun
+  , RunStep (..)
+  , planRun
+  , takeRun
   , selectedChanges
   , selectedRuns
   , runChanges
@@ -29,6 +31,7 @@ import Control.Monad qualified as Monad
 import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
 import Data.List qualified as List
+import Data.List.NonEmpty qualified as NEL
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Ord qualified as Ord
@@ -240,12 +243,16 @@ scrollTrayToCurrent = do
         (max 0 (TrayModel.trayCurrentRow st - (snd (Brick._vpSize tvp) `div` 2)))
     Nothing -> pure ()
 
+data RunStep
+  = RunTo (Int, Int)
+  | RunWraps (Int, Int)
+  | RunEmpty T.Text
+
 -- Walk hunks in (file, hunk) order, wrapping; with pending-only mode on,
 -- hunks that already have verdicts are skipped entirely, and the
 -- code/comment filter skips whichever kind you are not reading.
-switchRun :: Int -> Brick.EventM Types.Name Types.St ()
-switchRun d = do
-  st <- State.get
+planRun :: Types.St -> Int -> RunStep
+planRun st d =
   let
     eligible (_, r) = Verdict.walkAllows st r
     pairs = case Types.stWalk st of
@@ -261,30 +268,35 @@ switchRun d = do
       Types.WalkUnresolved -> "nothing outstanding"
       Types.WalkTour -> "no tour steps here"
       _ -> "no pending hunks left"
-  case pairs of
-    [] -> State.modify (\s -> s {Types.stMsg = emptyMsg})
-    _ -> do
-      let
-        target = case Types.stWalk st of
-          Types.WalkTour -> stepAlong pairs here d
-          _ -> stepPast pairs here d
-      parkAnchor (fst target) (snd target)
-      Monad.when (Types.stWalk st == Types.WalkTour) $
-        State.modify (\s -> s {Types.stTourLast = Just target})
+  in
+    case (NEL.nonEmpty pairs, Types.stWalk st) of
+      (Nothing, _) -> RunEmpty emptyMsg
+      (Just _, Types.WalkTour) -> RunTo (stepAlong pairs here d)
+      (Just found, _) -> stepPast found here d
 
-stepPast :: [(Int, Int)] -> (Int, Int) -> Int -> (Int, Int)
+takeRun :: RunStep -> Brick.EventM Types.Name Types.St ()
+takeRun step =
+  case step of
+    RunEmpty msg -> State.modify (\s -> s {Types.stMsg = msg})
+    RunTo target -> landRun target
+    RunWraps target -> landRun target
+
+landRun :: (Int, Int) -> Brick.EventM Types.Name Types.St ()
+landRun target = do
+  st <- State.get
+  parkAnchor (fst target) (snd target)
+  Monad.when (Types.stWalk st == Types.WalkTour) $
+    State.modify (\s -> s {Types.stTourLast = Just target})
+
+stepPast :: NEL.NonEmpty (Int, Int) -> (Int, Int) -> Int -> RunStep
 stepPast pairs here d =
   let
-    after = filter (> here) pairs
-    before = filter (< here) pairs
+    after = NEL.filter (> here) pairs
+    before = NEL.filter (< here) pairs
   in
     if d > 0
-      then case after ++ pairs of
-        (p : _) -> p
-        [] -> here
-      else case reverse before ++ reverse pairs of
-        (p : _) -> p
-        [] -> here
+      then maybe (RunWraps (NEL.head pairs)) RunTo (Maybe.listToMaybe after)
+      else maybe (RunWraps (NEL.last pairs)) RunTo (Maybe.listToMaybe (reverse before))
 
 stepAlong :: [(Int, Int)] -> (Int, Int) -> Int -> (Int, Int)
 stepAlong pairs here d =

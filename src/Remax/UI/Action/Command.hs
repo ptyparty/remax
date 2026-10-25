@@ -73,7 +73,7 @@ commandTable =
   , ("edit", ArgPath, "$EDITOR at the cursor (or on PATH)")
   , ("set", ArgSet, "change a setting (live + persisted)")
   , ("checkout", NoArg, "switch branches (picker)")
-  , ("pr", ArgPull, "open pull request N read-only; bare :pr or :pr list picks one")
+  , ("pr", ArgPull, "open pull request N read-only; bare :pr or :pr list picks one; :pr commits walks its commits")
   , ("q", NoArg, "quit")
   ]
 
@@ -97,7 +97,7 @@ cmdCandidates st input =
       ["set", "keys"] -> prefixed Config.keyModeNames
       ["set", "note-on-flag"] -> prefixed ["0", "1"]
       ["resolve"] -> prefixed ["all"]
-      ["pr"] -> prefixed ["list"]
+      ["pr"] -> prefixed ["list", "commits"]
       [cmd] -> case argKindOf cmd of
         Just ArgRef -> prefixed ("branch" : Types.stCmdRefs st)
         Just ArgMode -> prefixed ["head", "unstaged", "untracked"]
@@ -182,6 +182,7 @@ runCommand input =
     ["checkout", branch] -> PickerAction.applyCheckout branch
     ["pr"] -> barePullCommand
     ["pr", "list"] -> PickerAction.openPullPicker
+    ["pr", "commits"] -> PullAction.startCommitWalk
     ["pr", n] | Just k <- GitHub.pullNumber n -> PullAction.openPull k
     ["base", "branch"] -> Settings.setBaseBranch
     ["branch"] -> Settings.setBaseBranch
