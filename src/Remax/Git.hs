@@ -48,6 +48,8 @@ module Remax.Git
   , pathChangeLetter
   , pathStats
   , RebaseStatus (..)
+  , RebaseStop (..)
+  , rebaseConflicted
   , rebaseStatus
   , commitBody
   , CommitUnderReview (..)
@@ -773,16 +775,29 @@ hasStagedChanges root = do
 -- Rebase awareness ------------------------------------------------------------
 
 -- A rebase paused mid-flight: which commit it stopped at (counting only
--- the picks, not interleaved exec lines), its subject, and whether the
--- stop is a real conflict rather than a deliberate pause.
+-- the picks, not interleaved exec lines), its subject, and what kind of
+-- stop it is.
 data RebaseStatus = RebaseStatus
   { rebaseStep :: Int
   , rebaseTotal :: Int
   , rebaseSha :: T.Text -- short sha of the stopped commit ("" when unknown)
   , rebaseSubject :: T.Text
-  , rebaseConflicted :: Bool
+  , rebaseStop :: RebaseStop
   }
   deriving (Eq, Show)
+
+data RebaseStop
+  = ConflictStop (Maybe FilePath)
+  | EditStop
+  | ExecStop
+  deriving (Eq, Show)
+
+rebaseConflicted :: RebaseStatus -> Bool
+rebaseConflicted rb =
+  case rebaseStop rb of
+    ConflictStop _ -> True
+    EditStop -> False
+    ExecStop -> False
 
 -- Where git actually keeps a state directory, resolved by git itself: in
 -- a linked worktree .git is a file and the state lives under the main
@@ -807,12 +822,6 @@ gitStatePath exists root name = do
       present <- exists path
       pure (if present then Just path else Nothing)
 
-hasUnmerged :: FilePath -> IO Bool
-hasUnmerged root = do
-  (code, out, _) <-
-    Process.readProcessWithExitCode "git" ["-C", root, "ls-files", "--unmerged"] ""
-  pure (code == Exit.ExitSuccess && not (null (filter (not . null) (lines out))))
-
 rebaseStatus :: FilePath -> IO (Maybe RebaseStatus)
 rebaseStatus root = do
   mMerge <- gitStateDir root "rebase-merge"
@@ -831,14 +840,14 @@ rebaseStatus root = do
         (sha, subject) = case reverse donePicks of
           (p1 : _) -> p1
           [] -> ("", "")
-      conflicted <- hasUnmerged root
+      stop <- mergeBackendStop root dir
       pure . Just $
         RebaseStatus
           { rebaseStep = length donePicks
           , rebaseTotal = length donePicks + length todoPicks
           , rebaseSha = sha
           , rebaseSubject = subject
-          , rebaseConflicted = conflicted
+          , rebaseStop = stop
           }
     Nothing -> do
       -- the am-based backend (git rebase --apply, git am): no todo, just
@@ -853,15 +862,27 @@ rebaseStatus root = do
             num t = case reads (T.unpack (T.strip t)) of
               [(n, "")] -> n
               _ -> 0
-          conflicted <- hasUnmerged root
           pure . Just $
             RebaseStatus
               { rebaseStep = num nextT
               , rebaseTotal = num lastT
               , rebaseSha = ""
               , rebaseSubject = ""
-              , rebaseConflicted = conflicted
+              , rebaseStop = ConflictStop Nothing
               }
+
+mergeBackendStop :: FilePath -> FilePath -> IO RebaseStop
+mergeBackendStop root dir = do
+  mMergeMsg <- gitStateFile root "MERGE_MSG"
+  case mMergeMsg of
+    Just _ -> do
+      let
+        file = dir </> "message"
+      present <- Directory.doesFileExist file
+      pure (ConflictStop (if present then Just file else Nothing))
+    Nothing -> do
+      editing <- Directory.doesFileExist (dir </> "amend")
+      pure (if editing then EditStop else ExecStop)
 
 readFileOr :: T.Text -> FilePath -> IO T.Text
 readFileOr fallback path =
@@ -891,28 +912,10 @@ data CommitUnderReview
 
 commitUnderReview :: FilePath -> IO CommitUnderReview
 commitUnderReview root = do
-  stop <- rebaseStop root
-  case stop of
-    StopCommitted -> pure CommitAtHead
-    StopPending mFile -> CommitPending <$> traverse (fmap T.stripEnd . readFileOr "") mFile
-
-data RebaseStop
-  = StopCommitted
-  | StopPending (Maybe FilePath)
-
-rebaseStop :: FilePath -> IO RebaseStop
-rebaseStop root = do
-  mApply <- gitStateDir root "rebase-apply"
-  mMerge <- gitStateDir root "rebase-merge"
-  mMergeMsg <- gitStateFile root "MERGE_MSG"
-  case (mApply, mMerge, mMergeMsg) of
-    (Just _, _, _) -> pure (StopPending Nothing)
-    (Nothing, Just dir, Just _) -> do
-      let
-        file = dir </> "message"
-      present <- Directory.doesFileExist file
-      pure (StopPending (if present then Just file else Nothing))
-    _ -> pure StopCommitted
+  rb <- rebaseStatus root
+  case fmap rebaseStop rb of
+    Just (ConflictStop mFile) -> CommitPending <$> traverse (fmap T.stripEnd . readFileOr "") mFile
+    _ -> pure CommitAtHead
 
 setStoppedCommitMessage :: Writable -> FilePath -> T.Text -> IO (Either T.Text ())
 setStoppedCommitMessage _ root text = do
@@ -927,10 +930,10 @@ setStoppedCommitMessage _ root text = do
 
 stoppedMessageFile :: FilePath -> IO (Maybe FilePath)
 stoppedMessageFile root = do
-  stop <- rebaseStop root
-  pure $ case stop of
-    StopPending mFile -> mFile
-    StopCommitted -> Nothing
+  rb <- rebaseStatus root
+  pure $ case fmap rebaseStop rb of
+    Just (ConflictStop mFile) -> mFile
+    _ -> Nothing
 
 commitMessage :: FilePath -> T.Text -> IO (Either T.Text T.Text)
 commitMessage root ref = do
