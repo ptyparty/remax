@@ -49,6 +49,8 @@ module Remax.Store
   , deleteFiles
   , recordView
   , sessionView
+  , cachedRepoName
+  , saveRepoName
   , TourStep (..)
   , clearTour
   , appendTourStep
@@ -222,6 +224,12 @@ openStore = do
     \  seq INTEGER NOT NULL,\
     \  key TEXT NOT NULL,\
     \  PRIMARY KEY (repo, subject, seq, key))"
+  SQLite.execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS github_repo (\
+    \  origin_url TEXT PRIMARY KEY,\
+    \  name_with_owner TEXT NOT NULL,\
+    \  resolved_at TEXT NOT NULL DEFAULT (datetime('now')))"
   -- several instances (sessions, agent CLI calls) share this file; WAL
   -- lets readers proceed under a writer instead of stacking on the lock
   Monad.void (SQLite.query_ conn "PRAGMA journal_mode = WAL" :: IO [SQLite.Only T.Text])
@@ -301,6 +309,21 @@ sessionView conn repo = do
     SQLite.query conn "SELECT mode FROM session_view WHERE repo = ?" (SQLite.Only repo) ::
       IO [SQLite.Only T.Text]
   pure (Maybe.listToMaybe (map SQLite.fromOnly rows))
+
+cachedRepoName :: SQLite.Connection -> T.Text -> IO (Maybe T.Text)
+cachedRepoName conn url = do
+  rows <-
+    SQLite.query conn "SELECT name_with_owner FROM github_repo WHERE origin_url = ?" (SQLite.Only url) ::
+      IO [SQLite.Only T.Text]
+  pure (Maybe.listToMaybe (map SQLite.fromOnly rows))
+
+saveRepoName :: SQLite.Connection -> T.Text -> T.Text -> IO ()
+saveRepoName conn url name =
+  SQLite.execute
+    conn
+    "INSERT INTO github_repo (origin_url, name_with_owner) VALUES (?, ?)\
+    \ ON CONFLICT(origin_url) DO UPDATE SET name_with_owner = excluded.name_with_owner, resolved_at = datetime('now')"
+    (url, name)
 
 data TourStep = TourStep
   { tourSeq :: Int

@@ -64,8 +64,8 @@ toHunk path r =
 
 fileSides :: Git.ReviewMode -> FilePath -> FilePath -> IO (Maybe ([T.Text], [T.Text]))
 fileSides mode root path =
-  case Git.subjectOf mode of
-    Git.Ref tip -> do
+  case Git.sourceOf mode of
+    Git.FromRef tip -> do
       got <- Git.refContent root tip path
       case got of
         Just Git.RefBinary -> pure Nothing
@@ -73,7 +73,7 @@ fileSides mode root path =
           base <- Git.baseLines mode root path
           pure (Just (base, new))
         Nothing -> removedSides mode root path
-    Git.WorkingTree -> do
+    Git.FromWorkingTree -> do
       present <- Directory.doesFileExist (root </> path)
       if not present
         then removedSides mode root path

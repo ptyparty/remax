@@ -32,6 +32,7 @@ import Remax.Git qualified as Git
 import Remax.Store qualified as Store
 import Remax.Theme qualified as Theme
 import Remax.TreeSitter qualified as TS
+import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
@@ -131,7 +132,7 @@ treeModeOf :: Git.ReviewMode -> Git.ReviewMode
 treeModeOf mode =
   case Git.subjectOf mode of
     Git.WorkingTree -> mode
-    Git.Ref _ -> Git.VsRef "HEAD"
+    _ -> Git.VsRef "HEAD"
 
 initialState ::
   Startup ->
@@ -213,6 +214,8 @@ initialState startup mode root roots story watchMode dirWatch clip alreadyThere 
     , Types.stVi = Vi.viIdle
     , Types.stSearchDir = 1
     , Types.stDeferAdvance = False
+    , Types.stPullMeta = Nothing
+    , Types.stBaseAt = Nothing
     , Types.stAltFile = Nothing
     , Types.stAnchor = Nothing
     , Types.stGrepNav = Nothing
@@ -351,6 +354,7 @@ app theme =
           MonadIO.liftIO (V.setMode out V.BracketedPaste True)
         Monad.when (V.supportsMode out V.Mouse) $
           MonadIO.liftIO (V.setMode out V.Mouse True)
+        PullAction.refreshPullMeta
     , Brick.appAttrMap = const (Attrs.mkAttrMap theme)
     }
 

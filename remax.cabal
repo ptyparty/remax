@@ -121,6 +121,7 @@ executable remax
       Remax.DiffModel
       Remax.Emacs
       Remax.Git
+      Remax.GitHub
       Remax.Highlight
       Remax.Hunks
       Remax.Key
@@ -140,6 +141,7 @@ executable remax
       Remax.UI.Action.Notes
       Remax.UI.Action.Open
       Remax.UI.Action.Picker
+      Remax.UI.Action.Pull
       Remax.UI.Action.Rebase
       Remax.UI.Action.Repo
       Remax.UI.Action.Search

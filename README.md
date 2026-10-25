@@ -37,6 +37,7 @@ remax --base REF      # review the working tree against any ref
 remax --branch        # against the merge-base with the mainline (whole branch)
 remax --ref REF       # review REF itself, read-only, without checking it out
                       # (against --base BASE, or its merge-base with the mainline)
+remax --pr N          # review pull request N read-only, fetched through gh
 remax --unstaged      # working tree vs index
 remax --untracked     # new files only, reviewed as pure additions; ordinary
                       #   reviews already include them (:set untracked 0 to stop)
@@ -354,6 +355,7 @@ note popup keeps its modal keys in either keymap.
 | `:N` | jump to line N of the current file, clamped to its ends — the cursor moves, the hunk under review and the `'` anchor don't |
 | `:edit [PATH]` | suspend into `$EDITOR` at the cursor (or on PATH) |
 | `:checkout` | switch branches — a picker over local branches in the same columns (branch, how long ago, the tip you'd land on, subject), most recently committed first with `← current` marked; `⏎` checks out. `:checkout NAME` skips the picker. Refused mid-rebase |
+| `:pr` | open a pull request of the repository this checkout belongs to, read-only — a picker over its open pull requests (number, author, title, age, CI, your review state, a `draft` mark, and `← open` on the one under review); `⏎` opens the row. `:pr N` skips the picker; `:pr list` opens it while a pull request is already open. See [Reviewing a pull request](#reviewing-a-pull-request) |
 | `:q` | quit |
 
 The command line completes itself: a bare `:` lists every command with
@@ -388,9 +390,28 @@ and `:continue`. This is the surgical alternative to the ambient
 `:base branch` view (where fixes land at the branch tip).
 
 The session never runs git on its own — those six commands (with
-`:checkout`) are the only mutation points, each one explicit. The awareness half works with zero
+`:checkout`) are the only mutation points, each one explicit. A seventh
+git action, the fetch behind `:pr` and `--pr`, writes only under
+`refs/remax/pull/` and moves none of your branches. The awareness half works with zero
 commands too: drive `git rebase --exec false`, `--continue`, `--abort`
 from your shell and the open session tracks every stop.
+
+## Reviewing a pull request
+
+`remax --pr N`, `:pr N` or a row of the `:pr` picker opens pull request N
+of the GitHub repository this checkout belongs to. remax asks `gh` for
+everything and keeps no token of its own: `gh repo view` names the
+repository, cached per `origin` URL and asked again when the remote
+changes or GitHub no longer knows the pull request there. The session
+fetches the pull request's head into `refs/remax/pull/N/head` and the
+base into `refs/remax/pull/N/base`, which it then points at the
+merge-base, so the diff is the one GitHub shows.
+
+The review is read-only, like `--ref`. The header reads `PR #N review`,
+and the git bar becomes `#N branch→base · head…base · review · checks`.
+`!` is refused with `read-only: @ drafts a comment`; `?` asks the agent
+as anywhere else. Bare `:pr` while a pull request is open names `:pr
+list`, the way to pick another. `:mode tree` returns to the working tree.
 
 ## Working with agents
 
@@ -441,7 +462,10 @@ With no ref flags the commands follow whatever your open session is
 viewing, so a tour of `:ref feature` or `:commit abc123` lands on the
 right hunks without the agent being told; `--ref REF [--base BASE]` and
 `--base REF` name a view outright, and any spelling of the same commit
-reaches the same session, a branch name or a sha alike. The moment the first step lands your
+reaches the same session, a branch name or a sha alike. A pull request
+is a subject of its own: the tour of `--pr 482` stays with that pull
+request when its head moves or its base changes, and `--pr N` names it
+when no session has it open. The moment the first step lands your
 session switches to `:walk tour`: `]`/`[` follow the steps in order,
 the header counts `tour 2/5`, a bar under the header names the stop
 you are on, and every hunk in a stop carries a header above it on its

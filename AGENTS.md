@@ -41,7 +41,7 @@ imports its internals. The order within a tree is convention.
    (filesystem watching), `Load` (loading, rebuilding, refresh, reload,
    highlighting).
 3. `Action` — `Conversation`, `Verdicts`, `Rebase`, `Notes`, `Settings`,
-   `Fuzzy`, `Repo`, `Open`, `Picker`, `Search`, `Tree`, `Files`,
+   `Pull`, `Fuzzy`, `Repo`, `Open`, `Picker`, `Search`, `Tree`, `Files`,
    `TreeKeys`, `Editor`, `Command`, `Menus`.
 4. `Draw` — one module per surface, composed by `Remax.UI.Draw`.
 5. `Events` — key and event dispatch, the top of the session.

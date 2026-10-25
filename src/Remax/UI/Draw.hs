@@ -9,6 +9,7 @@ import Brick qualified as Brick
 import Brick.Types qualified as BrickTypes
 import Data.Maybe qualified as Maybe
 import Remax.Config qualified as Config
+import Remax.Git qualified as Git
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Widgets qualified as Widgets
 import Remax.UI.Draw.Body qualified as DrawBody
@@ -47,9 +48,10 @@ draw st =
     menuRows = case DrawPrompt.promptMenu st of
       Just menu -> [menu]
       Nothing -> []
-    rebaseRows = case Types.rebaseShown st of
-      Just rb -> [DrawHeader.rebaseBar rb]
-      Nothing -> [DrawHeader.gitBar st]
+    rebaseRows = case (Git.subjectOf (Types.stMode st), Types.rebaseShown st) of
+      (Git.Pull pr editing, _) -> [DrawHeader.pullBar st pr editing]
+      (_, Just rb) -> [DrawHeader.rebaseBar rb]
+      (_, Nothing) -> [DrawHeader.gitBar st]
     tourRows = maybe [] (: []) (DrawHeader.tourBar st)
     helpRows =
       if Types.stHelp st then [DrawHelp.helpLayer (Config.cfgKeys (Types.stConfig st))] else []

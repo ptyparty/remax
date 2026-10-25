@@ -26,6 +26,7 @@ import Database.SQLite.Simple qualified as SQLite
 import Paths_remax qualified as Paths
 import Remax.Config qualified as Config
 import Remax.Git qualified as Git
+import Remax.GitHub qualified as GitHub
 import Remax.Hunks qualified as Hunks
 import Remax.Punch qualified as Punch
 import Remax.Store qualified as Store
@@ -39,6 +40,7 @@ data ModeArg
   | ArgUnstaged
   | ArgUntracked
   | ArgRef T.Text (Maybe T.Text)
+  | ArgPull Int
 
 data Cmd
   = Review ModeArg
@@ -143,6 +145,7 @@ usage :: String
 usage =
   "usage: remax [-C DIR] [--base REF | --branch | --unstaged | --untracked]\n\
   \       remax [-C DIR] --ref REF [--base BASE | --branch]\n\
+  \       remax [-C DIR] --pr N\n\
   \       remax [-C DIR] forget [PATH]  forget verdicts under PATH (default: the\n\
   \                                     current directory); PATH need not still exist\n\
   \       remax [-C DIR] list [--json] [--wait] [--state FILE]\n\
@@ -163,7 +166,7 @@ usage =
   \       remax [-C DIR] watching       say an agent is on this review, until\n\
   \                                     stopped; the session shows it in its\n\
   \                                     header, working or waiting\n\
-  \       remax [-C DIR] hunks [--json] [--ref REF [--base BASE] | --base REF]\n\
+  \       remax [-C DIR] hunks [--json] [--ref REF [--base BASE] | --base REF | --pr N]\n\
   \                                     list the change set as the session sees\n\
   \                                     it, one id per hunk; with no ref flags,\n\
   \                                     whatever the open session is viewing\n\
@@ -182,7 +185,11 @@ usage =
   \  --untracked  review new files as pure additions\n\
   \  --ref REF    review REF itself, read-only, without checking it out:\n\
   \               against BASE, or its merge-base with the mainline;\n\
-  \               verdicts record the ref and its tip for the agent"
+  \               verdicts record the ref and its tip for the agent\n\
+  \  --pr N       review pull request N of the GitHub repository this\n\
+  \               checkout belongs to, read-only, through gh: its head and\n\
+  \               base are fetched into refs/remax/pull/N, and no branch\n\
+  \               of yours moves"
 
 parseArgs :: [String] -> Either String (Maybe FilePath, Cmd)
 parseArgs args0 =
@@ -223,6 +230,7 @@ reviewArgs args =
     ["--branch", "--ref", ref] -> Just (ArgRef (T.pack ref) Nothing)
     ["--ref", ref, "--base", base] -> Just (ArgRef (T.pack ref) (Just (T.pack base)))
     ["--base", base, "--ref", ref] -> Just (ArgRef (T.pack ref) (Just (T.pack base)))
+    ["--pr", n] -> fmap ArgPull (GitHub.pullNumber (T.pack n))
     _ -> Nothing
 
 review :: ModeArg -> IO ()
@@ -255,7 +263,21 @@ review marg = do
             Left e -> Exit.die (T.unpack e)
             Right sha -> pure (T.take 10 sha)
       pure (Git.AtRef (Git.RefReview {Git.rrTip = ref, Git.rrBase = base}))
+    ArgPull n -> do
+      conn <- Store.openStore
+      openPullMode conn root n
   UI.runReview mode root roots story
+
+openPullMode :: SQLite.Connection -> FilePath -> Int -> IO Git.ReviewMode
+openPullMode conn root n = do
+  known <- GitHub.cachedRepoName conn root
+  SysIO.hPutStrLn SysIO.stderr ("fetching PR #" ++ show n ++ "\8230")
+  got <- GitHub.openPull root (GitHub.repoCached known) n
+  case got of
+    Left failure -> Exit.die (T.unpack (GitHub.failureText failure))
+    Right opened -> do
+      GitHub.rememberRepoName conn known (GitHub.openedRepo opened)
+      pure (Git.AtPull (GitHub.openedPull opened) Git.ReadOnly)
 
 -- Flags an agent command accepts anywhere in its arguments, pulled out so
 -- the rest can be read positionally.
@@ -276,8 +298,14 @@ takeFlags valued args =
 -- the working tree against HEAD.
 agentMode :: SQLite.Connection -> FilePath -> Map.Map String String -> IO Git.ReviewMode
 agentMode conn root flags =
-  case (Map.lookup "--ref" flags, Map.lookup "--base" flags) of
-    (Just ref, mBase) -> do
+  case (Map.lookup "--pr" flags, Map.lookup "--ref" flags, Map.lookup "--base" flags) of
+    (Just n, _, _) -> do
+      k <- maybe (Exit.die ("--pr wants a pull request number, not " ++ n)) pure (GitHub.pullNumber (T.pack n))
+      viewed <- Store.sessionView conn (T.pack root)
+      case viewed >>= Git.modeFromText of
+        Just mode@(Git.AtPull pr _) | Git.prNumber pr == k -> pure mode
+        _ -> openPullMode conn root k
+    (Nothing, Just ref, mBase) -> do
       ok <- Git.refExists root (T.pack ref)
       Monad.unless ok (Exit.die ("No such ref: " ++ ref))
       base <- case mBase of
@@ -286,13 +314,13 @@ agentMode conn root flags =
           got <- Git.branchRootOf root (T.pack ref)
           either (Exit.die . T.unpack) (pure . T.take 10) got
       pure (Git.AtRef (Git.RefReview {Git.rrTip = T.pack ref, Git.rrBase = base}))
-    (Nothing, Just base) -> pure (Git.VsRef (T.pack base))
-    (Nothing, Nothing) -> do
+    (Nothing, Nothing, Just base) -> pure (Git.VsRef (T.pack base))
+    (Nothing, Nothing, Nothing) -> do
       viewed <- Store.sessionView conn (T.pack root)
       pure (Maybe.fromMaybe (Git.VsRef "HEAD") (viewed >>= Git.modeFromText))
 
 refFlags :: [String]
-refFlags = ["--ref", "--base"]
+refFlags = ["--ref", "--base", "--pr"]
 
 hunks :: [String] -> IO ()
 hunks args = do

@@ -9,6 +9,7 @@ module Remax.UI.Action.Picker
   , openBranchPicker
   , openRefPicker
   , openCommitPicker
+  , openPullPicker
   , reviewCommit
   , applyCheckout
   , openGrepPicker
@@ -28,9 +29,11 @@ import Data.Text qualified as T
 import Data.Text.Read qualified as TR
 import Graphics.Vty qualified as V
 import Remax.Git qualified as Git
+import Remax.GitHub qualified as GitHub
 import Remax.Modal qualified as Modal
 import Remax.UI.Action.Fuzzy qualified as Fuzzy
 import Remax.UI.Action.Open qualified as Open
+import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Action.Repo qualified as Repo
 import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Core.Jobs qualified as Jobs
@@ -86,20 +89,21 @@ openBasePicker :: Brick.EventM Types.Name Types.St ()
 openBasePicker = do
   st <- State.get
   let
-    tip = case Git.subjectOf (Types.stMode st) of
-      Git.Ref ref -> ref
-      Git.WorkingTree -> "HEAD"
+    tip = case Git.sourceOf (Types.stMode st) of
+      Git.FromRef ref -> ref
+      Git.FromWorkingTree -> "HEAD"
   commits <- MonadIO.liftIO (Git.recentCommits 300 tip (Types.stRoot st))
   let
     here ref = case Types.stMode st of
       Git.VsRef cur | cur == ref -> "  \8592 current"
       Git.AtRef rr | Git.rrBase rr == ref -> "  \8592 current"
+      Git.AtPull pr _ | Git.prBase pr == ref -> "  \8592 current"
       _ -> ""
     -- sha · how long ago · what points here · subject
     cellsFor (sha, ago, refs, subject) = [sha, ago, refs, subject <> here sha]
-    topRow = case Git.subjectOf (Types.stMode st) of
-      Git.WorkingTree -> ["HEAD", "", "", "uncommitted changes" <> here "HEAD"]
-      Git.Ref ref -> [ref <> "^", "", "", "the tip commit alone" <> here (ref <> "^")]
+    topRow = case Git.sourceOf (Types.stMode st) of
+      Git.FromWorkingTree -> ["HEAD", "", "", "uncommitted changes" <> here "HEAD"]
+      Git.FromRef ref -> [ref <> "^", "", "", "the tip commit alone" <> here (ref <> "^")]
     cells =
       [ topRow
       , ["branch", "", "", "the whole branch \8212 merge-base with the mainline"]
@@ -263,7 +267,7 @@ openRefPicker = do
       _ -> ""
     treeNote = case Git.subjectOf (Types.stMode st) of
       Git.WorkingTree -> "  \8592 current"
-      Git.Ref _ -> ""
+      _ -> ""
     cellsFor (b, ago, sha, subject) = [b, ago, sha, subject <> here b]
     cells = ["working tree", "", "", "the working tree, editable" <> treeNote] : map cellsFor branches
     widths = Widgets.columnWidths [28, 15, 12] cells
@@ -274,6 +278,109 @@ openRefPicker = do
         cells
   State.modify $ \s ->
     s {Types.stPicker = Just (refreshRowPicker (Types.Picker Types.PickRef "" rows [] [] 0 Set.empty))}
+
+openPullPicker :: Brick.EventM Types.Name Types.St ()
+openPullPicker = do
+  st <- State.get
+  known <- PullAction.cachedRepoName st
+  State.modify $ \s ->
+    s {Types.stPicker = Just (pullPickerWith ["loading open pull requests from gh\8230"] (Types.Picker Types.PickPull "" [] [] [] 0 Set.empty))}
+  Jobs.startJob "listing pull requests" (listOpenPulls (Types.stRoot st) (GitHub.repoCached known)) $ \outcome -> do
+    latest <- State.get
+    Monad.when (Types.stEpoch latest == Types.stEpoch st) $ do
+      let
+        rows = case outcome of
+          Left err -> Left ["\10007 " <> err]
+          Right (Left failure) -> Left (pullFailureRows failure)
+          Right (Right (repo, [])) -> Left ["no open pull requests on " <> repo]
+          Right (Right (_, pulls)) -> Right (pullPickerRows latest pulls)
+      case outcome of
+        Right (Right (repo, _)) -> PullAction.rememberRepoName known repo
+        _ -> pure ()
+      case Types.stPicker latest of
+        Just pk | Types.PickPull <- Types.pkMode pk ->
+          State.modify $ \s ->
+            s
+              { Types.stPicker = Just $ case rows of
+                  Left notes -> pullPickerWith notes pk
+                  Right found -> onFirstTarget (replaceRepoRows found pk)
+              }
+        _ -> pure ()
+
+listOpenPulls :: FilePath -> Maybe T.Text -> IO (Either GitHub.GhFailure (T.Text, [GitHub.PullRow]))
+listOpenPulls root cached = do
+  resolved <- maybe (GitHub.resolveRepo root) (pure . Right) cached
+  viewer <- GitHub.viewerLogin root
+  case (resolved, viewer) of
+    (Left failure, _) -> pure (Left failure)
+    (_, Left failure) -> pure (Left failure)
+    (Right repo, Right login) -> fmap (fmap (\pulls -> (repo, pulls))) (GitHub.listPulls root repo login)
+
+pullFailureRows :: GitHub.GhFailure -> [T.Text]
+pullFailureRows failure =
+  case failure of
+    GitHub.GhLoggedOut -> ["\10007 gh is not logged in", "run gh auth login, then :pr again"]
+    GitHub.GhOffline why -> ["\10007 cannot reach GitHub: " <> why, "check the network, then :pr again"]
+    GitHub.GhMissing -> ["\10007 gh is not installed", "install the GitHub CLI and run gh auth login, then :pr again"]
+    _ -> ["\10007 " <> GitHub.failureText failure]
+
+onFirstTarget :: Types.Picker -> Types.Picker
+onFirstTarget pk =
+  case Types.safeIdx (Types.pkTargets pk) (Types.pkSel pk) of
+    Just (target, _)
+      | null target ->
+          pk {Types.pkSel = Maybe.fromMaybe (Types.pkSel pk) (List.findIndex (not . null . fst) (Types.pkTargets pk))}
+    _ -> pk
+
+pullPickerWith :: [T.Text] -> Types.Picker -> Types.Picker
+pullPickerWith notes pk =
+  refreshRowPicker pk {Types.pkAll = map (\note -> pickerRow "" note "") notes}
+
+pullPickerRows :: Types.St -> [GitHub.PullRow] -> [FilePath]
+pullPickerRows st pulls =
+  let
+    openNumber = case Git.subjectOf (Types.stMode st) of
+      Git.Pull pr _ -> Just (Git.prNumber pr)
+      _ -> Nothing
+    cellsFor p =
+      [ Types.tshow (GitHub.rowNumber p)
+      , GitHub.rowAuthor p
+      , (if GitHub.rowDraft p then "draft " else "") <> GitHub.rowTitle p
+      , ageText (GitHub.rowAgeSeconds p)
+      , checksGlyph (GitHub.rowChecks p)
+      , reviewWord (GitHub.rowReview p) <> (if openNumber == Just (GitHub.rowNumber p) then "  \8592 open" else "")
+      ]
+    header = ["#", "author", "title", "age", "ci", "review"]
+    cells = map cellsFor pulls
+    widths = Widgets.columnWidths [6, 14, 48, 5, 3] (header : cells)
+    row p cs = pickerRow (Types.tshow (GitHub.rowNumber p)) (Widgets.columnRow widths cs) (T.unwords cs)
+  in
+    pickerRow "" (Widgets.columnRow widths header) "" : zipWith row pulls cells
+
+ageText :: Int -> T.Text
+ageText secs
+  | secs < 60 = Types.tshow secs <> "s"
+  | secs < 3600 = Types.tshow (secs `div` 60) <> "m"
+  | secs < 86400 = Types.tshow (secs `div` 3600) <> "h"
+  | secs < 86400 * 60 = Types.tshow (secs `div` 86400) <> "d"
+  | otherwise = Types.tshow (secs `div` (86400 * 30)) <> "mo"
+
+checksGlyph :: GitHub.Checks -> T.Text
+checksGlyph checks =
+  case checks of
+    GitHub.ChecksPass -> "\10003"
+    GitHub.ChecksFail -> "\10007"
+    GitHub.ChecksRunning -> "\9675"
+    GitHub.ChecksNone -> "\8211"
+
+reviewWord :: GitHub.ReviewState -> T.Text
+reviewWord review =
+  case review of
+    GitHub.NotReviewed -> "\8211"
+    GitHub.Commented -> "commented"
+    GitHub.Approved -> "\10003 approved"
+    GitHub.ChangesRequested -> "changes requested"
+    GitHub.ReviewRequested -> "requested"
 
 openCommitPicker :: Brick.EventM Types.Name Types.St ()
 openCommitPicker = do
@@ -420,12 +527,12 @@ grepRepo mode root query =
     then pure ([], [])
     else do
       let
-        treeArgs = case Git.subjectOf mode of
-          Git.WorkingTree -> []
-          Git.Ref tip -> [T.unpack tip]
-        prefix = case Git.subjectOf mode of
-          Git.WorkingTree -> ""
-          Git.Ref tip -> tip <> ":"
+        treeArgs = case Git.sourceOf mode of
+          Git.FromWorkingTree -> []
+          Git.FromRef tip -> [T.unpack tip]
+        prefix = case Git.sourceOf mode of
+          Git.FromWorkingTree -> ""
+          Git.FromRef tip -> tip <> ":"
       (_, out, _) <-
         Process.readProcessWithExitCode
           "git"
@@ -484,9 +591,12 @@ handlePickerKey :: V.Event -> Types.Picker -> Brick.EventM Types.Name Types.St (
 handlePickerKey ev pk =
   case ev of
     V.EvKey V.KEsc [] -> State.modify (\s -> s {Types.stPicker = Nothing})
-    V.EvKey V.KEnter [] -> do
-      State.modify (\s -> s {Types.stPicker = Nothing})
-      Monad.forM_ (Types.safeIdx (Types.pkTargets pk) (Types.pkSel pk)) (pickerChoose pk)
+    V.EvKey V.KEnter [] ->
+      case Types.safeIdx (Types.pkTargets pk) (Types.pkSel pk) of
+        Just (target, _) | null target -> pure ()
+        chosen -> do
+          State.modify (\s -> s {Types.stPicker = Nothing})
+          Monad.forM_ chosen (pickerChoose pk)
     V.EvKey V.KUp [] -> pickerMove pk (-1)
     V.EvKey (V.KChar 'p') [V.MCtrl] -> pickerMove pk (-1)
     V.EvKey V.KDown [] -> pickerMove pk 1
@@ -512,6 +622,7 @@ pickerRetype pk q =
       (matches, targets) <- MonadIO.liftIO (grepRepo (Types.effectiveMode st) (Types.stRoot st) q)
       State.modify $ \s ->
         s {Types.stPicker = Just pk {Types.pkInput = q, Types.pkMatches = matches, Types.pkTargets = targets, Types.pkSel = 0}}
+    Types.PickPull -> State.modify (\s -> s {Types.stPicker = Just (onFirstTarget (refreshRowPicker pk {Types.pkInput = q}))})
     _ -> State.modify (\s -> s {Types.stPicker = Just (refreshRowPicker pk {Types.pkInput = q})})
 
 pickerChoose :: Types.Picker -> (FilePath, Int) -> Brick.EventM Types.Name Types.St ()
@@ -523,6 +634,7 @@ pickerChoose pk (target, line) =
     Types.PickCommit -> commitChoice pk (T.pack target)
     Types.PickParent tip -> Settings.setMode (Git.AtRef (Git.RefReview {Git.rrTip = tip, Git.rrBase = T.pack target}))
     Types.PickRepo -> Repo.switchRepo target
+    Types.PickPull -> Monad.forM_ (GitHub.pullNumber (T.pack target)) PullAction.openPull
     _
       | line == 0 -> Open.openFilePath (T.pack target)
       | otherwise -> do

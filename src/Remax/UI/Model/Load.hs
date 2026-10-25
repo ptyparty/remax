@@ -68,13 +68,13 @@ loadOne ::
   FilePath ->
   IO (Maybe Types.FileView)
 loadOne cfg hls mode root path =
-  case Git.subjectOf mode of
-    Git.WorkingTree -> do
+  case Git.sourceOf mode of
+    Git.FromWorkingTree -> do
       present <- Directory.doesFileExist (root </> path)
       if present
         then loadPresent cfg hls mode root path
         else loadRemoved cfg hls mode root path
-    Git.Ref tip -> loadAtRef cfg hls mode root tip path
+    Git.FromRef tip -> loadAtRef cfg hls mode root tip path
 
 loadAtRef :: Config.Config -> TS.HighlighterTable -> Git.ReviewMode -> FilePath -> T.Text -> FilePath -> IO (Maybe Types.FileView)
 loadAtRef cfg hls mode root tip path = do
@@ -337,9 +337,9 @@ data ReloadPlan = ReloadPlan
 reloadFromDisk :: FilePath -> Brick.EventM Types.Name Types.St ()
 reloadFromDisk rel = do
   st <- State.get
-  case Git.subjectOf (Types.effectiveMode st) of
-    Git.Ref _ -> pure ()
-    Git.WorkingTree -> reloadWorking rel st
+  case Git.sourceOf (Types.effectiveMode st) of
+    Git.FromRef _ -> pure ()
+    Git.FromWorkingTree -> reloadWorking rel st
 
 reloadWorking :: FilePath -> Types.St -> Brick.EventM Types.Name Types.St ()
 reloadWorking rel st =
@@ -448,9 +448,9 @@ installReload plan i current rebuilt newRow = do
 pollSubject :: Brick.EventM Types.Name Types.St ()
 pollSubject = do
   st <- State.get
-  case Git.subjectOf (Types.effectiveMode st) of
-    Git.Ref tip -> pollRef st tip
-    Git.WorkingTree -> Monad.when (Types.stWatchMode st == Types.PollingWatch) (pollCurrentFile st)
+  case Git.sourceOf (Types.effectiveMode st) of
+    Git.FromRef tip -> pollRef st tip
+    Git.FromWorkingTree -> Monad.when (Types.stWatchMode st == Types.PollingWatch) (pollCurrentFile st)
 
 refPollSeconds :: Double
 refPollSeconds = 2
@@ -527,6 +527,7 @@ data Refresh = Refresh
   { rfRebase :: Maybe Git.RebaseStatus
   , rfBranch :: Maybe T.Text
   , rfHead :: Maybe (T.Text, T.Text)
+  , rfBaseAt :: Maybe T.Text
   , rfResults :: [Refreshed]
   }
 
@@ -559,10 +560,13 @@ refreshWork st = do
   let
     mode = Types.rebaseEffMode rebaseNow (Types.stMode st)
   (branchNow, headNow) <- Git.subjectPlace mode root
+  baseAt <- case Git.subjectOf mode of
+    Git.Pull pr _ -> fmap (fmap fst) (Git.commitAt root (Git.prBase pr))
+    _ -> pure Nothing
   let
-    tipSettled = case Git.subjectOf mode of
-      Git.Ref _ -> headNow == Types.stHead st && mode == Types.stMode st
-      Git.WorkingTree -> False
+    tipSettled = case Git.sourceOf mode of
+      Git.FromRef _ -> headNow == Types.stHead st && baseAt == Types.stBaseAt st && mode == Types.stMode st
+      Git.FromWorkingTree -> False
     guarded name = do
       got <-
         if tipSettled && Map.member name existing
@@ -578,16 +582,16 @@ refreshWork st = do
       (Git.reviewFiles mode (Config.cfgUntracked (Types.stConfig st)) root)
   refreshed <- Jobs.forBounded 8 guarded names
   extras <- Monad.forM (filter (`notElem` names) (Set.toList (Types.stOpened st))) (refreshOpened st mode existing)
-  pure (Refresh rebaseNow branchNow headNow (refreshed ++ extras))
+  pure (Refresh rebaseNow branchNow headNow baseAt (refreshed ++ extras))
 
 refreshOne :: Types.St -> Git.ReviewMode -> Map.Map FilePath Types.FileView -> FilePath -> IO Refreshed
 refreshOne st mode existing name =
   case Map.lookup name existing of
     Nothing -> reloadOne st mode name
     Just fv ->
-      case Git.subjectOf mode of
-        Git.WorkingTree -> refreshWorking st mode name fv
-        Git.Ref tip -> refreshAtRef st mode tip name fv
+      case Git.sourceOf mode of
+        Git.FromWorkingTree -> refreshWorking st mode name fv
+        Git.FromRef tip -> refreshAtRef st mode tip name fv
 
 reloadOne :: Types.St -> Git.ReviewMode -> FilePath -> IO Refreshed
 reloadOne st mode name =
@@ -669,15 +673,16 @@ installRefresh before refresh = do
       { Types.stRebase = rfRebase refresh
       , Types.stBranch = rfBranch refresh
       , Types.stHead = rfHead refresh
+      , Types.stBaseAt = rfBaseAt refresh
       }
   latest <- State.get
   let
     current = Map.fromList (map (\fv -> (Types.fvPath fv, fv)) (Types.stFiles latest))
-    subject = Git.subjectOf (Types.effectiveMode latest)
+    source = Git.sourceOf (Types.effectiveMode latest)
     resolve r = case r of
       Dropped -> Nothing
       Unchanged path -> Map.lookup path current
-      Replaced fv -> Just (Verdict.recountIn latest (mergeLive subject current fv))
+      Replaced fv -> Just (Verdict.recountIn latest (mergeLive source current fv))
     remaining = Maybe.mapMaybe resolve (rfResults refresh)
   Monad.forM_ remaining (MonadIO.liftIO . Types.stWatch latest . Types.fileDir (Types.stRoot latest) . Types.fvPath)
   Monad.when gitMoved (MonadIO.liftIO (Watch.watchTracked (Types.stWatch latest) (Types.stRoot latest)))
@@ -687,17 +692,17 @@ installRefresh before refresh = do
   Monad.when (Types.stWalk settled == Types.WalkTour && not (null (Types.stTour settled)) && null (Tour.tourOrder settled)) $
     State.modify (\s -> s {Types.stWalk = Types.WalkPending, Types.stMsg = "the tour's hunks left the view \8212 walking pending hunks"})
 
-mergeLive :: Git.Subject -> Map.Map FilePath Types.FileView -> Types.FileView -> Types.FileView
-mergeLive subject current fv =
+mergeLive :: Git.FileSource -> Map.Map FilePath Types.FileView -> Types.FileView -> Types.FileView
+mergeLive source current fv =
   case Map.lookup (Types.fvPath fv) current of
     Nothing -> fv
     Just live
       | Modal.bufferLines (Types.fvEd live) == Modal.bufferLines (Types.fvEd fv) ->
           fv {Types.fvEd = Types.fvEd live, Types.fvOrigin = Types.fvOrigin live}
       | otherwise ->
-          case subject of
-            Git.WorkingTree -> live {Types.fvBase = Types.fvBase fv, Types.fvStale = True}
-            Git.Ref _ -> fv {Types.fvEd = cursorCarried live fv, Types.fvOrigin = Types.fvOrigin live}
+          case source of
+            Git.FromWorkingTree -> live {Types.fvBase = Types.fvBase fv, Types.fvStale = True}
+            Git.FromRef _ -> fv {Types.fvEd = cursorCarried live fv, Types.fvOrigin = Types.fvOrigin live}
 
 cursorCarried :: Types.FileView -> Types.FileView -> Modal.EdState
 cursorCarried live fresh = placeCursor (Modal.cursorRC (Types.fvEd live)) (Types.fvEd fresh)

@@ -148,11 +148,11 @@ setMode mode = do
 installMode :: Types.St -> Git.ReviewMode -> Brick.EventM Types.Name Types.St ()
 installMode st mode = do
   let
-    subject = Git.subjectOf mode
-    changedSubject = subject /= Git.subjectOf (Types.stMode st)
-    treeMode = case subject of
+    source = Git.sourceOf mode
+    changedSubject = source /= Git.sourceOf (Types.stMode st) || Git.subjectText mode /= Git.subjectText (Types.stMode st)
+    treeMode = case Git.subjectOf mode of
       Git.WorkingTree -> mode
-      Git.Ref _ -> Types.stTreeMode st
+      _ -> Types.stTreeMode st
   MonadIO.liftIO (Store.finishPass (Types.stConn st) (Types.stPassId st))
   newPass <- MonadIO.liftIO (Store.beginPass (Types.stConn st) (Types.repoText st) (Git.modeLabel mode))
   MonadIO.liftIO (Tour.recordView (Types.stConn st) (Types.stRoot st) (Types.rebaseEffMode (Types.stRebase st) mode))
@@ -185,15 +185,13 @@ setBaseRef base = do
   ok <- MonadIO.liftIO (Git.refExists (Types.stRoot st) base)
   if not ok
     then Types.setMsg ("no such ref: " <> base)
-    else setMode $ case Types.stMode st of
-      Git.AtRef rr -> Git.AtRef rr {Git.rrBase = base}
-      _ -> Git.VsRef base
+    else setMode (Git.withBase base (Types.stMode st))
 
 subjectTip :: Types.St -> T.Text
 subjectTip st =
-  case Git.subjectOf (Types.stMode st) of
-    Git.Ref tip -> tip
-    Git.WorkingTree -> "HEAD"
+  case Git.sourceOf (Types.stMode st) of
+    Git.FromRef tip -> tip
+    Git.FromWorkingTree -> "HEAD"
 
 -- The whole-branch view: base = where this branch forked from the
 -- mainline. Purely a diff base — no rebase involved.

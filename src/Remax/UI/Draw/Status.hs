@@ -10,6 +10,7 @@ import Brick qualified as Brick
 import Data.List qualified as List
 import Data.Text qualified as T
 import Remax.Config qualified as Config
+import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
 import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Ink qualified as Ink
@@ -105,13 +106,20 @@ declSeg st =
 -- under a leader in vi and under C-c in emacs, and emacs has no
 -- space leader at all — so it has no space menu and no ␣? either,
 -- and reaches the sheet the way it reaches every other command.
-verbHint :: Config.KeyMode -> T.Text
-verbHint keys =
-  case keys of
-    Config.KeysVi -> "\9251\9166 accept · \9251! flag · \9251q question · \9251? keys "
-    Config.KeysEmacs ->
-      "C-c \9166 accept · C-c ! flag · C-c ? question · M-x help "
-    Config.KeysHelix -> "\9166 accept · ! flag · ? question · \9251 menu · \9251? keys "
+data Verbs = AllVerbs | NoFlag
+
+verbHint :: Verbs -> Config.KeyMode -> T.Text
+verbHint verbs keys =
+  let
+    flag text = case verbs of
+      AllVerbs -> text
+      NoFlag -> ""
+  in
+    case keys of
+      Config.KeysVi -> "\9251\9166 accept · " <> flag "\9251! flag · " <> "\9251q question · \9251? keys "
+      Config.KeysEmacs ->
+        "C-c \9166 accept · " <> flag "C-c ! flag · " <> "C-c ? question · M-x help "
+      Config.KeysHelix -> "\9166 accept · " <> flag "! flag · " <> "? question · \9251 menu · \9251? keys "
 
 statusHint :: Types.St -> T.Text
 statusHint st =
@@ -122,7 +130,13 @@ statusHint st =
       Nothing ->
         Types.promptKeys keys <> " command · \9251? keys · " <> Types.quitKeys keys <> " quit "
       Just fv ->
-        (if Types.fvStale fv then "hunks refresh on Esc · " else "") <> verbHint keys
+        (if Types.fvStale fv then "hunks refresh on Esc · " else "") <> verbHint (verbsFor st) keys
+
+verbsFor :: Types.St -> Verbs
+verbsFor st =
+  case Git.subjectOf (Types.effectiveMode st) of
+    Git.Pull _ Git.ReadOnly -> NoFlag
+    _ -> AllVerbs
 
 meterSeg :: Types.St -> Brick.Widget Types.Name
 meterSeg st =

@@ -67,6 +67,7 @@ pickerTitle mode =
     Types.PickParent _ -> "parent"
     Types.PickRepo -> "repo"
     Types.PickGrep -> "grep"
+    Types.PickPull -> "open pull requests"
 
 pickerHint :: Types.PickerMode -> T.Text
 pickerHint mode =
@@ -77,4 +78,5 @@ pickerHint mode =
     Types.PickCommit -> "\8593\8595 move · \9166 opens a ref's history, or reviews a commit against its parent · esc closes"
     Types.PickParent _ -> "\8593\8595 move · \9166 review against this parent · esc closes"
     Types.PickRepo -> "\8593\8595 move · \9166 switch to this repository · esc closes"
+    Types.PickPull -> "\9166 open in review mode · Esc close · :pr N skips the picker"
     _ -> "\8593\8595 move · \9166 open · esc closes"

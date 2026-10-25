@@ -18,11 +18,13 @@ import Data.Text qualified as T
 import Data.Text.Read qualified as TR
 import Remax.Config qualified as Config
 import Remax.Git qualified as Git
+import Remax.GitHub qualified as GitHub
 import Remax.UI.Action.Conversation qualified as Conversation
 import Remax.UI.Action.Editor qualified as Editor
 import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Picker qualified as PickerAction
+import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Action.Rebase qualified as Rebase
 import Remax.UI.Action.Repo qualified as Repo
 import Remax.UI.Action.Settings qualified as Settings
@@ -43,6 +45,7 @@ data ArgKind
   | ArgDir
   | ArgText
   | ArgSet
+  | ArgPull
 
 commandTable :: [(T.Text, ArgKind, T.Text)]
 commandTable =
@@ -70,6 +73,7 @@ commandTable =
   , ("edit", ArgPath, "$EDITOR at the cursor (or on PATH)")
   , ("set", ArgSet, "change a setting (live + persisted)")
   , ("checkout", NoArg, "switch branches (picker)")
+  , ("pr", ArgPull, "open pull request N read-only; bare :pr or :pr list picks one")
   , ("q", NoArg, "quit")
   ]
 
@@ -93,6 +97,7 @@ cmdCandidates st input =
       ["set", "keys"] -> prefixed Config.keyModeNames
       ["set", "note-on-flag"] -> prefixed ["0", "1"]
       ["resolve"] -> prefixed ["all"]
+      ["pr"] -> prefixed ["list"]
       [cmd] -> case argKindOf cmd of
         Just ArgRef -> prefixed ("branch" : Types.stCmdRefs st)
         Just ArgMode -> prefixed ["head", "unstaged", "untracked"]
@@ -175,6 +180,9 @@ runCommand input =
     ["base"] -> PickerAction.openBasePicker
     ["checkout"] -> PickerAction.openBranchPicker
     ["checkout", branch] -> PickerAction.applyCheckout branch
+    ["pr"] -> barePullCommand
+    ["pr", "list"] -> PickerAction.openPullPicker
+    ["pr", n] | Just k <- GitHub.pullNumber n -> PullAction.openPull k
     ["base", "branch"] -> Settings.setBaseBranch
     ["branch"] -> Settings.setBaseBranch
     ["base", ref] -> Settings.setBaseRef ref
@@ -222,6 +230,13 @@ runCommand input =
     ["edit", path] -> editPath path
     [tok] | Just n <- lineAddress tok -> Nav.gotoLine n
     _ -> Types.setMsg ("unknown command: " <> input)
+
+barePullCommand :: Brick.EventM Types.Name Types.St ()
+barePullCommand = do
+  st <- State.get
+  case Git.subjectOf (Types.stMode st) of
+    Git.Pull pr _ -> Types.setMsg ("PR #" <> Types.tshow (Git.prNumber pr) <> " has no PR view yet \8212 :pr list picks a pull request")
+    _ -> PickerAction.openPullPicker
 
 setWalkNamed :: T.Text -> Brick.EventM Types.Name Types.St ()
 setWalkNamed which =
