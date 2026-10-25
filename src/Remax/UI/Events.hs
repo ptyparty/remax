@@ -210,8 +210,7 @@ handleEvent brickEvent =
       State.modify (\s -> s {Types.stSettling = Map.mapMaybe settleStep (Types.stSettling s)})
     Brick.AppEvent (Types.JobDone label finish) -> do
       State.modify (\s -> s {Types.stBusy = List.delete label (Types.stBusy s)})
-      finish
-      PickerAction.refreshRangePicker
+      PickerAction.refreshRangePickerAfter finish
     Brick.MouseDown name button _ _ -> handleWheel (wheelTargetOf name) button
     Brick.MouseUp {} -> pure ()
     Brick.VtyEvent (V.EvMouseDown col _ button _) -> do
