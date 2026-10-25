@@ -224,9 +224,14 @@ acceptSelection = do
 applyVerdict :: Store.Verdict -> Brick.EventM Types.Name Types.St Bool
 applyVerdict v = do
   st <- State.get
-  case View.activeSelectionRows (Types.fvEd (Types.currentFile st)) of
-    Just _ -> applyVerdictLines v
-    Nothing -> applyVerdictHunk v
+  case (v, Git.subjectOf (Types.effectiveMode st)) of
+    (Store.Flagged, Git.Pull _ Git.ReadOnly) -> do
+      Types.setMsg "read-only: @ drafts a comment"
+      pure False
+    _ ->
+      case View.activeSelectionRows (Types.fvEd (Types.currentFile st)) of
+        Just _ -> applyVerdictLines v
+        Nothing -> applyVerdictHunk v
 
 -- The advance a mark would have made, released when the note popup
 -- closes.

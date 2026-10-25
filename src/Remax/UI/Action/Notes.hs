@@ -24,7 +24,6 @@ import Data.Text qualified as T
 import Graphics.Vty qualified as V
 import Remax.Config qualified as Config
 import Remax.DiffModel qualified as DiffModel
-import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
 import Remax.UI.Action.Conversation qualified as Conversation
@@ -45,12 +44,6 @@ import Remax.Zipper qualified as Z
 markThenNote :: Store.Verdict -> Brick.EventM Types.Name Types.St ()
 markThenNote v = do
   preSt <- State.get
-  case (v, Git.subjectOf (Types.effectiveMode preSt)) of
-    (Store.Flagged, Git.Pull _ Git.ReadOnly) -> Types.setMsg "read-only: @ drafts a comment"
-    _ -> markAndNote v preSt
-
-markAndNote :: Store.Verdict -> Types.St -> Brick.EventM Types.Name Types.St ()
-markAndNote v preSt = do
   let
     noting = Config.cfgNoteOnFlag (Types.stConfig preSt)
   -- with the note popup coming, the post-mark jump waits until the
