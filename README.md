@@ -327,7 +327,7 @@ note popup keeps its modal keys in either keymap.
 
 | command | action |
 |---|---|
-| `:base` | pick the base out of the history: a picker over this branch's own line of development (`--first-parent`: a merge is one row, and what it brought in stays out) in aligned columns — short sha, how long ago, what points there (`HEAD -> main`, `tag: v1.0`), subject — with `HEAD` and `branch` on top. Type to filter on any of it, including a name too long to fit on screen, `⏎` reviews the working tree against the row you land on, and whatever you're reviewing against now is marked `← current`. Any commit reachable from HEAD is a legal base, so `:base SHA` still names one the picker leaves out |
+| `:base` | pick the base out of the history: a picker over this branch's own line of development (`--first-parent`: a merge is one row, and what it brought in stays out) in aligned columns — short sha, how long ago, what points there (`HEAD -> main`, `tag: v1.0`), subject — with `HEAD` and `branch` on top. Type to filter on any of it, including a name too long to fit on screen, `⏎` reviews the working tree against the row you land on, and whatever you're reviewing against now is marked `← current`. Any commit reachable from HEAD is a legal base, so `:base SHA` still names one the picker leaves out. In a pull request it lists the pull request's history instead; see [Reviewing a pull request](#reviewing-a-pull-request) |
 | `:base REF` | review the working tree against REF (any commit-ish) |
 | `:base branch` / `:branch` | against the merge-base with the mainline — the whole branch diff, fixes land at the tip |
 | `:ref` | pick a branch to review without checking it out: the session reads that ref's files instead of the working tree and refuses every edit, so an agent can keep working on whatever is checked out. The branch's own merge-base with the mainline is the base until `:base` says otherwise, and the view follows the branch as commits land on it. Verdicts record the ref and the tip they were made at, and `remax list` reports both so the agent knows where to look. The first row, `working tree`, is the way back; so is `:mode tree`, and both restore the base you had before |
@@ -355,7 +355,7 @@ note popup keeps its modal keys in either keymap.
 | `:N` | jump to line N of the current file, clamped to its ends — the cursor moves, the hunk under review and the `'` anchor don't |
 | `:edit [PATH]` | suspend into `$EDITOR` at the cursor (or on PATH) |
 | `:checkout` | switch branches — a picker over local branches in the same columns (branch, how long ago, the tip you'd land on, subject), most recently committed first with `← current` marked; `⏎` checks out. `:checkout NAME` skips the picker. Refused mid-rebase |
-| `:pr` | open a pull request of the repository this checkout belongs to, read-only — a picker over its open pull requests (number, author, title, age, CI, your review state, a `draft` mark, and `← open` on the one under review); `⏎` opens the row. `:pr N` skips the picker; `:pr list` opens it while a pull request is already open. See [Reviewing a pull request](#reviewing-a-pull-request) |
+| `:pr` | open a pull request of the repository this checkout belongs to, read-only — a picker over its open pull requests (number, author, title, age, CI, your review state, a `draft` mark, and `← open` on the one under review); `⏎` opens the row. `:pr N` skips the picker; `:pr list` opens it while a pull request is already open, and `:pr commits` walks its commits. See [Reviewing a pull request](#reviewing-a-pull-request) |
 | `:q` | quit |
 
 The command line completes itself: a bare `:` lists every command with
@@ -422,6 +422,25 @@ and re-lists the files. The header shows `↻ 4s` and the status line
 `↻ synced 4s`, the age of the last successful poll. A failing poll turns
 both to `⚠ stale 2m`, and the status line names the reason. Each list
 reads every page.
+
+`:base` in a pull request picks any point of its history to review the
+head against. The picker, titled `review head <sha> against`, lists the
+pull request's base, each of its commits as `commit i/n · subject`, each
+head a force-push replaced, and `my last review · <event>` at the commit
+your newest review was made on, oldest first with `← current` on the row
+in use. `⏎` reviews the head against the row, so picking your last review
+shows only what changed since. Verdicts are content-keyed, so the ones you
+gave earlier stay. A replaced head is fetched by sha into
+`refs/remax/pull/N/pushed/<sha>` when you pick it, which keeps it after
+GitHub lets it go; the row says when GitHub no longer has it, and
+comments on its lines will post as PR-level comments. A tour stays with
+the pull request: a range that drops its stops walks pending hunks and
+says so.
+
+`:pr commits` walks the pull request one commit at a time, each reviewed
+read-only against its parent. The git bar shows `commit 3/7`, and `]` past
+the last hunk of a commit moves to the next one, `[` before the first to
+the previous. `:base` returns to a range.
 
 ## Working with agents
 

@@ -7,6 +7,11 @@ module Remax.UI.Core.Types
   , REvent (..)
   , Prompt (..)
   , PickerMode (..)
+  , RangePicker (..)
+  , RangeFacts (..)
+  , RangeCheck (..)
+  , CommitWalk (..)
+  , pullCommitWalk
   , Picker (..)
   , Selector (..)
   , NotePopup (..)
@@ -62,6 +67,7 @@ import Control.Concurrent qualified as Concurrent
 import Control.Monad.State qualified as State
 import Data.IORef qualified as IORef
 import Data.Int qualified as DataInt
+import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -111,7 +117,26 @@ data Prompt = SearchPrompt T.Text | CmdPrompt T.Text
 -- The finder overlay: fuzzy file picking, or project-wide grep. Each
 -- display row is aligned with a jump target (file, and a 1-based line
 -- for grep hits; 0 = just open the file).
-data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRef | PickCommit | PickParent T.Text | PickRepo | PickPull
+data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRef | PickCommit | PickParent T.Text | PickRepo | PickPull | PickRange RangePicker
+
+data RangePicker = RangePicker
+  { rpPull :: Git.PullRequest
+  , rpHead :: T.Text
+  , rpBase :: Maybe T.Text
+  , rpCurrent :: Maybe T.Text
+  , rpNow :: Clock.UTCTime
+  , rpFacts :: RangeFacts
+  }
+
+data RangeFacts
+  = RangeChecking
+  | RangeChecked RangeCheck
+  | RangeCheckFailed T.Text
+
+data RangeCheck = RangeCheck
+  { rcViewer :: T.Text
+  , rcPushed :: Map.Map T.Text GitHub.PushedHead
+  }
 
 data Picker = Picker
   { pkMode :: PickerMode
@@ -401,6 +426,23 @@ noPullPoll =
     , ppFailure = Nothing
     , ppNow = 0
     }
+
+data CommitWalk = CommitWalk
+  { cwPull :: Git.PullRequest
+  , cwCommits :: [PullPoll.PullCommit]
+  , cwIndex :: Int
+  }
+
+pullCommitWalk :: St -> Maybe CommitWalk
+pullCommitWalk st =
+  case (stMode st, ppSnapshot (stPullPoll st)) of
+    (Git.AtPull pr Git.ReadOnly, Just snap)
+      | PullPoll.snapshotPull snap == Git.prNumber pr && Git.prBase pr == Git.prTip pr <> "^" -> do
+          let
+            commits = PullPoll.snapshotCommits snap
+          i <- List.findIndex ((== Git.prTip pr) . PullPoll.pullCommitSha) commits
+          Just CommitWalk {cwPull = pr, cwCommits = commits, cwIndex = i}
+    _ -> Nothing
 
 repoText :: St -> T.Text
 repoText = T.pack . stRoot

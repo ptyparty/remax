@@ -80,10 +80,18 @@ pullBar st pr editing =
       Just GitHub.ChecksRunning -> Brick.txt "\9675 checks"
       Just GitHub.ChecksNone -> Brick.withAttr Attrs.hintAttr (Brick.txt "no checks")
       Nothing -> Brick.withAttr Attrs.hintAttr (Brick.txt "checks \8230")
+    walkSeg = case Types.pullCommitWalk st of
+      Just walk ->
+        dot
+          <+> Brick.withAttr
+            Attrs.headerAttr
+            (Brick.txt ("commit " <> Types.tshow (Types.cwIndex walk + 1) <> "/" <> Types.tshow (length (Types.cwCommits walk))))
+      Nothing -> Brick.emptyWidget
   in
     Brick.withDefAttr Attrs.headerRebaseAttr . Brick.padRight Brick.Max $
       Brick.hBox
         [ Brick.withAttr Attrs.headerFileAttr (Brick.txt (" #" <> Types.tshow (Git.prNumber pr) <> " " <> Git.prHeadBranch pr <> "\8594" <> Git.prBaseBranch pr))
+        , walkSeg
         , dot
         , Brick.withAttr Attrs.rebaseShaAttr (Brick.txt (maybe "?" fst (Types.stHead st) <> "\8230" <> Maybe.fromMaybe "?" (Types.stBaseAt st)))
         , dot

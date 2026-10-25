@@ -7,6 +7,7 @@ module Remax.Git
   , Editing (..)
   , pullHeadRef
   , pullBaseRef
+  , pushedHeadRef
   , withBase
   , Subject (..)
   , subjectOf
@@ -125,6 +126,9 @@ pullHeadRef n = "refs/remax/pull/" <> T.pack (show n) <> "/head"
 
 pullBaseRef :: Int -> T.Text
 pullBaseRef n = "refs/remax/pull/" <> T.pack (show n) <> "/base"
+
+pushedHeadRef :: Int -> T.Text -> T.Text
+pushedHeadRef n sha = "refs/remax/pull/" <> T.pack (show n) <> "/pushed/" <> sha
 
 withBase :: T.Text -> ReviewMode -> ReviewMode
 withBase base mode =

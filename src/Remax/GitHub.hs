@@ -28,6 +28,11 @@ module Remax.GitHub
   , tsvRows
   , RefsMove (..)
   , refreshPullRefs
+  , Kept (..)
+  , OnGitHub (..)
+  , PushedHead (..)
+  , pushedHeadState
+  , keepPushedHead
   ) where
 
 import Control.Exception qualified as Exception
@@ -441,11 +446,7 @@ fetchPull root remote n baseBranch = do
     numText = T.pack (show n)
     headRef = Git.pullHeadRef n
     baseRef = Git.pullBaseRef n
-    git args = do
-      (code, out, err) <- Process.readProcessWithExitCode "git" (["-C", root] ++ map T.unpack args) ""
-      pure $ case code of
-        Exit.ExitSuccess -> Right (T.strip (T.pack out))
-        Exit.ExitFailure _ -> Left (firstLine (T.strip (T.pack err)))
+    git = gitIn root
   fetched <-
     git
       [ "fetch"
@@ -464,6 +465,13 @@ fetchPull root remote n baseBranch = do
         Left e -> pure (Left e)
         Right sha -> fmap (fmap (const ())) (git ["update-ref", baseRef, sha])
 
+gitIn :: FilePath -> [T.Text] -> IO (Either T.Text T.Text)
+gitIn root args = do
+  (code, out, err) <- Process.readProcessWithExitCode "git" (["-C", root] ++ map T.unpack args) ""
+  pure $ case code of
+    Exit.ExitSuccess -> Right (T.strip (T.pack out))
+    Exit.ExitFailure _ -> Left (firstLine (T.strip (T.pack err)))
+
 checkoutPull :: FilePath -> T.Text -> Int -> IO (Either GhFailure ())
 checkoutPull root repo n = fmap (fmap (const ())) (runGh root ["pr", "checkout", T.pack (show n), "-R", repo])
 
@@ -480,3 +488,46 @@ refreshPullRefs root repo n baseBranch headSha = do
       pure $ case fetched of
         Left e -> Left (classify e)
         Right () -> Right RefsFetched
+
+data Kept = KeptHere | NotKept
+  deriving (Eq, Show)
+
+data OnGitHub = StillOnGitHub | GoneFromGitHub
+  deriving (Eq, Show)
+
+data PushedHead = PushedHead
+  { pushedKept :: Kept
+  , pushedOnGitHub :: OnGitHub
+  }
+  deriving (Eq, Show)
+
+pushedHeadState :: FilePath -> T.Text -> T.Text -> IO (Either GhFailure PushedHead)
+pushedHeadState root repo sha = do
+  local <- Git.refExists root sha
+  remote <- runGhOutput root ["api", "repos/" <> repo <> "/commits/" <> sha, "--jq", ".sha"]
+  let
+    kept = if local then KeptHere else NotKept
+    gone = PushedHead {pushedKept = kept, pushedOnGitHub = GoneFromGitHub}
+  pure $ case remote of
+    Left failure -> Left failure
+    Right (Exit.ExitSuccess, _, _) -> Right PushedHead {pushedKept = kept, pushedOnGitHub = StillOnGitHub}
+    Right (Exit.ExitFailure _, _, err)
+      | "no commit found" `T.isInfixOf` T.toLower err -> Right gone
+      | otherwise -> case classify (T.strip err) of
+          GhNotFound _ -> Right gone
+          failure -> Left failure
+
+keepPushedHead :: FilePath -> T.Text -> Int -> T.Text -> IO (Either GhFailure T.Text)
+keepPushedHead root repo n sha = do
+  local <- Git.refExists root sha
+  let
+    ref = Git.pushedHeadRef n sha
+  kept <-
+    if local
+      then gitIn root ["update-ref", ref, sha]
+      else do
+        remote <- remoteFor root repo
+        gitIn root ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", remote, "+" <> sha <> ":" <> ref]
+  pure $ case kept of
+    Left e -> Left (classify e)
+    Right _ -> Right ref

@@ -5,6 +5,7 @@ module Remax.UI.Action.Picker
   ( reopenLastSelector
   , openBufferPicker
   , openBasePicker
+  , refreshRangePicker
   , openRepoPicker
   , openBranchPicker
   , openRefPicker
@@ -24,13 +25,18 @@ import Control.Monad.State qualified as State
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
+import Data.Ord qualified as Ord
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Read qualified as TR
+import Data.Time.Clock qualified as Clock
+import Data.Time.Format qualified as TimeFormat
+import Data.Time.Format.ISO8601 qualified as ISO8601
 import Graphics.Vty qualified as V
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.Modal qualified as Modal
+import Remax.PullPoll qualified as PullPoll
 import Remax.UI.Action.Fuzzy qualified as Fuzzy
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Pull qualified as PullAction
@@ -88,6 +94,12 @@ splitPickerRow row =
 openBasePicker :: Brick.EventM Types.Name Types.St ()
 openBasePicker = do
   st <- State.get
+  case Types.stMode st of
+    Git.AtPull pr Git.ReadOnly -> openRangePicker pr
+    _ -> openHistoryPicker st
+
+openHistoryPicker :: Types.St -> Brick.EventM Types.Name Types.St ()
+openHistoryPicker st = do
   let
     tip = case Git.sourceOf (Types.stMode st) of
       Git.FromRef ref -> ref
@@ -117,6 +129,233 @@ openBasePicker = do
         cells
   State.modify $ \s ->
     s {Types.stPicker = Just (refreshRowPicker (Types.Picker Types.PickBase "" rows [] [] 0 Set.empty))}
+
+openRangePicker :: Git.PullRequest -> Brick.EventM Types.Name Types.St ()
+openRangePicker pr = do
+  st <- State.get
+  let
+    root = Types.stRoot st
+    n = Git.prNumber pr
+    epoch = Types.stEpoch st
+  headSha <- MonadIO.liftIO (Git.resolveShort root (Git.pullHeadRef n))
+  current <- MonadIO.liftIO (Git.resolveShort root (Git.prBase pr))
+  base <- MonadIO.liftIO (Git.resolveShort root (Git.pullBaseRef n))
+  now <- MonadIO.liftIO Clock.getCurrentTime
+  let
+    rp =
+      Types.RangePicker
+        { Types.rpPull = pr
+        , Types.rpHead = T.take 7 (Maybe.fromMaybe "?" headSha)
+        , Types.rpBase = base
+        , Types.rpCurrent = current
+        , Types.rpNow = now
+        , Types.rpFacts = Types.RangeChecking
+        }
+    pushed = maybe [] (map PullPoll.forcePushBefore . PullPoll.snapshotForcePushes) (Types.ppSnapshot (Types.stPullPoll st))
+  State.modify $ \s ->
+    s {Types.stPicker = Just (refreshRowPicker (Types.Picker (Types.PickRange rp) "" [] [] [] 0 Set.empty))}
+  refreshRangePicker
+  Jobs.startJob "checking the PR's history" (checkRange root (Git.prRepo pr) pushed) $ \outcome -> do
+    latest <- State.get
+    Monad.when (Types.stEpoch latest == epoch) . setRangeFacts $
+      case outcome of
+        Left err -> Types.RangeCheckFailed err
+        Right (Left failure) -> Types.RangeCheckFailed (GitHub.failureText failure)
+        Right (Right check) -> Types.RangeChecked check
+
+setRangeFacts :: Types.RangeFacts -> Brick.EventM Types.Name Types.St ()
+setRangeFacts facts =
+  State.modify $ \s ->
+    case Types.stPicker s of
+      Just pk
+        | Types.PickRange rp <- Types.pkMode pk ->
+            s {Types.stPicker = Just pk {Types.pkMode = Types.PickRange rp {Types.rpFacts = facts}}}
+      _ -> s
+
+checkRange :: FilePath -> T.Text -> [T.Text] -> IO (Either GitHub.GhFailure Types.RangeCheck)
+checkRange root repo pushed = do
+  viewer <- GitHub.viewerLogin root
+  case viewer of
+    Left failure -> pure (Left failure)
+    Right login -> do
+      states <- traverse (GitHub.pushedHeadState root repo) pushed
+      pure (fmap (Types.RangeCheck login . Map.fromList . zip pushed) (sequence states))
+
+refreshRangePicker :: Brick.EventM Types.Name Types.St ()
+refreshRangePicker = do
+  st <- State.get
+  case Types.stPicker st of
+    Just pk
+      | Types.PickRange rp <- Types.pkMode pk ->
+          State.modify (\s -> s {Types.stPicker = Just (onFirstTarget (replaceRepoRows (rangeRows st rp) pk))})
+    _ -> pure ()
+
+data RangeTarget
+  = RangeBase
+  | RangeCommit T.Text
+  | RangePushed T.Text
+
+rangeTargetText :: RangeTarget -> T.Text
+rangeTargetText target =
+  case target of
+    RangeBase -> "base"
+    RangeCommit sha -> "commit:" <> sha
+    RangePushed sha -> "pushed:" <> sha
+
+parseRangeTarget :: T.Text -> Maybe RangeTarget
+parseRangeTarget t =
+  case (t, T.stripPrefix "commit:" t, T.stripPrefix "pushed:" t) of
+    ("base", _, _) -> Just RangeBase
+    (_, Just sha, _) -> Just (RangeCommit sha)
+    (_, _, Just sha) -> Just (RangePushed sha)
+    _ -> Nothing
+
+data RangeRow = RangeRow
+  { rangeTarget :: RangeTarget
+  , rangeAt :: T.Text
+  , rangeSha :: T.Text
+  , rangeWhat :: T.Text
+  , rangeWhen :: T.Text
+  }
+
+rangeRows :: Types.St -> Types.RangePicker -> [FilePath]
+rangeRows st rp =
+  let
+    pr = Types.rpPull rp
+    snapshot = case Types.ppSnapshot (Types.stPullPoll st) of
+      Just snap | PullPoll.snapshotPull snap == Git.prNumber pr -> Just snap
+      _ -> Nothing
+    baseRow =
+      RangeRow
+        { rangeTarget = RangeBase
+        , rangeAt = ""
+        , rangeSha = Maybe.fromMaybe "" (Types.rpBase rp)
+        , rangeWhat = "base \183 " <> Git.prBaseBranch pr
+        , rangeWhen = ""
+        }
+    rows = baseRow : List.sortOn rangeAt (maybe [] (historyRows rp) snapshot)
+    current row =
+      case Types.rpCurrent rp of
+        Just sha | not (T.null (rangeSha row)) && (sha `T.isPrefixOf` rangeSha row || rangeSha row `T.isPrefixOf` sha) -> "  \8592 current"
+        _ -> ""
+    cellsFor row = [T.take 7 (rangeSha row), rangeWhat row <> current row, rangeWhen row]
+    cells = map cellsFor rows
+    widths = Widgets.columnWidths [8, 80] cells
+    shown = zipWith (\row cs -> pickerRow (rangeTargetText (rangeTarget row)) (Widgets.columnRow widths cs) (T.unwords cs)) rows cells
+    note t = pickerRow "" ("  " <> t) ""
+  in
+    shown ++ map note (rangeNotes rp snapshot)
+
+rangeNotes :: Types.RangePicker -> Maybe PullPoll.Snapshot -> [T.Text]
+rangeNotes rp snapshot =
+  case (snapshot, Types.rpFacts rp) of
+    (Nothing, _) -> ["", "loading the PR's commits from GitHub\8230"]
+    (_, Types.RangeChecking) -> ["", "checking GitHub for force-pushed heads and your last review\8230"]
+    (_, Types.RangeCheckFailed why) -> ["", "\10007 " <> why]
+    (Just snap, Types.RangeChecked check)
+      | null (PullPoll.snapshotForcePushes snap) && Maybe.isNothing (lastReviewOf (Types.rcViewer check) snap) ->
+          ["", "no force-push and no earlier review of mine"]
+    _ -> []
+
+historyRows :: Types.RangePicker -> PullPoll.Snapshot -> [RangeRow]
+historyRows rp snap =
+  let
+    commits = PullPoll.snapshotCommits snap
+    total = length commits
+    shas = map PullPoll.pullCommitSha commits
+    age = whenText (Types.rpNow rp)
+    commitRow i c =
+      RangeRow
+        { rangeTarget = RangeCommit (PullPoll.pullCommitSha c)
+        , rangeAt = PullPoll.pullCommitDate c
+        , rangeSha = PullPoll.pullCommitSha c
+        , rangeWhat = "commit " <> Types.tshow i <> "/" <> Types.tshow total <> " \183 " <> PullPoll.pullCommitSubject c
+        , rangeWhen = age (PullPoll.pullCommitDate c)
+        }
+    pushedRow fp =
+      RangeRow
+        { rangeTarget = RangePushed (PullPoll.forcePushBefore fp)
+        , rangeAt = PullPoll.forcePushAt fp
+        , rangeSha = PullPoll.forcePushBefore fp
+        , rangeWhat = pushedWhat rp fp
+        , rangeWhen = age (PullPoll.forcePushAt fp)
+        }
+    reviewRow review =
+      let
+        sha = PullPoll.reviewSummaryCommit review
+        at = PullPoll.reviewSummarySubmittedAt review
+      in
+        RangeRow
+          { rangeTarget = if sha `elem` shas then RangeCommit sha else RangePushed sha
+          , rangeAt = at
+          , rangeSha = sha
+          , rangeWhat = "my last review \183 " <> reviewEvent (PullPoll.reviewSummaryState review)
+          , rangeWhen = age at
+          }
+    reviewRows = case Types.rpFacts rp of
+      Types.RangeChecked check -> map reviewRow (Maybe.maybeToList (lastReviewOf (Types.rcViewer check) snap))
+      _ -> []
+  in
+    zipWith commitRow [1 :: Int ..] commits
+      ++ map pushedRow (PullPoll.snapshotForcePushes snap)
+      ++ reviewRows
+
+pushedWhat :: Types.RangePicker -> PullPoll.ForcePush -> T.Text
+pushedWhat rp fp =
+  let
+    replaced = "force-pushed head \183 replaced " <> dayText (PullPoll.forcePushAt fp)
+    known = case Types.rpFacts rp of
+      Types.RangeChecked check -> Map.lookup (PullPoll.forcePushBefore fp) (Types.rcPushed check)
+      _ -> Nothing
+    n = Types.tshow (Git.prNumber (Types.rpPull rp))
+  in
+    case known of
+      Nothing -> replaced
+      Just (GitHub.PushedHead GitHub.KeptHere GitHub.StillOnGitHub) -> replaced
+      Just (GitHub.PushedHead GitHub.NotKept GitHub.StillOnGitHub) -> replaced <> " \183 fetched when picked"
+      Just (GitHub.PushedHead GitHub.KeptHere GitHub.GoneFromGitHub) ->
+        replaced <> " \183 kept in refs/remax/pull/" <> n <> "; gone from GitHub \183 comments on its lines post PR-level"
+      Just (GitHub.PushedHead GitHub.NotKept GitHub.GoneFromGitHub) -> replaced <> " \183 gone from GitHub and not kept here"
+
+lastReviewOf :: T.Text -> PullPoll.Snapshot -> Maybe PullPoll.ReviewSummary
+lastReviewOf login snap =
+  let
+    mine r =
+      PullPoll.reviewSummaryAuthor r == login
+        && PullPoll.reviewSummaryState r /= "PENDING"
+        && not (T.null (PullPoll.reviewSummaryCommit r))
+  in
+    Maybe.listToMaybe (List.sortOn (Ord.Down . PullPoll.reviewSummarySubmittedAt) (filter mine (PullPoll.snapshotReviews snap)))
+
+reviewEvent :: T.Text -> T.Text
+reviewEvent state =
+  case state of
+    "APPROVED" -> "approved"
+    "CHANGES_REQUESTED" -> "changes requested"
+    "COMMENTED" -> "commented"
+    "DISMISSED" -> "dismissed"
+    other -> T.toLower other
+
+parseStamp :: T.Text -> Maybe Clock.UTCTime
+parseStamp = ISO8601.iso8601ParseM . T.unpack
+
+whenText :: Clock.UTCTime -> T.Text -> T.Text
+whenText now stamp =
+  case parseStamp stamp of
+    Just at -> PullAction.shortAge (max 0 (floor (Clock.diffUTCTime now at)))
+    Nothing -> ""
+
+dayText :: T.Text -> T.Text
+dayText stamp = maybe stamp (T.pack . TimeFormat.formatTime TimeFormat.defaultTimeLocale "%b %e") (parseStamp stamp)
+
+applyRangeChoice :: T.Text -> Brick.EventM Types.Name Types.St ()
+applyRangeChoice target = do
+  st <- State.get
+  case (parseRangeTarget target, Git.subjectOf (Types.stMode st)) of
+    (Just RangeBase, Git.Pull pr _) -> PullAction.reviewHeadAgainst (Git.pullBaseRef (Git.prNumber pr))
+    (Just (RangeCommit sha), _) -> PullAction.reviewHeadAgainst sha
+    (Just (RangePushed sha), _) -> PullAction.reviewPushedHead sha
+    _ -> pure ()
 
 -- For the base and branch pickers, where the incoming order carries
 -- meaning: rank on match quality alone and let the sort's stability keep
@@ -607,20 +846,25 @@ pickerMove pk d =
 
 pickerRetype :: Types.Picker -> T.Text -> Brick.EventM Types.Name Types.St ()
 pickerRetype pk q =
-  case Types.pkMode pk of
-    Types.PickFiles -> State.modify (\s -> s {Types.stPicker = Just (refreshPicker pk {Types.pkInput = q})})
-    Types.PickGrep -> do
-      st <- State.get
-      (matches, targets) <- MonadIO.liftIO (grepRepo (Types.effectiveMode st) (Types.stRoot st) q)
-      State.modify $ \s ->
-        s {Types.stPicker = Just pk {Types.pkInput = q, Types.pkMatches = matches, Types.pkTargets = targets, Types.pkSel = 0}}
-    Types.PickPull -> State.modify (\s -> s {Types.stPicker = Just (onFirstTarget (refreshRowPicker pk {Types.pkInput = q}))})
-    _ -> State.modify (\s -> s {Types.stPicker = Just (refreshRowPicker pk {Types.pkInput = q})})
+  let
+    retypeNoted = State.modify (\s -> s {Types.stPicker = Just (onFirstTarget (refreshRowPicker pk {Types.pkInput = q}))})
+  in
+    case Types.pkMode pk of
+      Types.PickFiles -> State.modify (\s -> s {Types.stPicker = Just (refreshPicker pk {Types.pkInput = q})})
+      Types.PickGrep -> do
+        st <- State.get
+        (matches, targets) <- MonadIO.liftIO (grepRepo (Types.effectiveMode st) (Types.stRoot st) q)
+        State.modify $ \s ->
+          s {Types.stPicker = Just pk {Types.pkInput = q, Types.pkMatches = matches, Types.pkTargets = targets, Types.pkSel = 0}}
+      Types.PickPull -> retypeNoted
+      Types.PickRange _ -> retypeNoted
+      _ -> State.modify (\s -> s {Types.stPicker = Just (refreshRowPicker pk {Types.pkInput = q})})
 
 pickerChoose :: Types.Picker -> (FilePath, Int) -> Brick.EventM Types.Name Types.St ()
 pickerChoose pk (target, line) =
   case Types.pkMode pk of
     Types.PickBase -> applyBaseChoice (T.pack target)
+    Types.PickRange _ -> applyRangeChoice (T.pack target)
     Types.PickBranch -> applyCheckout (T.pack target)
     Types.PickRef -> applyRefChoice (T.pack target)
     Types.PickCommit -> commitChoice pk (T.pack target)
