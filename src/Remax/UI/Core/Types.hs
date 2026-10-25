@@ -69,6 +69,7 @@ import Remax.Clipboard qualified as Clipboard
 import Remax.Config qualified as Config
 import Remax.DiffModel qualified as DiffModel
 import Remax.Git qualified as Git
+import Remax.GitHub qualified as GitHub
 import Remax.Highlight qualified as Highlight
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
@@ -106,7 +107,7 @@ data Prompt = SearchPrompt T.Text | CmdPrompt T.Text
 -- The finder overlay: fuzzy file picking, or project-wide grep. Each
 -- display row is aligned with a jump target (file, and a 1-based line
 -- for grep hits; 0 = just open the file).
-data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRef | PickCommit | PickParent T.Text | PickRepo
+data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRef | PickCommit | PickParent T.Text | PickRepo | PickPull
 
 data Picker = Picker
   { pkMode :: PickerMode
@@ -367,6 +368,8 @@ data St = St
   , stRoots :: [FilePath] -- repositories this session can switch between
   , stStory :: Maybe FilePath -- the folder they sit in, when this is a story
   , stPlaces :: Map.Map FilePath RepoPlace -- where you were in each
+  , stPullMeta :: Maybe GitHub.PullMeta
+  , stBaseAt :: Maybe T.Text -- short sha of a pull request's diff base
   }
 
 repoText :: St -> T.Text
@@ -385,11 +388,10 @@ currentFileMay st = safeIdx (stFiles st) (stCurF st)
 rebaseEffMode :: Maybe Git.RebaseStatus -> Git.ReviewMode -> Git.ReviewMode
 rebaseEffMode mRebase mode =
   case (Git.subjectOf mode, mRebase) of
-    (Git.Ref _, _) -> mode
-    (Git.WorkingTree, Nothing) -> mode
     (Git.WorkingTree, Just rs)
       | Git.rebaseConflicted rs -> Git.VsRef "HEAD"
       | otherwise -> Git.VsRef "HEAD^"
+    _ -> mode
 
 effectiveMode :: St -> Git.ReviewMode
 effectiveMode st = rebaseEffMode (stRebase st) (stMode st)
@@ -398,7 +400,7 @@ rebaseShown :: St -> Maybe Git.RebaseStatus
 rebaseShown st =
   case Git.subjectOf (stMode st) of
     Git.WorkingTree -> stRebase st
-    Git.Ref _ -> Nothing
+    _ -> Nothing
 
 whenWritable :: (Git.Writable -> Brick.EventM Name St ()) -> Brick.EventM Name St ()
 whenWritable act = do

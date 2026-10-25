@@ -8,7 +8,7 @@ allowedOpenUnaliasedImports = 1
 allowedAliasUniqueness = { allAliasesUniqueExcept = [] }
 encapsulatedTrees = ["Remax.UI"]
 treeDependencies = [
-  { moduleTree = "Remax.UI", dependencies = ["Remax.Clipboard", "Remax.CommitMessage", "Remax.Config", "Remax.DiffModel", "Remax.Emacs", "Remax.Git", "Remax.Highlight", "Remax.Hunks", "Remax.Key", "Remax.Modal", "Remax.Punch", "Remax.Store", "Remax.Theme", "Remax.Tree", "Remax.TreeSitter", "Remax.Vi", "Remax.Zipper"], note = "the session modules sit above every other Remax module" },
+  { moduleTree = "Remax.UI", dependencies = ["Remax.Clipboard", "Remax.CommitMessage", "Remax.Config", "Remax.DiffModel", "Remax.Emacs", "Remax.Git", "Remax.GitHub", "Remax.Highlight", "Remax.Hunks", "Remax.Key", "Remax.Modal", "Remax.Punch", "Remax.Store", "Remax.Theme", "Remax.Tree", "Remax.TreeSitter", "Remax.Vi", "Remax.Zipper"], note = "the session modules sit above every other Remax module" },
   { moduleTree = "Remax.UI.Model", dependencies = ["Remax.UI.Core"], note = "model operations build on the core; the core knows nothing of them" },
   { moduleTree = "Remax.UI.Action", dependencies = ["Remax.UI.Core", "Remax.UI.Model"], note = "actions build on the model and core" },
   { moduleTree = "Remax.UI.Draw", dependencies = ["Remax.UI.Core", "Remax.UI.Model", "Remax.UI.Action"], note = "drawing reads everything below it and nothing reads drawing" },
@@ -397,6 +397,12 @@ qualified = { qualifiedPost = true }
 alias = "Git"
 
 [[forAnyModule.allowedQualifications]]
+module = "Remax.GitHub"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "GitHub"
+
+[[forAnyModule.allowedQualifications]]
 module = "Remax.Highlight"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }
@@ -515,6 +521,12 @@ module = "Remax.UI.Action.Picker"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }
 alias = "PickerAction"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Pull"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "PullAction"
 
 [[forAnyModule.allowedQualifications]]
 module = "Remax.UI.Action.Rebase"

@@ -19,6 +19,7 @@ import Data.Text qualified as T
 import Remax.Config qualified as Config
 import Remax.Git qualified as Git
 import Remax.Store qualified as Store
+import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Action.Rebase qualified as Rebase
 import Remax.UI.Core.Jobs qualified as Jobs
 import Remax.UI.Core.Tour qualified as Tour
@@ -139,7 +140,7 @@ arriveAt target remembered saved mode passId loaded = do
         , Types.stMode = mode
         , Types.stTreeMode = case Git.subjectOf mode of
             Git.WorkingTree -> mode
-            Git.Ref _ -> Git.VsRef "HEAD"
+            _ -> Git.VsRef "HEAD"
         , Types.stPlaces = saved
         , -- it listed the repository we just left; bringing it back
           -- here would offer files that are not in front of us
@@ -155,6 +156,8 @@ arriveAt target remembered saved mode passId loaded = do
         , Types.stCmdFiles = []
         , Types.stCmdDirs = []
         , Types.stCmdRefs = []
+        , Types.stPullMeta = Nothing
+        , Types.stBaseAt = Nothing
         }
   case remembered of
     Just place -> restorePlace place
@@ -164,6 +167,7 @@ arriveAt target remembered saved mode passId loaded = do
         Just (f, h) -> Nav.parkAnchor f h
         Nothing -> pure ()
   Types.setMsg (repoArrivalMsg target rebase files)
+  PullAction.refreshPullMeta
 
 -- Land back on the file and hunk we left, when they are still there;
 -- otherwise fall back to wherever a fresh session would have opened.

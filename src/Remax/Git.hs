@@ -3,8 +3,15 @@
 module Remax.Git
   ( ReviewMode (..)
   , RefReview (..)
+  , PullRequest (..)
+  , Editing (..)
+  , pullHeadRef
+  , pullBaseRef
+  , withBase
   , Subject (..)
   , subjectOf
+  , FileSource (..)
+  , sourceOf
   , Writable
   , writable
   , subjectPlace
@@ -13,6 +20,7 @@ module Remax.Git
   , modeLabel
   , modeToText
   , modeFromText
+  , readCount
   , repoRoot
   , changedFiles
   , reviewFiles
@@ -80,15 +88,15 @@ import System.IO.Error qualified as IOError
 import System.Process qualified as Process
 
 -- What is reviewed against what. The buffer on screen is the working
--- file (that is what editing edits) in every mode but AtRef, where it is
--- the file as the ref holds it and nothing can be edited; the mode picks
--- the base side of the diff:
+-- file (that is what editing edits) in every mode but AtRef and a
+-- read-only AtPull, where it is the file as the ref holds it and nothing
+-- can be edited; the mode picks the base side of the diff:
 --   VsRef ref — everything different from ref in tracked files
 --               ("HEAD" is the classic uncommitted review; a merge-base
 --               gives the whole-branch review)
 --   VsIndex   — only what is not staged yet
 --   Untracked — new files, reviewed as pure additions
-data ReviewMode = VsRef T.Text | VsIndex | Untracked | AtRef RefReview
+data ReviewMode = VsRef T.Text | VsIndex | Untracked | AtRef RefReview | AtPull PullRequest Editing
   deriving (Eq, Show)
 
 data RefReview = RefReview
@@ -97,31 +105,80 @@ data RefReview = RefReview
   }
   deriving (Eq, Show)
 
-data Subject = WorkingTree | Ref T.Text
+data PullRequest = PullRequest
+  { prNumber :: Int
+  , prRepo :: T.Text
+  , prHeadBranch :: T.Text
+  , prBaseBranch :: T.Text
+  , prTip :: T.Text
+  , prBase :: T.Text
+  }
+  deriving (Eq, Show)
+
+data Editing = ReadOnly | Checkout
+  deriving (Eq, Show)
+
+pullHeadRef :: Int -> T.Text
+pullHeadRef n = "refs/remax/pull/" <> T.pack (show n) <> "/head"
+
+pullBaseRef :: Int -> T.Text
+pullBaseRef n = "refs/remax/pull/" <> T.pack (show n) <> "/base"
+
+withBase :: T.Text -> ReviewMode -> ReviewMode
+withBase base mode =
+  case mode of
+    AtRef rr -> AtRef rr {rrBase = base}
+    AtPull pr editing -> AtPull pr {prBase = base} editing
+    _ -> VsRef base
+
+data Subject = WorkingTree | Ref T.Text | Pull PullRequest Editing
   deriving (Eq, Show)
 
 subjectOf :: ReviewMode -> Subject
 subjectOf mode =
   case mode of
     AtRef rr -> Ref (rrTip rr)
+    AtPull pr editing -> Pull pr editing
     _ -> WorkingTree
+
+data FileSource = FromWorkingTree | FromRef T.Text
+  deriving (Eq, Show)
+
+sourceOf :: ReviewMode -> FileSource
+sourceOf mode =
+  case subjectOf mode of
+    WorkingTree -> FromWorkingTree
+    Ref tip -> FromRef tip
+    Pull pr ReadOnly -> FromRef (prTip pr)
+    Pull _ Checkout -> FromWorkingTree
+
+diffView :: ReviewMode -> ReviewMode
+diffView mode =
+  case mode of
+    AtPull pr ReadOnly -> AtRef (RefReview {rrTip = prTip pr, rrBase = prBase pr})
+    AtPull pr Checkout -> VsRef (prBase pr)
+    _ -> mode
 
 data Writable = Writable
 
 writable :: ReviewMode -> Either T.Text Writable
 writable mode =
-  case subjectOf mode of
-    WorkingTree -> Right Writable
-    Ref tip -> Left tip
+  case (subjectOf mode, sourceOf mode) of
+    (Pull pr _, FromRef _) -> Left (pullLabel pr)
+    (_, FromRef tip) -> Left tip
+    (_, FromWorkingTree) -> Right Writable
 
 subjectPlace :: ReviewMode -> FilePath -> IO (Maybe T.Text, Maybe (T.Text, T.Text))
 subjectPlace mode root =
-  case subjectOf mode of
-    WorkingTree -> do
+  case (subjectOf mode, sourceOf mode) of
+    (Pull pr ReadOnly, _) -> do
+      at <- commitAt root (prTip pr)
+      pure (Just (prHeadBranch pr), at)
+    (_, FromWorkingTree) -> do
       branch <- currentBranch root
       tip <- headCommit root
       pure (branch, tip)
-    Ref tip -> do
+    (_, FromRef tip) -> do
       at <- commitAt root tip
       pure (Just tip, at)
 
@@ -130,6 +187,7 @@ subjectText mode =
   case subjectOf mode of
     WorkingTree -> "worktree"
     Ref tip -> tip
+    Pull pr _ -> "pull/" <> T.pack (show (prNumber pr))
 
 modeToText :: ReviewMode -> T.Text
 modeToText mode =
@@ -138,6 +196,17 @@ modeToText mode =
     VsIndex -> "unstaged"
     Untracked -> "untracked"
     AtRef rr -> "at " <> rrTip rr <> " vs " <> rrBase rr
+    AtPull pr editing ->
+      T.unwords
+        [ "pull"
+        , prRepo pr
+        , T.pack (show (prNumber pr))
+        , prHeadBranch pr
+        , prBaseBranch pr
+        , prTip pr
+        , prBase pr
+        , editingText editing
+        ]
 
 modeFromText :: T.Text -> Maybe ReviewMode
 modeFromText t =
@@ -146,7 +215,38 @@ modeFromText t =
     ["unstaged"] -> Just VsIndex
     ["untracked"] -> Just Untracked
     ["at", tip, "vs", base] -> Just (AtRef (RefReview {rrTip = tip, rrBase = base}))
+    ["pull", repo, numText, headBranch, baseBranch, tip, base, editText] -> do
+      n <- readCount numText
+      editing <- editingFromText editText
+      Just
+        ( AtPull
+            PullRequest
+              { prNumber = n
+              , prRepo = repo
+              , prHeadBranch = headBranch
+              , prBaseBranch = baseBranch
+              , prTip = tip
+              , prBase = base
+              }
+            editing
+        )
     _ -> Nothing
+
+editingText :: Editing -> T.Text
+editingText editing =
+  case editing of
+    ReadOnly -> "review"
+    Checkout -> "edit"
+
+editingFromText :: T.Text -> Maybe Editing
+editingFromText t =
+  case t of
+    "review" -> Just ReadOnly
+    "edit" -> Just Checkout
+    _ -> Nothing
+
+pullLabel :: PullRequest -> T.Text
+pullLabel pr = "PR #" <> T.pack (show (prNumber pr))
 
 modeLabel :: ReviewMode -> T.Text
 modeLabel mode =
@@ -158,6 +258,7 @@ modeLabel mode =
     AtRef rr
       | rrBase rr == emptyTreeRef -> rrTip rr <> " vs nothing"
       | otherwise -> rrTip rr <> " vs " <> rrBase rr
+    AtPull pr editing -> pullLabel pr <> " " <> editingText editing
 
 repoRoot :: IO (Maybe FilePath)
 repoRoot = do
@@ -174,7 +275,7 @@ repoRoot = do
 changedFiles :: ReviewMode -> FilePath -> IO [FilePath]
 changedFiles mode root = do
   let
-    args = case mode of
+    args = case diffView mode of
       VsRef ref ->
         ["-C", root, "diff", "--name-only", "--no-color", T.unpack ref]
       VsIndex ->
@@ -183,6 +284,7 @@ changedFiles mode root = do
         ["-C", root, "ls-files", "--others", "--exclude-standard"]
       AtRef rr ->
         ["-C", root, "diff", "--name-only", "--no-color", T.unpack (rrBase rr), T.unpack (rrTip rr)]
+      AtPull _ _ -> []
   (code, out, _) <- Process.readProcessWithExitCode "git" args ""
   pure $ case code of
     Exit.ExitSuccess -> filter (not . null) (lines out)
@@ -204,7 +306,7 @@ reviewFiles mode withNew root = do
   changed <- changedFiles mode root
   let
     -- Untracked mode is already nothing but new files
-    wanted = withNew && mode /= Untracked && subjectOf mode == WorkingTree
+    wanted = withNew && mode /= Untracked && sourceOf mode == FromWorkingTree
   if not wanted
     then pure changed
     else do
@@ -219,11 +321,11 @@ reviewFiles mode withNew root = do
 -- ref side is missing) reviews against nothing.
 baseLines :: ReviewMode -> FilePath -> FilePath -> IO [T.Text]
 baseLines mode root path =
-  case mode of
+  case diffView mode of
     Untracked -> pure []
     _ -> do
       let
-        ref = case mode of
+        ref = case diffView mode of
           VsRef r -> T.unpack r ++ ":"
           AtRef rr -> T.unpack (rrBase rr) ++ ":"
           _ -> ":"
@@ -457,17 +559,17 @@ pathStats mode root = do
   let
     untracked =
       Map.fromList (map (\p -> (p, PathStat PathUntracked Nothing)) others)
-  case mode of
+  case diffView mode of
     Untracked -> pure untracked
-    _ -> do
+    viewed -> do
       let
-        refArgs = case mode of
+        refArgs = case viewed of
           VsRef ref -> [T.unpack ref]
           AtRef rr -> [T.unpack (rrBase rr), T.unpack (rrTip rr)]
           _ -> []
-        newFiles = case subjectOf mode of
-          WorkingTree -> untracked
-          Ref _ -> Map.empty
+        newFiles = case sourceOf mode of
+          FromWorkingTree -> untracked
+          FromRef _ -> Map.empty
         diffFields kind = do
           (code, out, _) <-
             Process.readProcessWithExitCode

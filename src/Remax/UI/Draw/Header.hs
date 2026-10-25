@@ -3,6 +3,7 @@
 
 module Remax.UI.Draw.Header
   ( gitBar
+  , pullBar
   , rebaseBar
   , tourBar
   , headerBar
@@ -13,6 +14,7 @@ import Brick qualified as Brick
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Remax.Git qualified as Git
+import Remax.GitHub qualified as GitHub
 import Remax.Store qualified as Store
 import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Tour qualified as Tour
@@ -36,9 +38,9 @@ gitBar st =
           , Brick.withAttr Attrs.headerAttr (Brick.txt " ·")
           ]
         else []
-    placeWord = case Git.subjectOf (Types.stMode st) of
-      Git.WorkingTree -> " on "
-      Git.Ref _ -> " at "
+    placeWord = case Git.sourceOf (Types.stMode st) of
+      Git.FromWorkingTree -> " on "
+      Git.FromRef _ -> " at "
     place = case Types.stBranch st of
       Just b ->
         Brick.hBox
@@ -60,6 +62,37 @@ gitBar st =
   in
     Brick.withDefAttr Attrs.headerRebaseAttr . Brick.padRight Brick.Max $
       Brick.hBox (place : commitSeg)
+
+pullBar :: Types.St -> Git.PullRequest -> Git.Editing -> Brick.Widget Types.Name
+pullBar st pr editing =
+  let
+    dot = Brick.withAttr Attrs.headerAttr (Brick.txt " \183 ")
+    meta = case Types.stPullMeta st of
+      Just m | GitHub.metaNumber m == Git.prNumber pr -> Just m
+      _ -> Nothing
+    chip = case editing of
+      Git.ReadOnly -> " review "
+      Git.Checkout -> " edit "
+    checksSeg = case fmap GitHub.metaChecks meta of
+      Just GitHub.ChecksPass -> Brick.withAttr Attrs.headerOkAttr (Brick.txt "\10003 checks")
+      Just GitHub.ChecksFail -> Brick.withAttr Attrs.conflictAttr (Brick.txt "\10007 checks")
+      Just GitHub.ChecksRunning -> Brick.txt "\9675 checks"
+      Just GitHub.ChecksNone -> Brick.withAttr Attrs.hintAttr (Brick.txt "no checks")
+      Nothing -> Brick.withAttr Attrs.hintAttr (Brick.txt "checks \8230")
+  in
+    Brick.withDefAttr Attrs.headerRebaseAttr . Brick.padRight Brick.Max $
+      Brick.hBox
+        [ Brick.withAttr Attrs.headerFileAttr (Brick.txt (" #" <> Types.tshow (Git.prNumber pr) <> " " <> Git.prHeadBranch pr <> "\8594" <> Git.prBaseBranch pr))
+        , dot
+        , Brick.withAttr Attrs.rebaseShaAttr (Brick.txt (maybe "?" fst (Types.stHead st) <> "\8230" <> Maybe.fromMaybe "?" (Types.stBaseAt st)))
+        , dot
+        , Brick.withAttr Attrs.guideAttr (Brick.txt chip)
+        , dot
+        , Brick.txt "0@ 0\8801"
+        , dot
+        , checksSeg
+        , Brick.withAttr Attrs.hintAttr (Brick.txt "   \9251c PR")
+        ]
 
 -- The commit under review gets its own full-width bar during a rebase:
 -- step, sha, and the whole subject line. Space c shows the full

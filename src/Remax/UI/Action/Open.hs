@@ -147,13 +147,13 @@ loadOpened cfg hls mode root path = do
 
 openedLines :: Git.ReviewMode -> FilePath -> FilePath -> IO (Maybe [T.Text])
 openedLines mode root path =
-  case Git.subjectOf mode of
-    Git.Ref tip -> do
+  case Git.sourceOf mode of
+    Git.FromRef tip -> do
       got <- Git.refContent root tip path
       pure $ case got of
         Just (Git.RefText ls) -> Just ls
         _ -> Nothing
-    Git.WorkingTree -> do
+    Git.FromWorkingTree -> do
       readable <- Exception.try (Git.looksBinary root path) :: IO (Either Exception.IOException Bool)
       case readable of
         Left _ -> pure Nothing

@@ -326,8 +326,11 @@ Lists the change set exactly as the reviewer's session sees it: one
 entry per hunk with an `id`, `file`, `line_no` and the marked `lines`.
 With no flags it follows **whatever their open session is viewing** —
 the working tree, a `:ref`, a `:commit` — so you do not need to be told
-which commit they have up; `--ref REF [--base BASE]` or `--base REF`
-names a view when nobody has one open. Read the whole listing and decide
+which commit they have up; `--ref REF [--base BASE]`, `--base REF` or
+`--pr N` names a view when nobody has one open. A pull request opened
+with `--pr N` or `:pr N` is a subject of its own: the listing's `subject`
+reads `pull/N`, and the tour stays with the pull request as its head and
+base move. Read the whole listing and decide
 an order and a sentence or two for each stop; a stop may cover several
 hunks when they are one idea (a rename and its fallout, a signature and
 its call sites).

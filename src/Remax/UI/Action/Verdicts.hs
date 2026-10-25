@@ -124,9 +124,9 @@ showCommitPopup :: Brick.EventM Types.Name Types.St ()
 showCommitPopup = do
   st <- State.get
   let
-    ref = case (Git.subjectOf (Types.stMode st), Types.stRebase st) of
-      (Git.Ref tip, _) -> tip
-      (Git.WorkingTree, Just rb)
+    ref = case (Git.sourceOf (Types.stMode st), Types.stRebase st) of
+      (Git.FromRef tip, _) -> tip
+      (Git.FromWorkingTree, Just rb)
         | not (T.null (Git.rebaseSha rb)) -> Git.rebaseSha rb
       _ -> "HEAD"
   got <- MonadIO.liftIO (Git.commitMessage (Types.stRoot st) ref)
@@ -251,10 +251,10 @@ clearVerdictBySelection = do
 verdictOrigin :: Brick.EventM Types.Name Types.St Store.VerdictOrigin
 verdictOrigin = do
   st <- State.get
-  case Git.subjectOf (Types.effectiveMode st) of
-    Git.Ref tip ->
+  case Git.sourceOf (Types.effectiveMode st) of
+    Git.FromRef tip ->
       pure Store.VerdictOrigin {Store.originCommit = Types.stHead st, Store.originRef = Just tip}
-    Git.WorkingTree ->
+    Git.FromWorkingTree ->
       case Types.stRebase st of
         Nothing -> pure Store.noOrigin
         Just rb
