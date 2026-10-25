@@ -33,7 +33,7 @@ openPull n = do
         Right (Right opened) -> do
           rememberRepoName known (GitHub.openedRepo opened)
           State.modify (\s -> s {Types.stPullMeta = Just (GitHub.openedMeta opened)})
-          Settings.setMode (Git.AtPull (GitHub.openedPull opened) Git.ReadOnly)
+          Settings.setMode (GitHub.openedMode opened)
           Types.setMsg ("PR #" <> Types.tshow n <> " \183 " <> GitHub.metaTitle (GitHub.openedMeta opened))
 
 refreshPullMeta :: Brick.EventM Types.Name Types.St ()

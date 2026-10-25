@@ -16,6 +16,7 @@ import Brick.Util qualified as BrickUtil
 import Control.Concurrent qualified as Concurrent
 import Control.Monad qualified as Monad
 import Control.Monad.IO.Class qualified as MonadIO
+import Control.Monad.State qualified as State
 import Data.IORef qualified as IORef
 import Data.Int qualified as DataInt
 import Data.List qualified as List
@@ -29,6 +30,7 @@ import Graphics.Vty.CrossPlatform qualified as VtyPlatform
 import Remax.Clipboard qualified as Clipboard
 import Remax.Config qualified as Config
 import Remax.Git qualified as Git
+import Remax.GitHub qualified as GitHub
 import Remax.Store qualified as Store
 import Remax.Theme qualified as Theme
 import Remax.TreeSitter qualified as TS
@@ -64,8 +66,8 @@ data Startup = Startup
   , suSlots :: Concurrent.QSem
   }
 
-runReview :: Git.ReviewMode -> FilePath -> [FilePath] -> Maybe FilePath -> IO ()
-runReview mode root roots story = do
+runReview :: Git.ReviewMode -> Maybe GitHub.PullMeta -> FilePath -> [FilePath] -> Maybe FilePath -> IO ()
+runReview mode pullMeta root roots story = do
   startup <- loadStartup mode root
   let
     chan = suChan startup
@@ -79,7 +81,7 @@ runReview mode root roots story = do
     -- the line you just cut, and `dd p` would not put the line back.
     alreadyThere <- Clipboard.readClipboard clip
     let
-      st0 = initialState startup mode root roots story watchMode dirWatch clip alreadyThere
+      st0 = initialState startup mode pullMeta root roots story watchMode dirWatch clip alreadyThere
     startBeats chan
     vty <- buildVty
     Brick.customMain vty buildVty (Just chan) (app (suTheme startup)) (parkAtStart (Tour.installTour (suTour startup) st0))
@@ -137,6 +139,7 @@ treeModeOf mode =
 initialState ::
   Startup ->
   Git.ReviewMode ->
+  Maybe GitHub.PullMeta ->
   FilePath ->
   [FilePath] ->
   Maybe FilePath ->
@@ -145,7 +148,7 @@ initialState ::
   Clipboard.Clipboard ->
   Maybe T.Text ->
   Types.St
-initialState startup mode root roots story watchMode dirWatch clip alreadyThere =
+initialState startup mode pullMeta root roots story watchMode dirWatch clip alreadyThere =
   Types.St
     { Types.stFiles = []
     , Types.stCurF = 0
@@ -214,7 +217,7 @@ initialState startup mode root roots story watchMode dirWatch clip alreadyThere 
     , Types.stVi = Vi.viIdle
     , Types.stSearchDir = 1
     , Types.stDeferAdvance = False
-    , Types.stPullMeta = Nothing
+    , Types.stPullMeta = pullMeta
     , Types.stBaseAt = Nothing
     , Types.stAltFile = Nothing
     , Types.stAnchor = Nothing
@@ -354,7 +357,8 @@ app theme =
           MonadIO.liftIO (V.setMode out V.BracketedPaste True)
         Monad.when (V.supportsMode out V.Mouse) $
           MonadIO.liftIO (V.setMode out V.Mouse True)
-        PullAction.refreshPullMeta
+        seeded <- State.gets Types.stPullMeta
+        Monad.when (Maybe.isNothing seeded) PullAction.refreshPullMeta
     , Brick.appAttrMap = const (Attrs.mkAttrMap theme)
     }
 

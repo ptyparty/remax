@@ -236,19 +236,19 @@ reviewArgs args =
 review :: ModeArg -> IO ()
 review marg = do
   (root, roots, story) <- reviewStart
-  mode <- case marg of
-    ArgHead -> pure (Git.VsRef "HEAD")
-    ArgUnstaged -> pure Git.VsIndex
-    ArgUntracked -> pure Git.Untracked
+  opening <- case marg of
+    ArgHead -> pure (plainOpening (Git.VsRef "HEAD"))
+    ArgUnstaged -> pure (plainOpening Git.VsIndex)
+    ArgUntracked -> pure (plainOpening Git.Untracked)
     ArgBase ref -> do
       ok <- Git.refExists root ref
       Monad.unless ok (Exit.die ("No such ref: " ++ T.unpack ref))
-      pure (Git.VsRef ref)
+      pure (plainOpening (Git.VsRef ref))
     ArgBranch -> do
       got <- Git.branchRoot root
       case got of
         Left e -> Exit.die (T.unpack e)
-        Right sha -> pure (Git.VsRef (T.take 10 sha))
+        Right sha -> pure (plainOpening (Git.VsRef (T.take 10 sha)))
     ArgRef ref mBase -> do
       ok <- Git.refExists root ref
       Monad.unless ok (Exit.die ("No such ref: " ++ T.unpack ref))
@@ -262,14 +262,27 @@ review marg = do
           case got of
             Left e -> Exit.die (T.unpack e)
             Right sha -> pure (T.take 10 sha)
-      pure (Git.AtRef (Git.RefReview {Git.rrTip = ref, Git.rrBase = base}))
+      pure (plainOpening (Git.AtRef (Git.RefReview {Git.rrTip = ref, Git.rrBase = base})))
     ArgPull n -> do
       conn <- Store.openStore
-      openPullMode conn root n
-  UI.runReview mode root roots story
+      opened <- openPullArg conn root n
+      pure
+        Opening
+          { openingMode = GitHub.openedMode opened
+          , openingPullMeta = Just (GitHub.openedMeta opened)
+          }
+  UI.runReview (openingMode opening) (openingPullMeta opening) root roots story
 
-openPullMode :: SQLite.Connection -> FilePath -> Int -> IO Git.ReviewMode
-openPullMode conn root n = do
+data Opening = Opening
+  { openingMode :: Git.ReviewMode
+  , openingPullMeta :: Maybe GitHub.PullMeta
+  }
+
+plainOpening :: Git.ReviewMode -> Opening
+plainOpening mode = Opening {openingMode = mode, openingPullMeta = Nothing}
+
+openPullArg :: SQLite.Connection -> FilePath -> Int -> IO GitHub.Opened
+openPullArg conn root n = do
   known <- GitHub.cachedRepoName conn root
   SysIO.hPutStrLn SysIO.stderr ("fetching PR #" ++ show n ++ "\8230")
   got <- GitHub.openPull root (GitHub.repoCached known) n
@@ -277,7 +290,7 @@ openPullMode conn root n = do
     Left failure -> Exit.die (T.unpack (GitHub.failureText failure))
     Right opened -> do
       GitHub.rememberRepoName conn known (GitHub.openedRepo opened)
-      pure (Git.AtPull (GitHub.openedPull opened) Git.ReadOnly)
+      pure opened
 
 -- Flags an agent command accepts anywhere in its arguments, pulled out so
 -- the rest can be read positionally.
@@ -304,7 +317,7 @@ agentMode conn root flags =
       viewed <- Store.sessionView conn (T.pack root)
       case viewed >>= Git.modeFromText of
         Just mode@(Git.AtPull pr _) | Git.prNumber pr == k -> pure mode
-        _ -> openPullMode conn root k
+        _ -> fmap GitHub.openedMode (openPullArg conn root k)
     (Nothing, Just ref, mBase) -> do
       ok <- Git.refExists root (T.pack ref)
       Monad.unless ok (Exit.die ("No such ref: " ++ ref))

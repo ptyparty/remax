@@ -21,6 +21,7 @@ module Remax.GitHub
   , PullMeta (..)
   , viewPull
   , Opened (..)
+  , openedMode
   , openPull
   , checkoutPull
   ) where
@@ -329,6 +330,9 @@ data Opened = Opened
   , openedPull :: Git.PullRequest
   , openedMeta :: PullMeta
   }
+
+openedMode :: Opened -> Git.ReviewMode
+openedMode opened = Git.AtPull (openedPull opened) Git.ReadOnly
 
 openPull :: FilePath -> Maybe T.Text -> Int -> IO (Either GhFailure Opened)
 openPull root cached n = do
