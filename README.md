@@ -338,7 +338,7 @@ note popup keeps its modal keys in either keymap.
 | `:walk tour` | follow the tour an agent posted for this view (see *A guided tour*); `]`/`[` step through it and the header counts the steps |
 | `:tour` / `:tour N` | get back on the tour: `:tour` returns to the stop you last visited (or the one under the cursor, or the first), `:tour N` jumps to stop N. Either way the walk follows the tour again |
 | `:tour ask [TEXT]` | ask the agent watching this review for a tour of the view you have open, with TEXT as the brief ("schema changes first"). The request shows up in the agent's `remax list`, wakes a `list --wait`, and carries the exact ref flags for the view, so the tour lands where you are looking |
-| `:mode head` / `:mode unstaged` / `:mode untracked` | the classic change sets |
+| `:mode head` / `:mode unstaged` / `:mode untracked` | the classic change sets; `:mode tree` returns to the working tree |
 | `:rebase [REF]` | start a commit-by-commit review pass (below) |
 | `:continue` | fold this stop's edits into the stopped commit and advance — *everything* dirty at the stop counts, including edits made through `$EDITOR` or by an agent, since the stop started clean |
 | `:abort!` | abort the rebase (`:abort` asks first) |
