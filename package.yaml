@@ -81,6 +81,8 @@ executables:
       - vendor/grammars/tsx/src/scanner.c
       - vendor/grammars/javascript/src/parser.c
       - vendor/grammars/javascript/src/scanner.c
+      - vendor/grammars/c-sharp/src/parser.c
+      - vendor/grammars/c-sharp/src/scanner.c
     cxx-sources:
       - vendor/grammars/yaml/src/scanner.cc
     extra-libraries:

@@ -156,6 +156,9 @@ foreign import ccall unsafe "tree_sitter_tsx"
 foreign import ccall unsafe "tree_sitter_javascript"
   c_lang_javascript :: IO (Ptr.Ptr CLanguage)
 
+foreign import ccall unsafe "tree_sitter_c_sharp"
+  c_lang_c_sharp :: IO (Ptr.Ptr CLanguage)
+
 -- One vendored grammar: extensions it claims, its language function, and
 -- its embedded highlight query.
 -- How a grammar claims a file. Both ways of claiming live on the same
@@ -246,6 +249,11 @@ vendored =
     ( GrammarKeys [".js", ".mjs", ".cjs", ".jsx"] ["node", "nodejs", "bun"]
     , c_lang_javascript
     , $(FileEmbed.embedFile "vendor/grammars/javascript/highlights.scm")
+    )
+  ,
+    ( GrammarKeys [".cs", ".csx", ".cake"] ["dotnet-script"]
+    , c_lang_c_sharp
+    , $(FileEmbed.embedFile "vendor/grammars/c-sharp/highlights.scm")
     )
   ]
 
