@@ -439,11 +439,16 @@ says so.
 
 `:pr edit` switches to feedback mode, for addressing the comments on your
 own pull request. It runs `gh pr checkout N`, so it is refused while
-tracked files have changes, and then reviews the working tree against
-the pull request's base. The header reads `PR #N edit` and the git bar's
-chip `edit`. The files are editable, and `!` and `?` mean what they do
-anywhere else. A tour stays with the pull request across both modes.
-`:pr review` returns to the read-only head as fetched.
+tracked files have changes, and then reviews the working tree against the
+pull request's base. Mid-rebase it checks nothing out: it reviews the
+working tree at the current stop against the pull request's base, the git
+bar shows the stop, and `:continue` folds the edits into the stopped
+commit as it does in any rebase. Open each pull request of a stack in
+turn this way to address its feedback in the commit it belongs to.
+The header reads `PR #N edit` and the git bar's chip `edit`. The files
+are editable, and `!` and `?` mean what they do anywhere else. A tour
+stays with the pull request across both modes. `:pr review` returns to
+the read-only head as fetched.
 
 `:pr commits` walks the pull request one commit at a time, each reviewed
 read-only against its parent. The git bar shows `commit 3/7`, and `]` past

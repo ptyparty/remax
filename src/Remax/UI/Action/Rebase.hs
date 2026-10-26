@@ -28,7 +28,7 @@ import System.FilePath qualified as FilePath
 rebaseStopMsg :: Git.RebaseStatus -> T.Text
 rebaseStopMsg rb =
   let
-    at = Types.tshow (Git.rebaseStep rb) <> "/" <> Types.tshow (Git.rebaseTotal rb)
+    at = Git.rebaseProgress rb
   in
     if Git.rebaseConflicted rb
       then "conflict at commit " <> at <> " — resolve, then :continue"

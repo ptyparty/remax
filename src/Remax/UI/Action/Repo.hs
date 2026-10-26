@@ -273,7 +273,7 @@ describeRepo st root = do
     state = case rebase of
       Just rb
         | Git.rebaseConflicted rb -> "CONFLICT"
-        | otherwise -> "rebasing " <> Types.tshow (Git.rebaseStep rb) <> "/" <> Types.tshow (Git.rebaseTotal rb)
+        | otherwise -> "rebasing " <> Git.rebaseProgress rb
       Nothing
         | null changed -> "clean"
         | otherwise -> reviewed
