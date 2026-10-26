@@ -255,10 +255,23 @@ editPull :: Brick.EventM Types.Name Types.St ()
 editPull = do
   st <- State.get
   case Types.stMode st of
-    Git.AtPull pr Git.Checkout -> Types.setMsg (Git.pullLabel pr <> " is checked out \8212 :pr review returns to the fetched head")
-    Git.AtPull _ Git.ReadOnly | Just _ <- Types.stRebase st -> Types.setMsg "mid-rebase \8212 :continue or :abort! before :pr edit"
-    Git.AtPull pr Git.ReadOnly -> checkoutPull st pr
+    Git.AtPull pr Git.Checkout -> Types.setMsg (Git.pullLabel pr <> " is already in edit mode \8212 :pr review returns to the fetched head")
+    Git.AtPull pr Git.ReadOnly
+      | Just rb <- Types.stRebase st -> editAtRebaseStop pr rb
+      | otherwise -> checkoutPull st pr
     _ -> Types.setMsg noPullOpen
+
+editAtRebaseStop :: Git.PullRequest -> Git.RebaseStatus -> Brick.EventM Types.Name Types.St ()
+editAtRebaseStop pr rb = do
+  Settings.setMode (Git.AtPull (Git.pullAtHead pr) Git.Checkout)
+  Types.setMsg
+    ( "editing "
+        <> Git.pullLabel pr
+        <> " at rebase stop "
+        <> Git.rebaseProgress rb
+        <> " \183 :continue folds the edits into "
+        <> (if T.null (Git.rebaseSha rb) then "the stopped commit" else Git.rebaseSha rb)
+    )
 
 data CheckoutOutcome = TreeDirty | CheckoutRefused GitHub.GhFailure | CheckedOut
 

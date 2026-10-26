@@ -87,11 +87,19 @@ pullBar st pr editing =
             Attrs.headerAttr
             (Brick.txt ("commit " <> Types.tshow (Types.cwIndex walk + 1) <> "/" <> Types.tshow (length (Types.cwCommits walk))))
       Nothing -> Brick.emptyWidget
+    stopSeg = case (Git.sourceOf (Git.AtPull pr editing), Types.stRebase st) of
+      (Git.FromWorkingTree, Just rb) ->
+        dot
+          <+> Brick.withAttr
+            (if Git.rebaseConflicted rb then Attrs.conflictAttr else Attrs.headerAttr)
+            (Brick.txt ("\10227 stop " <> Git.rebaseProgress rb))
+      _ -> Brick.emptyWidget
   in
     Brick.withDefAttr Attrs.headerRebaseAttr . Brick.padRight Brick.Max $
       Brick.hBox
         [ Brick.withAttr Attrs.headerFileAttr (Brick.txt (" #" <> Types.tshow (Git.prNumber pr) <> " " <> Git.prHeadBranch pr <> "\8594" <> Git.prBaseBranch pr))
         , walkSeg
+        , stopSeg
         , dot
         , Brick.withAttr Attrs.rebaseShaAttr (Brick.txt (maybe "?" fst (Types.stHead st) <> "\8230" <> Maybe.fromMaybe "?" (Types.stBaseAt st)))
         , dot
@@ -121,13 +129,7 @@ rebaseBar rb =
     Brick.withDefAttr Attrs.headerRebaseAttr . Brick.padRight Brick.Max $
       Brick.hBox
         [ Brick.withAttr Attrs.headerAttr $
-            Brick.txt
-              ( " \10227 commit "
-                  <> Types.tshow (Git.rebaseStep rb)
-                  <> "/"
-                  <> Types.tshow (Git.rebaseTotal rb)
-                  <> "  "
-              )
+            Brick.txt (" \10227 commit " <> Git.rebaseProgress rb <> "  ")
         , shaNote
         , Brick.txt (Git.rebaseSubject rb)
         , conflictNote

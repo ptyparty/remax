@@ -53,6 +53,7 @@ module Remax.Git
   , RebaseStatus (..)
   , RebaseStop (..)
   , rebaseConflicted
+  , rebaseProgress
   , rebaseStatus
   , commitBody
   , CommitUnderReview (..)
@@ -807,6 +808,9 @@ rebaseConflicted rb =
     ConflictStop _ -> True
     EditStop -> False
     ExecStop -> False
+
+rebaseProgress :: RebaseStatus -> T.Text
+rebaseProgress rb = T.pack (show (rebaseStep rb)) <> "/" <> T.pack (show (rebaseTotal rb))
 
 -- Where git actually keeps a state directory, resolved by git itself: in
 -- a linked worktree .git is a file and the state lives under the main
