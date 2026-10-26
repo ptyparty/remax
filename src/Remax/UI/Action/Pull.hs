@@ -13,6 +13,8 @@ module Remax.UI.Action.Pull
   , reviewPushedHead
   , startCommitWalk
   , walkRun
+  , editPull
+  , reviewPull
   ) where
 
 import Brick qualified as Brick
@@ -173,7 +175,7 @@ reviewHeadAgainst base = do
   st <- State.get
   case Git.subjectOf (Types.stMode st) of
     Git.Pull pr _ ->
-      Settings.setMode (Git.AtPull pr {Git.prTip = Git.pullHeadRef (Git.prNumber pr), Git.prBase = base} Git.ReadOnly)
+      Settings.setMode (Git.AtPull (Git.pullAtHead pr) {Git.prBase = base} Git.ReadOnly)
     _ -> Types.setMsg noPullOpen
 
 reviewPushedHead :: T.Text -> Brick.EventM Types.Name Types.St ()
@@ -248,3 +250,46 @@ stepCommit walk d =
       (True, _) -> Types.setMsg (position (1 :: Int) <> " is the PR's first \8212 :base reviews a range")
       (_, True) -> Types.setMsg (position total <> " is the PR's last \8212 :base reviews a range")
       _ -> walkTo walk {Types.cwIndex = next}
+
+editPull :: Brick.EventM Types.Name Types.St ()
+editPull = do
+  st <- State.get
+  case Types.stMode st of
+    Git.AtPull pr Git.Checkout -> Types.setMsg (Git.pullLabel pr <> " is checked out \8212 :pr review returns to the fetched head")
+    Git.AtPull _ Git.ReadOnly | Just _ <- Types.stRebase st -> Types.setMsg "mid-rebase \8212 :continue or :abort! before :pr edit"
+    Git.AtPull pr Git.ReadOnly -> checkoutPull st pr
+    _ -> Types.setMsg noPullOpen
+
+data CheckoutOutcome = TreeDirty | CheckoutRefused GitHub.GhFailure | CheckedOut
+
+checkoutUnlessDirty :: FilePath -> Git.PullRequest -> IO CheckoutOutcome
+checkoutUnlessDirty root pr = do
+  dirty <- Git.trackedChanges root
+  if dirty
+    then pure TreeDirty
+    else fmap (either CheckoutRefused (const CheckedOut)) (GitHub.checkoutPull root (Git.prRepo pr) (Git.prNumber pr))
+
+checkoutPull :: Types.St -> Git.PullRequest -> Brick.EventM Types.Name Types.St ()
+checkoutPull st pr = do
+  let
+    label = "checking out " <> Git.pullLabel pr
+  Jobs.startJob label (checkoutUnlessDirty (Types.stRoot st) pr) $ \outcome -> do
+    latest <- State.get
+    Monad.when (Types.stEpoch latest == Types.stEpoch st && onPull latest (Git.prNumber pr)) $
+      case outcome of
+        Left err -> Jobs.jobFailed label err
+        Right TreeDirty -> Types.setMsg "tracked changes in the tree \8212 commit or stash before :pr edit"
+        Right (CheckoutRefused failure) -> Types.setMsg ("! " <> GitHub.failureText failure)
+        Right CheckedOut -> do
+          Settings.setMode (Git.AtPull (Git.pullAtHead pr) Git.Checkout)
+          Types.setMsg ("editing " <> Git.pullLabel pr <> " on " <> Git.prHeadBranch pr)
+
+reviewPull :: Brick.EventM Types.Name Types.St ()
+reviewPull = do
+  st <- State.get
+  case Types.stMode st of
+    Git.AtPull pr Git.Checkout -> do
+      Settings.setMode (Git.AtPull (Git.pullAtHead pr) Git.ReadOnly)
+      pollPullNow
+    Git.AtPull pr Git.ReadOnly -> Types.setMsg (Git.pullLabel pr <> " is already read-only \8212 :pr edit checks it out")
+    _ -> Types.setMsg noPullOpen

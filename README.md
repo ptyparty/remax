@@ -355,7 +355,7 @@ note popup keeps its modal keys in either keymap.
 | `:N` | jump to line N of the current file, clamped to its ends — the cursor moves, the hunk under review and the `'` anchor don't |
 | `:edit [PATH]` | suspend into `$EDITOR` at the cursor (or on PATH) |
 | `:checkout` | switch branches — a picker over local branches in the same columns (branch, how long ago, the tip you'd land on, subject), most recently committed first with `← current` marked; `⏎` checks out. `:checkout NAME` skips the picker. Refused mid-rebase |
-| `:pr` | open a pull request of the repository this checkout belongs to, read-only — a picker over its open pull requests (number, author, title, age, CI, your review state, a `draft` mark, and `← open` on the one under review); `⏎` opens the row. `:pr N` skips the picker; `:pr list` opens it while a pull request is already open, and `:pr commits` walks its commits. See [Reviewing a pull request](#reviewing-a-pull-request) |
+| `:pr` | open a pull request of the repository this checkout belongs to, read-only — a picker over its open pull requests (number, author, title, age, CI, your review state, a `draft` mark, and `← open` on the one under review); `⏎` opens the row. `:pr N` skips the picker; `:pr list` opens it while a pull request is already open, `:pr commits` walks its commits, `:pr edit` checks it out to address its feedback and `:pr review` returns to the read-only head. See [Reviewing a pull request](#reviewing-a-pull-request) |
 | `:q` | quit |
 
 The command line completes itself: a bare `:` lists every command with
@@ -436,6 +436,14 @@ GitHub lets it go; the row says when GitHub no longer has it, and
 comments on its lines will post as PR-level comments. A tour stays with
 the pull request: a range that drops its stops walks pending hunks and
 says so.
+
+`:pr edit` switches to feedback mode, for addressing the comments on your
+own pull request. It runs `gh pr checkout N`, so it is refused while
+tracked files have changes, and then reviews the working tree against
+the pull request's base. The header reads `PR #N edit` and the git bar's
+chip `edit`. The files are editable, and `!` and `?` mean what they do
+anywhere else. A tour stays with the pull request across both modes.
+`:pr review` returns to the read-only head as fetched.
 
 `:pr commits` walks the pull request one commit at a time, each reviewed
 read-only against its parent. The git bar shows `commit 3/7`, and `]` past

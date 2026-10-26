@@ -293,6 +293,12 @@ reviewer may answer your post with another of theirs, so re-check
 answer was the last word. Accepting the hunk (or resolving the note)
 closes the whole conversation.
 
+## Addressing feedback on the reviewer's own pull request
+
+`:pr edit` checks the reviewer's pull request out, and the session's
+`view` reads `PR #N edit`. The files are the working tree, so fix them as
+for any flag.
+
 ## Giving a tour
 
 When the human asks you to walk them through a change — present it,
