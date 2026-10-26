@@ -51,7 +51,7 @@ commandTable :: [(T.Text, ArgKind, T.Text)]
 commandTable =
   [ ("base", ArgRef, "diff against REF; bare :base picks from history")
   , ("branch", NoArg, "whole-branch view (merge-base base)")
-  , ("mode", ArgMode, "head | unstaged | untracked")
+  , ("mode", ArgMode, modeChoices)
   , ("rebase", ArgRef, "commit-by-commit review pass")
   , ("continue", NoArg, "fold edits into the stopped commit, advance")
   , ("abort", NoArg, "abort the rebase (asks first)")
@@ -77,6 +77,20 @@ commandTable =
   , ("q", NoArg, "quit")
   ]
 
+modeCommands :: [(T.Text, Brick.EventM Types.Name Types.St ())]
+modeCommands =
+  [ ("head", Settings.setMode (Git.VsRef "HEAD"))
+  , ("unstaged", Settings.setMode Git.VsIndex)
+  , ("untracked", Settings.setMode Git.Untracked)
+  , ("tree", Settings.returnToTree)
+  ]
+
+modeNames :: [T.Text]
+modeNames = map fst modeCommands
+
+modeChoices :: T.Text
+modeChoices = T.intercalate " | " modeNames
+
 argKindOf :: T.Text -> Maybe ArgKind
 argKindOf name =
   case filter (\(n, _, _) -> n == name) commandTable of
@@ -100,7 +114,7 @@ cmdCandidates st input =
       ["pr"] -> prefixed ["list", "commits", "edit", "review"]
       [cmd] -> case argKindOf cmd of
         Just ArgRef -> prefixed ("branch" : Types.stCmdRefs st)
-        Just ArgMode -> prefixed ["head", "unstaged", "untracked"]
+        Just ArgMode -> prefixed modeNames
         Just ArgPath -> prefixed (Types.stCmdFiles st)
         Just ArgDir -> prefixed (Types.stCmdDirs st ++ Types.stCmdFiles st)
         _ -> []
@@ -189,14 +203,11 @@ runCommand input =
     ["base", "branch"] -> Settings.setBaseBranch
     ["branch"] -> Settings.setBaseBranch
     ["base", ref] -> Settings.setBaseRef ref
-    ["mode", "head"] -> Settings.setMode (Git.VsRef "HEAD")
-    ["mode", "unstaged"] -> Settings.setMode Git.VsIndex
-    ["mode", "untracked"] -> Settings.setMode Git.Untracked
-    ["mode", "tree"] -> Settings.returnToTree
+    ["mode", m] | Just switch <- lookup m modeCommands -> switch
     ["ref"] -> PickerAction.openRefPicker
     ["ref", ref] -> Settings.setRef ref
     ["mode", other] ->
-      Types.setMsg ("unknown mode " <> other <> " — head | unstaged | untracked")
+      Types.setMsg ("unknown mode " <> other <> " — " <> modeChoices)
     ["rebase"] -> Rebase.startRebase Nothing
     ["rebase", ref] -> Rebase.startRebase (Just ref)
     ["continue"] -> Rebase.continueRebase
