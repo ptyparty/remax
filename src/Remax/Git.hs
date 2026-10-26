@@ -1022,6 +1022,7 @@ sameCommitSubjects root mode subjects = do
     others = filter (/= mine) subjects
   case subjectOf mode of
     WorkingTree -> pure [mine]
+    Pull _ _ -> pure [mine]
     Ref tip -> do
       target <- resolveFull root tip
       resolved <- mapM (\s -> fmap ((,) s) (resolveFull root s)) others
