@@ -535,10 +535,10 @@ change set is noticed at the next git-state event instead.
 
 ## Highlighting
 
-Tree-sitter, fully self-contained: the MIT runtime and fourteen grammars
+Tree-sitter, fully self-contained: the MIT runtime and fifteen grammars
 are compiled into the binary (haskell, purescript, python, yaml, json,
 toml, hcl/terraform, sql, bash, nu, markdown, typescript, tsx,
-javascript — all MIT except hcl's Apache-2.0), with helix's highlight queries embedded (MPL-2.0,
+javascript, c-sharp — all MIT except hcl's Apache-2.0), with helix's highlight queries embedded (MPL-2.0,
 file-level; see vendor/grammars/QUERY-LICENSE.md). Query predicates
 (#eq?, #any-of?, and #match? in its anchored-alternation form) are
 evaluated; painting follows the innermost-node-wins rule. Markdown

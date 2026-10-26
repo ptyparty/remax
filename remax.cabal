@@ -44,6 +44,7 @@ extra-source-files:
     vendor/tree-sitter/src/unicode.h
     vendor/tree-sitter/src/wasm_store.h
     vendor/grammars/bash/highlights.scm
+    vendor/grammars/c-sharp/highlights.scm
     vendor/grammars/haskell/highlights.scm
     vendor/grammars/hcl/highlights.scm
     vendor/grammars/javascript/highlights.scm
@@ -64,6 +65,9 @@ extra-source-files:
     vendor/grammars/bash/src/tree_sitter/alloc.h
     vendor/grammars/bash/src/tree_sitter/array.h
     vendor/grammars/bash/src/tree_sitter/parser.h
+    vendor/grammars/c-sharp/src/tree_sitter/alloc.h
+    vendor/grammars/c-sharp/src/tree_sitter/array.h
+    vendor/grammars/c-sharp/src/tree_sitter/parser.h
     vendor/grammars/haskell/src/tree_sitter/alloc.h
     vendor/grammars/haskell/src/tree_sitter/array.h
     vendor/grammars/haskell/src/tree_sitter/parser.h
@@ -209,6 +213,8 @@ executable remax
       vendor/grammars/tsx/src/scanner.c
       vendor/grammars/javascript/src/parser.c
       vendor/grammars/javascript/src/scanner.c
+      vendor/grammars/c-sharp/src/parser.c
+      vendor/grammars/c-sharp/src/scanner.c
   cxx-sources:
       vendor/grammars/yaml/src/scanner.cc
   extra-libraries:
