@@ -7,6 +7,7 @@ module Remax.Git
   , Editing (..)
   , pullHeadRef
   , pullBaseRef
+  , pullAtHead
   , pushedHeadRef
   , withBase
   , Subject (..)
@@ -35,6 +36,7 @@ module Remax.Git
   , branchRoot
   , branchRootOf
   , trackedChanges
+  , pullLabel
   , hasStagedChanges
   , FileScope (..)
   , buildOutputDirs
@@ -126,6 +128,9 @@ pullHeadRef n = "refs/remax/pull/" <> T.pack (show n) <> "/head"
 
 pullBaseRef :: Int -> T.Text
 pullBaseRef n = "refs/remax/pull/" <> T.pack (show n) <> "/base"
+
+pullAtHead :: PullRequest -> PullRequest
+pullAtHead pr = pr {prTip = pullHeadRef (prNumber pr), prBase = pullBaseRef (prNumber pr)}
 
 pushedHeadRef :: Int -> T.Text -> T.Text
 pushedHeadRef n sha = "refs/remax/pull/" <> T.pack (show n) <> "/pushed/" <> sha

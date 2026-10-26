@@ -117,7 +117,7 @@ declSeg st =
 -- under a leader in vi and under C-c in emacs, and emacs has no
 -- space leader at all — so it has no space menu and no ␣? either,
 -- and reaches the sheet the way it reaches every other command.
-data Verbs = AllVerbs | NoFlag
+data Verbs = AllVerbs | NoFlag | Feedback
 
 verbHint :: Verbs -> Config.KeyMode -> T.Text
 verbHint verbs keys =
@@ -125,6 +125,7 @@ verbHint verbs keys =
     flag text = case verbs of
       AllVerbs -> text
       NoFlag -> ""
+      Feedback -> text
   in
     case keys of
       Config.KeysVi -> "\9251\9166 accept · " <> flag "\9251! flag · " <> "\9251q question · \9251? keys "
@@ -147,6 +148,7 @@ verbsFor :: Types.St -> Verbs
 verbsFor st =
   case Git.subjectOf (Types.effectiveMode st) of
     Git.Pull _ Git.ReadOnly -> NoFlag
+    Git.Pull _ Git.Checkout -> Feedback
     _ -> AllVerbs
 
 meterSeg :: Types.St -> Brick.Widget Types.Name
