@@ -247,6 +247,13 @@ helixEditingGroups =
 -- the infobox is rendered from it and the keystroke is dispatched through
 -- it, so a key cannot be bound without being listed. :tree arrived bound
 -- but invisible precisely because those used to be two lists.
+resolveOrUnnote :: Brick.EventM Types.Name Types.St ()
+resolveOrUnnote = do
+  handled <- ThreadAction.resolveKey
+  case handled of
+    ThreadAction.Handled -> pure ()
+    ThreadAction.Unhandled -> NoteAction.unnoteCmd
+
 askOrQuestion :: Brick.EventM Types.Name Types.St ()
 askOrQuestion = do
   handled <- ThreadAction.askKey
@@ -268,7 +275,7 @@ spaceMenuEntries =
   , ("e", "$EDITOR here", Editor.editCurrent)
   , ("p", "walk filter: pending / unresolved / all", VerdictAction.cycleWalkFilter)
   , ("w", "toggle ignore whitespace", Settings.toggleIgnoreWs)
-  , ("u", "resolve note here", NoteAction.unnoteCmd)
+  , ("u", "resolve the thread or note here", resolveOrUnnote)
   , ("h", "make this hunk current", Nav.setCurrentHunkHere)
   , ("r", "revert hunk to base", VerdictAction.revertTarget)
   , ("a", "alternate file", Open.gotoAltFile)

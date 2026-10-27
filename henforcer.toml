@@ -751,6 +751,12 @@ qualified = { qualifiedPost = true }
 alias = "DrawCite"
 
 [[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Draw.Reactions"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DrawReactions"
+
+[[forAnyModule.allowedQualifications]]
 module = "Remax.UI.Core.Markdown"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }

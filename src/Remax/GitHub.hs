@@ -33,6 +33,11 @@ module Remax.GitHub
   , PushedHead (..)
   , pushedHeadState
   , keepPushedHead
+  , resolveThread
+  , CommentKind (..)
+  , addReaction
+  , removeReaction
+  , editComment
   ) where
 
 import Control.Exception qualified as Exception
@@ -40,6 +45,7 @@ import Control.Monad qualified as Monad
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Database.SQLite.Simple qualified as SQLite
+import Remax.Conversation qualified as Conv
 import Remax.Git qualified as Git
 import Remax.Store qualified as Store
 import System.Environment qualified as Env
@@ -157,6 +163,58 @@ graphql root query fields jq =
     jqArgs = maybe [] (\q -> ["--jq", q]) jq
   in
     runGh root (["api", "graphql", "-f", "query=" <> query] ++ fieldArgs ++ jqArgs)
+
+resolveThread :: FilePath -> Store.RemoteThreadId -> IO (Either GhFailure ())
+resolveThread root tid =
+  fmap
+    (fmap (const ()))
+    ( graphql
+        root
+        "mutation($thread: ID!) { resolveReviewThread(input: {threadId: $thread}) { thread { isResolved } } }"
+        [("thread", Store.remoteThreadIdToText tid)]
+        Nothing
+    )
+
+{- | A review comment sits on a line of the diff; an issue comment is
+PR-level. GitHub keeps them under different paths.
+-}
+data CommentKind = ReviewCommentKind | IssueCommentKind
+  deriving (Eq, Show)
+
+commentPath :: T.Text -> CommentKind -> Store.CommentId -> T.Text
+commentPath repo kind cid =
+  let
+    middle = case kind of
+      ReviewCommentKind -> "/pulls/comments/"
+      IssueCommentKind -> "/issues/comments/"
+  in
+    "repos/" <> repo <> middle <> T.pack (show (Store.commentIdToInt64 cid))
+
+addReaction :: FilePath -> T.Text -> CommentKind -> Store.CommentId -> Conv.Reaction -> IO (Either GhFailure ())
+addReaction root repo kind cid reaction =
+  fmap
+    (fmap (const ()))
+    (runGh root ["api", "-X", "POST", commentPath repo kind cid <> "/reactions", "-f", "content=" <> Conv.reactionText reaction, "--jq", ".id"])
+
+{- | Taking a reaction back means finding the one you left: the list
+names each reaction's author.
+-}
+removeReaction :: FilePath -> T.Text -> CommentKind -> Store.CommentId -> Conv.Login -> Conv.Reaction -> IO (Either GhFailure ())
+removeReaction root repo kind cid (Conv.Login viewer) reaction = do
+  let
+    path = commentPath repo kind cid <> "/reactions"
+    jq = ".[] | select(.user.login == \"" <> viewer <> "\" and .content == \"" <> Conv.reactionText reaction <> "\") | .id"
+  found <- runGh root ["api", path <> "?per_page=100", "--jq", jq]
+  case fmap (Maybe.listToMaybe . T.lines . T.strip) found of
+    Left failure -> pure (Left failure)
+    Right Nothing -> pure (Right ())
+    Right (Just rid) -> fmap (fmap (const ())) (runGh root ["api", "-X", "DELETE", path <> "/" <> rid])
+
+editComment :: FilePath -> T.Text -> CommentKind -> Store.CommentId -> T.Text -> IO (Either GhFailure ())
+editComment root repo kind cid body =
+  fmap
+    (fmap (const ()))
+    (runGh root ["api", "-X", "PATCH", commentPath repo kind cid, "-f", "body=" <> body, "--jq", ".id"])
 
 viewerLogin :: FilePath -> IO (Either GhFailure T.Text)
 viewerLogin root = fmap (fmap T.strip) (runGh root ["api", "user", "--jq", ".login"])

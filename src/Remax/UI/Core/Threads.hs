@@ -7,6 +7,7 @@ module Remax.UI.Core.Threads
   , bandIndexes
   , postKeys
   , postLabel
+  , possessive
   , threadState
   , anchorPlace
   , authorName
@@ -218,8 +219,23 @@ postRows st width column cid i post =
           ]
         else []
     line j row = ThreadLine cid (Just i) (Markdown.rowFill row) (lead j ++ Markdown.rowSegments row ++ trailer j row)
+    reactionRow =
+      case Conv.postReactions post of
+        [] -> []
+        counts -> [ThreadLine cid (Just i) Nothing (lead 1 ++ reactionSegs counts)]
   in
-    zipWith line [0 ..] rows
+    zipWith line [0 ..] rows ++ reactionRow
+
+reactionSegs :: Conv.Reactions -> [Markdown.Segment]
+reactionSegs counts =
+  let
+    one c =
+      Markdown.Segment
+        (if Conv.rcMine c then Attrs.questionMarkAttr else Attrs.hintAttr)
+        (Conv.reactionGlyph (Conv.rcReaction c) <> " " <> Types.tshow (Conv.rcCount c))
+        Nothing
+  in
+    List.intersperse (Markdown.Segment Attrs.hintAttr " \183 " Nothing) (map one (filter ((> 0) . Conv.rcCount) counts))
 
 stripSegs :: Int -> T.Text -> [Markdown.Segment]
 stripSegs column keys =
@@ -244,6 +260,9 @@ postKeys keys venue post =
     replyWord = case venue of
       Conv.ReviewThread {} -> "reply"
       _ -> "quote-reply"
+    summary = case venue of
+      Conv.ReviewSummary {} -> True
+      _ -> False
     resolve = case venue of
       Conv.ReviewThread {} -> [key "\9251u resolve" "C-c u resolve"]
       _ -> []
@@ -251,18 +270,25 @@ postKeys keys venue post =
     T.intercalate " \183 " $
       case Conv.postState post of
         Conv.Posted {} ->
-          [key ("r " <> replyWord) ("C-c r " <> replyWord), key "? ask" "C-c ? ask", key "+ react" "C-c + react", key "y copy link" "C-c y copy link"]
+          [key ("r " <> replyWord) ("C-c r " <> replyWord), key "? ask" "C-c ? ask"]
+            ++ (if Conv.postAuthor post == Conv.Viewer && not summary then [key "e edit" "C-c e edit"] else [])
+            ++ (if summary then [] else [key "+ react" "C-c + react"])
+            ++ [key "y copy link" "C-c y copy link"]
             ++ resolve
         Conv.Draft -> [key "e edit" "C-c e edit", key "dd discard" "C-c d discard"]
         Conv.Proposal _ -> [key "\9166 take as your reply" "C-c C-c take as your reply", key "dd drop" "C-c d drop"]
         Conv.Local _ -> []
 
+possessive :: Conv.Author -> T.Text
+possessive author =
+  case author of
+    Conv.Viewer -> "your"
+    _ -> authorName author <> "'s"
+
 postLabel :: Conv.Venue -> Conv.Post -> T.Text
 postLabel venue post =
   let
-    who = case Conv.postAuthor post of
-      Conv.Viewer -> "your"
-      author -> authorName author <> "'s"
+    who = possessive (Conv.postAuthor post)
     kind = case venue of
       Conv.ReviewThread Nothing _ -> "comment"
       Conv.PullComments -> "comment"

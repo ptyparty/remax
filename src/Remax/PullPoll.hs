@@ -152,6 +152,7 @@ data GraphAnswer = GraphAnswer
   , graphThreads :: [ThreadRow]
   , graphForcePushes :: [ForcePush]
   , graphChecks :: GitHub.Checks
+  , graphReactions :: Map.Map Store.CommentId Conv.Reactions
   }
 
 data Cached a = Cached
@@ -239,12 +240,19 @@ freshSnapshot pr cache = do
 
 freshRemote :: PollCache -> Conv.Remote
 freshRemote cache =
-  Conv.Remote
-    { Conv.remoteViewer = cacheViewer cache
-    , Conv.remoteThreads = remoteThreads (pagedRows (cacheReviewComments cache)) (maybe [] graphThreads (cacheGraph cache))
-    , Conv.remoteComments = map remotePullComment (pagedRows (cacheConversation cache))
-    , Conv.remoteReviews = map remoteReview (pagedRows (cacheReviews cache))
-    }
+  let
+    reactions = maybe Map.empty graphReactions (cacheGraph cache)
+    withViewer cid rest = Map.findWithDefault rest cid reactions
+    thread t = t {Conv.remoteThreadComments = fmap comment (Conv.remoteThreadComments t)}
+    comment c = c {Conv.remoteCommentReactions = withViewer (Conv.remoteCommentId c) (Conv.remoteCommentReactions c)}
+    pullComment c = c {Conv.pullCommentReactions = withViewer (Conv.pullCommentId c) (Conv.pullCommentReactions c)}
+  in
+    Conv.Remote
+      { Conv.remoteViewer = cacheViewer cache
+      , Conv.remoteThreads = map thread (remoteThreads (pagedRows (cacheReviewComments cache)) (maybe [] graphThreads (cacheGraph cache)))
+      , Conv.remoteComments = map pullComment (map remotePullComment (pagedRows (cacheConversation cache)))
+      , Conv.remoteReviews = map remoteReview (pagedRows (cacheReviews cache))
+      }
 
 remoteThreads :: [ReviewComment] -> [ThreadRow] -> [Conv.RemoteThread]
 remoteThreads comments threads =
@@ -461,11 +469,11 @@ reviewCommentJq =
   \, .created_at, .updated_at, .body, (.html_url // \"\"), ((.pull_request_review_id // \"\") | tostring)\
   \, ((.original_line // \"\") | tostring), ((.original_start_line // \"\") | tostring)\
   \, (.original_commit_id // \"\"), (.diff_hunk // \"\"), "
-    <> reactionsJq
+    <> restReactionsJq
     <> "] | @tsv"
 
-reactionsJq :: T.Text
-reactionsJq =
+restReactionsJq :: T.Text
+restReactionsJq =
   "((.reactions // {}) | [.[\"+1\"], .[\"-1\"], .laugh, .confused, .heart, .hooray, .rocket, .eyes]\
   \ | map((. // 0) | tostring) | join(\",\"))"
 
@@ -508,7 +516,7 @@ reviewCommentRow cells =
 conversationJq :: T.Text
 conversationJq =
   ".[] | [(.id | tostring), .user.login, .created_at, .updated_at, (.body // \"\"), (.html_url // \"\"), "
-    <> reactionsJq
+    <> restReactionsJq
     <> "] | @tsv"
 
 conversationRow :: [T.Text] -> Maybe ConversationComment
@@ -568,14 +576,30 @@ threadsSelection after =
     <> T.pack (show pageSize)
     <> after
     <> ") { pageInfo { hasNextPage endCursor }\
-       \ nodes { id isResolved comments(first: 1) { nodes { databaseId } } } }"
+       \ nodes { id isResolved comments(first: 100) { nodes { databaseId "
+    <> reactionsSelection
+    <> " } } } }"
+
+reactionsSelection :: T.Text
+reactionsSelection = "reactionGroups { content viewerHasReacted reactors { totalCount } }"
+
+reactionsJq :: T.Text -> T.Text
+reactionsJq comments =
+  "["
+    <> comments
+    <> ".nodes[] | (.databaseId | tostring) as $d | .reactionGroups[]\
+       \ | select(.reactors.totalCount > 0 or .viewerHasReacted)\
+       \ | [\"R\", $d, .content, (.viewerHasReacted | tostring), (.reactors.totalCount | tostring)]]"
 
 graphQuery :: T.Text
 graphQuery =
   "query($owner: String!, $name: String!, $number: Int!) {\
   \ repository(owner: $owner, name: $name) { pullRequest(number: $number) { "
     <> threadsSelection ""
-    <> " timelineItems(itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT], last: 50) { nodes {\
+    <> " comments(last: 100) { nodes { databaseId "
+    <> reactionsSelection
+    <> " } }\
+       \ timelineItems(itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT], last: 50) { nodes {\
        \ ... on HeadRefForcePushedEvent { createdAt beforeCommit { oid } afterCommit { oid } } } }\
        \ commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } } } } }"
 
@@ -591,7 +615,9 @@ threadsJq threads =
   "["
     <> threads
     <> ".nodes[] | [\"T\", .id, (.isResolved | tostring), ((.comments.nodes[0].databaseId // \"\") | tostring)]]\
-       \ + [[\"P\", ("
+       \ + "
+    <> reactionsJq (threads <> ".nodes[].comments")
+    <> " + [[\"P\", ("
     <> threads
     <> ".pageInfo.hasNextPage | tostring), ("
     <> threads
@@ -601,6 +627,8 @@ graphJq :: T.Text
 graphJq =
   ".data.repository.pullRequest as $p | ("
     <> threadsJq "$p.reviewThreads"
+    <> " + "
+    <> reactionsJq "$p.comments"
     <> " + [$p.timelineItems.nodes[] | [\"F\", (.createdAt // \"\"), (.beforeCommit.oid // \"\"), (.afterCommit.oid // \"\")]]\
        \ + [$p.commits.nodes[] | [\"C\", .commit.oid, (.commit.statusCheckRollup.state // \"\")]])\
        \ | .[] | @tsv"
@@ -661,10 +689,32 @@ graphAnswer raw =
     checks cells = case cells of
       ["C", _, state] -> Just (GitHub.checksFromRollup state)
       _ -> Nothing
+    reaction cells = case cells of
+      ["R", cid, content, mine, count] -> do
+        i <- readId cid
+        r <- graphReaction content
+        n <- Git.readCount count
+        Just (Store.CommentId i, [Conv.ReactionCount {Conv.rcReaction = r, Conv.rcCount = n, Conv.rcMine = mine == "true"}])
+      _ -> Nothing
+    reacted = Map.fromListWith (flip (++)) (Maybe.mapMaybe reaction rows)
   in
     GraphAnswer
       { graphRaw = raw
       , graphThreads = Maybe.mapMaybe thread rows
       , graphForcePushes = Maybe.mapMaybe forcePush rows
       , graphChecks = Maybe.fromMaybe GitHub.ChecksNone (Maybe.listToMaybe (Maybe.mapMaybe checks rows))
+      , graphReactions = reacted
       }
+
+graphReaction :: T.Text -> Maybe Conv.Reaction
+graphReaction content =
+  case content of
+    "THUMBS_UP" -> Just Conv.ThumbsUp
+    "THUMBS_DOWN" -> Just Conv.ThumbsDown
+    "LAUGH" -> Just Conv.Laugh
+    "HOORAY" -> Just Conv.Hooray
+    "CONFUSED" -> Just Conv.Confused
+    "HEART" -> Just Conv.Heart
+    "ROCKET" -> Just Conv.Rocket
+    "EYES" -> Just Conv.Eyes
+    _ -> Nothing

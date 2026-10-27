@@ -36,6 +36,7 @@ import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
 import Remax.UI.Action.Conversation qualified as Conversation
+import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Core.Jobs qualified as Jobs
 import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
@@ -295,6 +296,7 @@ applyVerdictHunk v = do
       origin <- verdictOrigin
       MonadIO.liftIO (Store.recordVerdicts (Types.stConn st) (Types.repoText st) (Types.stPassId st) v origin rows)
       Monad.when (v == Store.Reviewed) (Conversation.closeConversation (DiffModel.runKeys r))
+      Monad.when (v == Store.Reviewed) (ThreadAction.resolveOnAccept fv (DiffModel.runKeys r))
       Monad.when (v == Store.Reviewed) (Jobs.settleKeys (Types.fvPath fv) (DiffModel.runKeys r))
       State.modify $ \s ->
         s

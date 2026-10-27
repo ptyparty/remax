@@ -153,6 +153,7 @@ popupWord wp =
       Types.CommentOrigin -> "comment"
       Types.AskOrigin -> "ask"
     Types.TakeProposal {} -> "reply"
+    Types.EditPosted _ _ -> "edit"
 
 popupStatus :: Types.WorkPopup -> T.Text
 popupStatus wp =
@@ -162,6 +163,7 @@ popupStatus wp =
     Types.CommentOn anchor -> "new comment on " <> Threads.anchorPlace anchor
     Types.EditPending _ _ -> "editing your pending text"
     Types.TakeProposal _ _ _ -> "editing the proposal as your reply"
+    Types.EditPosted _ _ -> "editing your comment on GitHub"
 
 statusHint :: Types.St -> T.Text
 statusHint st =

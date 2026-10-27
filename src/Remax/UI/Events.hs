@@ -240,6 +240,8 @@ handleEvent brickEvent =
           | Just confirm <- Types.stConfirm st -> handleConfirmKey ev confirm
         _
           | Just picker <- Types.stCiting st -> CiteAction.handleCiteKey ev picker
+        _
+          | Just picker <- Types.stReacting st -> ThreadAction.handleReactionKey ev picker
         (Just np, _, _) -> NoteAction.handleNotePopupKey ev np
         _
           | Just tv <- Types.stTree st -> TreeKeys.handleTreeKey ev tv
@@ -414,6 +416,8 @@ handleBandKey keys band ev dispatch = do
     V.EvKey (V.KChar '?') [] | plain -> acted ThreadAction.askKey
     V.EvKey (V.KChar '@') [] | plain -> acted ThreadAction.commentKey
     V.EvKey (V.KChar 'e') [] | plain -> acted ThreadAction.editKey
+    V.EvKey (V.KChar '+') [] | plain -> acted ThreadAction.reactKey
+    V.EvKey (V.KChar 'y') [] | plain -> acted ThreadAction.copyKey
     V.EvKey V.KEnter [] | plain -> acted ThreadAction.takeKey
     V.EvKey (V.KChar 'd') []
       | plain && Types.bandDeleting band -> acted ThreadAction.discardKey
@@ -514,12 +518,14 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'R') [] -> VerdictAction.clearVerdictBySelection
         V.EvKey (V.KChar 'd') [] -> onPost ThreadAction.discardKey (pure ())
         V.EvKey (V.KChar 'z') [] -> ThreadAction.toggleFold
+        V.EvKey (V.KChar '+') [] -> onPost ThreadAction.reactKey (pure ())
+        V.EvKey (V.KChar 'y') [] -> onPost ThreadAction.copyKey (pure ())
         V.EvKey (V.KChar ']') [] -> PullAction.walkRun 1
         V.EvKey (V.KChar '[') [] -> PullAction.walkRun (-1)
         V.EvKey (V.KChar 'x') [] -> Nav.selectCurrentHunk
         V.EvKey (V.KChar 'p') [] -> VerdictAction.cycleWalkFilter
         V.EvKey (V.KChar 'w') [] -> Settings.toggleIgnoreWs
-        V.EvKey (V.KChar 'u') [] -> NoteAction.unnoteCmd
+        V.EvKey (V.KChar 'u') [] -> onPost ThreadAction.resolveKey NoteAction.unnoteCmd
         V.EvKey (V.KChar 'h') [] -> Nav.setCurrentHunkHere
         V.EvKey (V.KChar 'v') [] -> VerdictAction.revertTarget
         V.EvKey (V.KChar 'a') [] -> Open.gotoAltFile

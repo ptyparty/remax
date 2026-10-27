@@ -199,6 +199,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stConfirm = Nothing
     , Types.stCiting = Nothing
     , Types.stZPending = False
+    , Types.stReacting = Nothing
     , Types.stNow = suNow startup
     , Types.stConversations = Conv.conversations Conv.emptyRemote (suWork startup)
     , Types.stTour = suTour startup
