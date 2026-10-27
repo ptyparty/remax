@@ -214,10 +214,20 @@ workRows st width budget wp =
             )
       in
         map row (zip [0 ..] rows)
-    logRows = concatMap full opening ++ map collapsed older ++ concatMap full newest
+    room = budget - 2
+    (logRows, kept, foldHint) = case Types.wpLog wp of
+      Types.FoldedLog ->
+        let
+          shown = concatMap full opening ++ map collapsed older ++ concatMap full newest
+        in
+          (shown, drop (max 0 (length shown - room)) shown, if null older then "" else " \183 C-o unfolds")
+      Types.UnfoldedLog ->
+        let
+          shown = concatMap full posts
+        in
+          (shown, take room shown, " \183 C-o folds")
     rule =
-      Brick.withAttr Attrs.hintAttr (Brick.txt (Widgets.clipT width ("\9472 " <> ruleText wp <> " " <> T.replicate width "\9472")))
-    kept = drop (max 0 (length logRows - (budget - 2))) logRows
+      Brick.withAttr Attrs.hintAttr (Brick.txt (Widgets.clipT width ("\9472 " <> ruleText wp <> foldHint <> " " <> T.replicate width "\9472")))
   in
     if null logRows
       then [rule, Brick.txt " "]

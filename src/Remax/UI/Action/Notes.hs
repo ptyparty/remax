@@ -172,6 +172,8 @@ handleNotePopupKey ev np0 = do
     V.EvKey (V.KChar 'c') [V.MCtrl] -> discardNote np
     V.EvKey (V.KChar 'g') [V.MCtrl]
       | Types.WorkFor _ <- Types.npPurpose np -> CiteAction.openCitePicker
+    V.EvKey (V.KChar 'o') [V.MCtrl]
+      | Types.WorkFor wp <- Types.npPurpose np -> toggleLog wp
     V.EvKey (V.KChar 'n') [V.MMeta] | emacs -> moveChoice 1 np
     V.EvKey (V.KChar 'p') [V.MMeta] | emacs -> moveChoice (-1) np
     _ ->
@@ -188,6 +190,15 @@ handleNotePopupKey ev np0 = do
           , Vi.viBusy (Types.stVi st0) ->
               notePopupVi st0 np ev
         Modal.Normal -> notePopupNormalKey st0 np ev
+
+toggleLog :: Types.WorkPopup -> Brick.EventM Types.Name Types.St ()
+toggleLog wp =
+  let
+    flipped = case Types.wpLog wp of
+      Types.FoldedLog -> Types.UnfoldedLog
+      Types.UnfoldedLog -> Types.FoldedLog
+  in
+    State.modify (\s -> s {Types.stNotePopup = fmap (\p -> p {Types.npPurpose = Types.WorkFor wp {Types.wpLog = flipped}}) (Types.stNotePopup s)})
 
 popupBoxWidth :: Int -> Int
 popupBoxWidth columns = min 90 (max 50 (columns - 20))
