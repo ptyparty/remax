@@ -173,9 +173,13 @@ statusHint st =
       [] -> Nothing
       convs
         | any isThread convs -> Just (Threads.lineHint keys)
+        | any isNote convs -> Just (Threads.noteHint keys)
         | otherwise -> Nothing
     isThread c = case Conv.convVenue c of
       Conv.ReviewThread _ _ -> True
+      _ -> False
+    isNote c = case Conv.convVenue c of
+      Conv.LocalOnly _ -> True
       _ -> False
   in
     case (Types.stNotePopup st, ThreadAction.bandPost st, Types.currentFileMay st) of

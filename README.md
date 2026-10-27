@@ -482,9 +482,11 @@ never take the band. In the emacs keymap the same verbs sit under
 `C-c u`, `C-c C-c` takes a proposal, `C-c z` folds, and `C-n` enters
 the thread.
 
-`r` from a code line with a thread replies to that thread, and `?`
-asks the agent about it; on a line with none, `?` questions the lines
-as anywhere else. `@` comments on the selection or the cursor's line as
+`r` from a code line with a thread replies to that thread; when the
+line holds several threads the popup lists them under `goes to`, oldest
+first, and `Tab`/`S-Tab` in normal mode (`M-n`/`M-p` in emacs) pick one.
+`?` asks the agent about the thread; on a line with none, `?` questions
+the lines as anywhere else. `@` comments on the selection or the cursor's line as
 a new thread; a selection pre-fills a ````suggestion```` fence with its
 lines. Each popup shows where it is, the thread's log above the editor
 (older posts collapsed to one line each), a rule naming what the text
@@ -494,6 +496,26 @@ discards, and in the reply popup `?` turns the text into a question
 for the agent while `r` in the ask popup turns it back. Replies,
 comments and taken proposals wait for `:submit`; nothing reaches
 GitHub until then.
+
+### Notes to the agent
+
+A `!` or `?` note with no GitHub thread, in a pull request or an
+ordinary review, draws under its last line as a plain log: the author,
+a `╎` rail, the body and the age, with no header. The cursor never
+enters it; on a noted line the status line reads `? reply to the agent
+· ⏎ accept`, and accepting the lines retires the note. Notes ending on
+one line stack oldest first, each after the first labelled with its
+range, such as `╶ 78–80`.
+
+`!` or `?` over lines that already hold a note opens the note popup in
+insert mode with *new note* chosen. A `goes to` list under the text
+offers, for each note the selection touches, a reply that leaves the
+note's lines alone and a join that adds the post and grows the note to
+cover the selection; for a GitHub thread it offers a reply only. `Tab`
+and `S-Tab` in normal mode (`M-n`/`M-p` in emacs) change the target,
+and the title names it. The popup discards with `C-c`, or `Esc` in
+normal mode. Notes written by earlier versions of remax are read in
+place and take replies like any other.
 
 `:pr commits` walks the pull request one commit at a time, each reviewed
 read-only against its parent. The git bar shows `commit 3/7`, and `]` past

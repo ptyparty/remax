@@ -3,6 +3,8 @@
 module Remax.UI.Core.Threads
   ( ThreadLine (..)
   , threadLines
+  , rowLines
+  , rowLineCount
   , bandable
   , bandIndexes
   , postKeys
@@ -15,6 +17,7 @@ module Remax.UI.Core.Threads
   , shortAge
   , isResolvedFold
   , lineHint
+  , noteHint
   ) where
 
 import Brick qualified as Brick
@@ -43,11 +46,37 @@ data ThreadLine = ThreadLine
   , tlSegs :: [Markdown.Segment]
   }
 
+{- | Every conversation under one display row, the second and later
+ones labelled with the lines they cover.
+-}
+rowLines :: Types.St -> Int -> [Conv.Conversation] -> [ThreadLine]
+rowLines st width convs =
+  let
+    labelled (i, conv) =
+      let
+        label =
+          if i == (0 :: Int)
+            then []
+            else [ThreadLine (Conv.convId conv) Nothing Nothing [Markdown.Segment Attrs.hintAttr ("\9590 " <> rangeOf (Conv.convAnchor conv)) Nothing]]
+      in
+        label ++ threadLines st width conv
+  in
+    concatMap labelled (zip [0 ..] convs)
+
+rowLineCount :: Types.St -> Int -> [Conv.Conversation] -> Int
+rowLineCount st width = length . rowLines st width
+
+rangeOf :: Conv.Anchor -> T.Text
+rangeOf anchor = snd (T.breakOnEnd ":" (anchorPlace anchor))
+
 threadLines :: Types.St -> Int -> Conv.Conversation -> [ThreadLine]
 threadLines st width conv =
   let
     cid = Conv.convId conv
     posts = Conv.convPosts conv
+    bare = case Conv.convVenue conv of
+      Conv.LocalOnly _ -> True
+      _ -> False
     keys = Config.cfgKeys (Types.stConfig st)
     selected = case Types.stBand st of
       Just band | Types.bandConv band == cid -> Just (Types.bandPost band)
@@ -55,7 +84,7 @@ threadLines st width conv =
     column = authorColumn posts
     rowsFor (i, post) =
       let
-        body = postRows st width column cid i post
+        body = postRows st width column cid bare i post
         strip =
           if selected == Just i
             then [ThreadLine cid (Just i) Nothing (stripSegs column (postKeys keys (Conv.convVenue conv) post))]
@@ -151,6 +180,9 @@ authorLabel post =
     Conv.Local _ -> "\8644 " <> authorName (Conv.postAuthor post)
     _ -> authorName (Conv.postAuthor post)
 
+bareLabel :: Conv.Post -> T.Text
+bareLabel = authorName . Conv.postAuthor
+
 authorName :: Conv.Author -> T.Text
 authorName author =
   case author of
@@ -165,8 +197,8 @@ data Look = Look
   , lookRailAttr :: Brick.AttrName
   }
 
-lookOf :: Types.St -> Conv.Post -> Look
-lookOf st post =
+lookOf :: Types.St -> Bool -> Conv.Post -> Look
+lookOf st bare post =
   case Conv.postState post of
     Conv.Posted _ at _ ->
       Look
@@ -189,26 +221,30 @@ lookOf st post =
         , lookAuthorAttr = Attrs.guideAttr
         , lookRailAttr = Attrs.guideAttr
         }
-    Conv.Local _ ->
+    Conv.Local at ->
       Look
         { lookRail = "\9550"
-        , lookSlot = "local"
-        , lookAuthorAttr = Attrs.hintAttr
+        , lookSlot = if bare then ageText (Types.stNow st) at else "local"
+        , lookAuthorAttr =
+            if bare
+              then (if Conv.postAuthor post == Conv.Viewer then Attrs.noteInlineAttr else Attrs.replyInlineAttr)
+              else Attrs.hintAttr
         , lookRailAttr = Attrs.hintAttr
         }
 
 slotWidth :: Int
 slotWidth = 8
 
-postRows :: Types.St -> Int -> Int -> Conv.ConversationId -> Int -> Conv.Post -> [ThreadLine]
-postRows st width column cid i post =
+postRows :: Types.St -> Int -> Int -> Conv.ConversationId -> Bool -> Int -> Conv.Post -> [ThreadLine]
+postRows st width column cid bare i post =
   let
-    look = lookOf st post
+    look = lookOf st bare post
+    label = if bare then bareLabel post else authorLabel post
     bodyWidth = max 12 (width - column - 3 - slotWidth - 1)
     rendered = Markdown.render bodyWidth (Conv.postBody post)
     rows = if null rendered then [Markdown.plainRow ""] else rendered
     lead j =
-      [ Markdown.Segment (lookAuthorAttr look) (T.justifyRight column ' ' (if j == (0 :: Int) then clip column (authorLabel post) else "")) Nothing
+      [ Markdown.Segment (lookAuthorAttr look) (T.justifyRight column ' ' (if j == (0 :: Int) then clip column label else "")) Nothing
       , Markdown.Segment (lookRailAttr look) (" " <> lookRail look <> " ") Nothing
       ]
     trailer j row =
@@ -250,7 +286,10 @@ bandable conv =
   Maybe.mapMaybe (\(i, p) -> if Conv.isLocalPost p then Nothing else Just i) (zip [0 ..] (Conv.convPosts conv))
 
 bandIndexes :: Types.St -> Conv.Conversation -> [Int]
-bandIndexes st conv = if isResolvedFold st conv then [] else bandable conv
+bandIndexes st conv =
+  case Conv.convVenue conv of
+    Conv.LocalOnly _ -> []
+    _ -> if isResolvedFold st conv then [] else bandable conv
 
 postKeys :: Config.KeyMode -> Conv.Venue -> Conv.Post -> T.Text
 postKeys keys venue post =
@@ -321,6 +360,13 @@ lineHint keys =
   case keys of
     Config.KeysEmacs -> "C-n enters the thread \183 C-c g comment \183 C-c ? ask \183 C-c z fold"
     _ -> "j enters the thread \183 @ comment \183 ? ask \183 za fold"
+
+noteHint :: Config.KeyMode -> T.Text
+noteHint keys =
+  case keys of
+    Config.KeysEmacs -> "C-c ? reply to the agent \183 C-c \9166 accept"
+    Config.KeysVi -> "\9251q reply to the agent \183 \9251\9166 accept"
+    Config.KeysHelix -> "? reply to the agent \183 \9166 accept"
 
 ageText :: Clock.UTCTime -> T.Text -> T.Text
 ageText now stamp =

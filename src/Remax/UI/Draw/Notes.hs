@@ -8,7 +8,6 @@ module Remax.UI.Draw.Notes
 import Brick ((<+>))
 import Brick qualified as Brick
 import Brick.Types qualified as BrickTypes
-import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Remax.Conversation qualified as Conv
@@ -28,9 +27,9 @@ notePopupLayer :: Types.St -> Types.NotePopup -> BrickTypes.Widget Types.Name
 notePopupLayer st np =
   let
     ed = Types.npEd np
-    thread = popupThread st np
-    title = popupTitle np thread <> " \183 " <> modeTag (Modal.edMode ed)
+    title = popupTitle np <> " \183 " <> modeTag (Modal.edMode ed)
     targetRows = popupTargetRows st np
+    choiceRows = choiceList np
   in
     BrickTypes.Widget BrickTypes.Greedy BrickTypes.Greedy $ do
       ctx <- BrickTypes.getContext
@@ -42,16 +41,16 @@ notePopupLayer st np =
         -- squeezing the box you are typing in
         rows = SoftWrap.softRows (NoteAction.popupRowWidth boxWidth) (Modal.bufferLines ed)
         editorRows = max 3 (min 10 (length rows + 1))
-        budget = bodyRows - editorRows - length targetRows - 1
+        budget = bodyRows - editorRows - length targetRows - length choiceRows - 1
         transcript = case Types.npPurpose np of
           Types.WorkFor wp -> workRows st (boxWidth - 2) budget wp
-          _ -> transcriptRows (boxWidth - 2) budget (NoteAction.transcriptPosts thread)
+          _ -> []
       BrickTypes.render $
-        Widgets.floatFrame title (popupHint np thread) $
+        Widgets.floatFrame title (popupHint np) $
           Brick.hLimit boxWidth $
             Brick.padRight Brick.Max $
               Brick.vLimit bodyRows $
-                Brick.vBox (targetRows ++ transcript ++ [noteBodyWidget ed rows])
+                Brick.vBox (targetRows ++ transcript ++ [Brick.vLimit editorRows (noteBodyWidget ed rows)] ++ choiceRows)
 
 modeTag :: Modal.Mode -> T.Text
 modeTag mode =
@@ -59,39 +58,37 @@ modeTag mode =
     Modal.Insert -> "ins"
     Modal.Normal -> "nor"
 
-popupThread :: Types.St -> Types.NotePopup -> [Store.Post]
-popupThread st np =
-  case Types.npPurpose np of
-    Types.AmendMessage _ -> []
-    Types.WorkFor _ -> []
-    Types.NoteFor keys _ ->
-      case Maybe.mapMaybe (`Map.lookup` Types.stThreads st) keys of
-        (t : _) -> t
-        [] -> []
-
-popupTitle :: Types.NotePopup -> [Store.Post] -> T.Text
-popupTitle np thread =
+popupTitle :: Types.NotePopup -> T.Text
+popupTitle np =
   case Types.npPurpose np of
     Types.AmendMessage _ -> "amend"
     Types.WorkFor wp -> workTitle wp
-    Types.NoteFor _ _ -> case NoteAction.noteAct thread of
-      NoteAction.NoteNew -> "note"
-      NoteAction.NoteEdit -> "note \183 editing yours"
-      NoteAction.NoteReply who -> "note \183 reply to " <> who
+    Types.NoteOn plan ->
+      let
+        verb = case Types.planVerdict plan of
+          Store.Flagged -> "! flag"
+          _ -> "? ask"
+        target = case Types.safeIdx (Types.planChoices plan) (Types.planChosen plan) of
+          Just Types.NewNote -> "new note"
+          Just (Types.ReplyNote _) -> "reply"
+          Just (Types.JoinNote _) -> "join"
+          Just (Types.ReplyThread _) -> "reply"
+          Nothing -> "new note"
+      in
+        verb <> " \183 " <> Threads.anchorPlace (Conv.OnLines (Types.planSpan plan)) <> " \183 " <> target
 
-popupHint :: Types.NotePopup -> [Store.Post] -> T.Text
-popupHint np thread =
+popupHint :: Types.NotePopup -> T.Text
+popupHint np =
   case Types.npPurpose np of
     Types.AmendMessage _ -> "\9166 amend (nor) \183 C-c cancel"
     Types.WorkFor wp -> workHint wp
-    -- what backing out costs is worth saying, since it differs: a note
-    -- the mark opened takes the mark with it, one asked for does not
-    Types.NoteFor _ (Types.NoteFromMark _) ->
-      "\9166 save (nor) \183 C-c cancels the mark \183 empty note clears"
-    Types.NoteFor _ Types.NoteAsked -> case NoteAction.noteAct thread of
-      NoteAction.NoteReply _ ->
-        "\9166 post (nor) \183 C-c discard \183 empty clears the thread"
-      _ -> "\9166 save (nor) \183 C-c discard \183 empty note clears"
+    Types.NoteOn plan ->
+      let
+        several = length (Types.planChoices plan) > 1
+      in
+        case Modal.edMode (Types.npEd np) of
+          Modal.Insert -> "INS  Esc \9166 saves" <> (if several then " \183 Esc Tab changes the target" else "") <> " \183 C-c cancels the mark"
+          Modal.Normal -> "NOR  \9166 saves" <> (if several then " \183 Tab S-Tab target" else "") <> " \183 i edits \183 Esc discards"
 
 -- which line the conversation is about; the popup never used to say
 popupTargetRows :: Types.St -> Types.NotePopup -> [BrickTypes.Widget Types.Name]
@@ -99,18 +96,49 @@ popupTargetRows st np =
   case Types.npPurpose np of
     Types.AmendMessage target -> amendTargetRows st target
     Types.WorkFor wp -> [Brick.withAttr Attrs.hintAttr (Brick.txt (Types.wpPlace wp)), Brick.txt " "]
-    Types.NoteFor _ _ -> case Types.currentFileMay st of
-      Nothing -> []
-      Just fv ->
-        let
-          cur = fst (Modal.cursorRC (Types.fvEd fv))
-          decl = case View.declAt (Modal.bufferLines (Types.fvEd fv)) cur of
+    Types.NoteOn plan ->
+      let
+        lineSpan = Types.planSpan plan
+        decl = case Types.currentFileMay st of
+          Just fv -> case View.declAt (Modal.bufferLines (Types.fvEd fv)) (fst (Modal.cursorRC (Types.fvEd fv))) of
             Just d -> " \183 " <> View.declName d
             Nothing -> ""
-        in
-          [ Brick.withAttr Attrs.hintAttr (Brick.txt (T.pack (Types.fvPath fv) <> ":" <> Types.tshow (cur + 1) <> decl))
-          , Brick.txt " "
-          ]
+          Nothing -> ""
+        range = snd (T.breakOnEnd ":" (Threads.anchorPlace (Conv.OnLines lineSpan)))
+      in
+        [ Brick.withAttr Attrs.hintAttr (Brick.txt (Conv.spanPath lineSpan <> ":" <> range <> decl))
+        , Brick.txt " "
+        ]
+
+-- The `goes to` list under the editor: where the text lands, with the
+-- chosen row marked.
+choiceList :: Types.NotePopup -> [BrickTypes.Widget Types.Name]
+choiceList np =
+  let
+    row chosen i label =
+      Brick.withAttr
+        (if i == chosen then Attrs.noteInlineAttr else Attrs.hintAttr)
+        (Brick.txt ((if i == chosen then "\9656 " else "  ") <> label))
+    listed chosen labels =
+      case labels of
+        [] -> []
+        [_] -> []
+        _ -> Brick.txt " " : Brick.withAttr Attrs.hintAttr (Brick.txt "goes to") : zipWith (row chosen) [0 ..] labels
+  in
+    case Types.npPurpose np of
+      Types.NoteOn plan ->
+        listed (Types.planChosen plan) (map (NoteAction.choiceLabel (Types.planSpan plan)) (Types.planChoices plan))
+      Types.WorkFor wp ->
+        listed (Types.wpChosen wp) (map threadLabel (Types.wpChoices wp))
+      Types.AmendMessage _ -> []
+
+threadLabel :: Conv.Conversation -> T.Text
+threadLabel conv =
+  let
+    first = maybe "" (Markdown.firstLine . Conv.postBody) (Maybe.listToMaybe (Conv.convPosts conv))
+    author = maybe "" (Threads.authorName . Conv.postAuthor) (Maybe.listToMaybe (Conv.convPosts conv))
+  in
+    "thread on " <> Threads.anchorPlace (Conv.convAnchor conv) <> " \183 " <> author <> " \183 " <> first
 
 workTitle :: Types.WorkPopup -> T.Text
 workTitle wp =
@@ -294,32 +322,5 @@ selectedLine l start mEnd =
     midW = if T.null mid then Brick.txt " " else Brick.txt mid
   in
     Brick.txt pre <+> Brick.withDefAttr Attrs.selAttr midW <+> Brick.txt post
-
-transcriptRows :: Int -> Int -> [Store.Post] -> [BrickTypes.Widget Types.Name]
-transcriptRows width budget posts =
-  let
-    rowsFor = concatMap (NoteAction.postRows width)
-    (shownRows, elided)
-      | null posts = ([], 0 :: Int)
-      | length (rowsFor posts) <= budget = (rowsFor posts, 0)
-      | otherwise =
-          let
-            drops ps
-              | null ps = ([], length posts)
-              | length (rowsFor ps) <= budget - 1 =
-                  (rowsFor ps, length posts - length ps)
-              | otherwise = drops (drop 1 ps)
-          in
-            drops posts
-    markerRows =
-      [ Brick.withAttr
-          Attrs.hintAttr
-          (Brick.txt ("\8230 " <> Types.tshow elided <> " earlier post" <> (if elided == 1 then "" else "s")))
-      | elided > 0
-      ]
-    ruleRows =
-      [Brick.withAttr Attrs.hairAttr (Brick.vLimit 1 (Brick.fill '\9472')) | not (null shownRows) || elided > 0]
-  in
-    markerRows ++ shownRows ++ ruleRows
 
 -- Switching repositories --------------------------------------------------------

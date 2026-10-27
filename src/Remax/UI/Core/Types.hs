@@ -25,6 +25,8 @@ module Remax.UI.Core.Types
   , walkLabel
   , nextWalkFilter
   , PopupPurpose (..)
+  , NotePlan (..)
+  , NoteChoice (..)
   , WorkPopup (..)
   , WorkAction (..)
   , WorkOrigin (..)
@@ -258,9 +260,26 @@ nextWalkFilter w =
     WalkAll -> WalkPending
 
 data PopupPurpose
-  = NoteFor [T.Text] NoteOrigin
+  = NoteOn NotePlan
   | AmendMessage AmendTarget
   | WorkFor WorkPopup
+
+{- | A ! or ? note being written: the lines it is about, and the
+conversations already on them it could join instead.
+-}
+data NotePlan = NotePlan
+  { planVerdict :: Store.Verdict
+  , planSpan :: Conv.LineSpan
+  , planOrigin :: NoteOrigin
+  , planChoices :: [NoteChoice]
+  , planChosen :: Int
+  }
+
+data NoteChoice
+  = NewNote
+  | ReplyNote Conv.Conversation
+  | JoinNote Conv.Conversation
+  | ReplyThread Conv.Conversation
 
 {- | A popup that writes to the conversation store: a reply, a question
 for the agent, a new comment, or your pending text opened again.
@@ -270,6 +289,8 @@ data WorkPopup = WorkPopup
   , wpConv :: Maybe Conv.ConversationId
   , wpPlace :: T.Text
   , wpOpenedWith :: T.Text
+  , wpChoices :: [Conv.Conversation]
+  , wpChosen :: Int
   }
 
 data WorkAction

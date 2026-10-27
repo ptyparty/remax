@@ -49,6 +49,8 @@ module Remax.Conversation
   , Conversation (..)
   , conversations
   , conversationFor
+  , conversationTime
+  , spanUnion
   , comment
   , reply
   , ask
@@ -385,6 +387,28 @@ conversations remote own =
 
 conversationFor :: ConversationId -> [Conversation] -> Maybe Conversation
 conversationFor cid = List.find ((== cid) . convId)
+
+conversationTime :: Conversation -> T.Text
+conversationTime conv =
+  let
+    at p = case postState p of
+      Posted _ t _ -> Just t
+      Local t -> Just t
+      _ -> Nothing
+  in
+    Maybe.fromMaybe "" (Maybe.listToMaybe (Maybe.mapMaybe at (convPosts conv)))
+
+{- | A note grown to cover more lines: the union of both spans, in line
+order, keeping the first span's commit.
+-}
+spanUnion :: LineSpan -> LineSpan -> LineSpan
+spanUnion a b =
+  let
+    merged = List.sortOn (\l -> (slLineNo l, not (T.isPrefixOf "-" (slText l)))) (List.nubBy (\x y -> slKey x == slKey y) (NEL.toList (spanLines a) ++ NEL.toList (spanLines b)))
+  in
+    case merged of
+      (l : ls) -> a {spanLines = l NEL.:| ls}
+      [] -> a
 
 hasPullWork :: OwnWork -> Bool
 hasPullWork own =

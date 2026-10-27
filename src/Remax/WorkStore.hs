@@ -42,8 +42,10 @@ loadWork :: SQLite.Connection -> Scope -> IO Conv.OwnWork
 loadWork conn scope = do
   verdicts <- Store.loadVerdicts conn (scopeRepo scope)
   targets <- loadTargets conn scope
-  items <- loadItems conn scope targets
   legacy <- loadLegacyNotes conn (scopeRepo scope)
+  let
+    legacyTargets = Map.fromList (Maybe.mapMaybe (\t -> fmap (\lid -> (lid, t)) (Conv.targetLocalId t)) (Map.keys legacy))
+  items <- loadItems conn scope (Map.union targets legacyTargets)
   submitted <- loadSubmitted conn (scopeRepo scope)
   pure
     Conv.OwnWork
@@ -108,11 +110,20 @@ loadItems conn scope targets = do
           Conv.Agent name -> Just (Conv.Proposed name (Conv.Markdown body))
           _ -> Nothing
         "pending" -> Just (Conv.Pending (Conv.parseAuthor author) (Conv.Markdown body))
-        "aside" -> Just (Conv.Aside (Conv.parseAuthor author) (Conv.Markdown body) at)
+        "aside" -> Just (Conv.Aside (Conv.parseAuthor author) (Conv.Markdown body) (isoStamp at))
         "edit" -> fmap (\c -> Conv.Edit (Store.CommentId c) (Conv.Markdown body)) cid
         _ -> Nothing
       Just (target, [(Conv.StoredWork wid, work)])
   pure (Map.fromListWith (flip (++)) (Maybe.mapMaybe item rows))
+
+{- | SQLite's datetime('now') reads "2026-10-27 15:04:05"; ages are
+taken from the ISO 8601 form GitHub uses.
+-}
+isoStamp :: T.Text -> T.Text
+isoStamp t =
+  if T.length t == 19 && T.index t 10 == ' '
+    then T.replace " " "T" t <> "Z"
+    else t
 
 readInt64 :: T.Text -> Maybe DataInt.Int64
 readInt64 t =
@@ -160,7 +171,7 @@ loadLegacyNotes conn repo = do
         firstKey = NEL.head spanLines
         onFirst (k, _, _, _, _) = Store.LineKey k == Conv.slKey firstKey
         post (k, s, a, b, at) =
-          (Conv.LegacyPost k s, Conv.Aside (if a == "reviewer" then Conv.Viewer else Conv.Agent (Conv.AgentName a)) (Conv.Markdown b) at)
+          (Conv.LegacyPost k s, Conv.Aside (if a == "reviewer" then Conv.Viewer else Conv.Agent (Conv.AgentName a)) (Conv.Markdown b) (isoStamp at))
       Just (Conv.OnLinesOnly (Conv.LocalId gid) lineSpan verdict, map post (filter onFirst rows))
   pure (Map.fromList (Maybe.mapMaybe note (Map.toList byGroup)))
 
