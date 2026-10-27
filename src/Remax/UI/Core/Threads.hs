@@ -344,6 +344,7 @@ postKeys keys venue post =
       Conv.ReviewSummary {} -> True
       _ -> False
     resolve = case venue of
+      Conv.ReviewThread _ Store.Resolved -> [key "\9251u unresolve" "C-c u unresolve"]
       Conv.ReviewThread {} -> [key "\9251u resolve" "C-c u resolve"]
       _ -> []
   in

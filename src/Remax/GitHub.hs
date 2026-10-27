@@ -33,7 +33,7 @@ module Remax.GitHub
   , PushedHead (..)
   , pushedHeadState
   , keepPushedHead
-  , resolveThread
+  , setThreadResolution
   , CommentKind (..)
   , addReaction
   , removeReaction
@@ -180,16 +180,21 @@ graphql root query fields jq =
   in
     runGh root (["api", "graphql", "-f", "query=" <> query] ++ fieldArgs ++ jqArgs)
 
-resolveThread :: FilePath -> Store.RemoteThreadId -> IO (Either GhFailure ())
-resolveThread root tid =
-  fmap
-    (fmap (const ()))
-    ( graphql
-        root
-        "mutation($thread: ID!) { resolveReviewThread(input: {threadId: $thread}) { thread { isResolved } } }"
-        [("thread", Store.remoteThreadIdToText tid)]
-        Nothing
-    )
+setThreadResolution :: FilePath -> Store.Resolution -> Store.RemoteThreadId -> IO (Either GhFailure ())
+setThreadResolution root resolution tid =
+  let
+    mutation = case resolution of
+      Store.Resolved -> "resolveReviewThread"
+      Store.Unresolved -> "unresolveReviewThread"
+  in
+    fmap
+      (fmap (const ()))
+      ( graphql
+          root
+          ("mutation($thread: ID!) { " <> mutation <> "(input: {threadId: $thread}) { thread { isResolved } } }")
+          [("thread", Store.remoteThreadIdToText tid)]
+          Nothing
+      )
 
 {- | A review comment sits on a line of the diff; an issue comment is
 PR-level. GitHub keeps them under different paths.
