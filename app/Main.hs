@@ -30,6 +30,7 @@ import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.Hunks qualified as Hunks
 import Remax.Json qualified as Json
+import Remax.Key qualified as Key
 import Remax.RemoteCache qualified as RemoteCache
 import Remax.Store qualified as Store
 import Remax.UI qualified as UI
@@ -645,7 +646,9 @@ list options = do
     digest = do
       listed <- mapM (Feedback.listFor conn) roots
       asked <- mapM (\r -> fmap (map ((,) r)) (Store.tourRequests conn (T.pack r))) roots
-      pure (Set.union (Set.fromList (concatMap (Feedback.digestOf party) listed)) (requestDigest party (concat asked)))
+      pure
+        . Set.map Key.sha256Hex
+        $ Set.union (Set.fromList (concatMap (Feedback.digestOf party) listed)) (requestDigest party (concat asked))
     news before now =
       case party of
         Nothing -> now /= before
@@ -654,7 +657,7 @@ list options = do
     watching =
       T.intercalate
         "\t"
-        ( "digest/3"
+        ( "digest/4"
             : maybe "all" Feedback.partyText party
             : map T.pack roots
         )
