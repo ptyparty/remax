@@ -234,11 +234,15 @@ notePopupNormalKey st np ev =
     V.EvKey V.KBackTab [] -> moveChoice (-1) np
     V.EvKey (V.KChar '?') []
       | Types.WorkFor wp <- Types.npPurpose np
-      , Types.ReplyTo target _ <- Types.wpAction wp ->
-          ThreadAction.switchAction wp (Types.AskOn target)
+      , Just target <- remarkTarget wp ->
+          ThreadAction.switchAction wp (Types.AskOn Types.AskRemark target)
+    V.EvKey (V.KChar '!') []
+      | Types.WorkFor wp <- Types.npPurpose np
+      , Just target <- remarkTarget wp ->
+          ThreadAction.switchAction wp (Types.AskOn Types.FlagRemark target)
     V.EvKey (V.KChar 'r') []
       | Types.WorkFor wp <- Types.npPurpose np
-      , Types.AskOn target <- Types.wpAction wp ->
+      , Types.AskOn _ target <- Types.wpAction wp ->
           ThreadAction.switchAction wp (Types.ReplyTo target (repliedTo st wp))
     -- the popup's normal mode follows the session's keymap, so a
     -- vi user gets vi here too; emacs is modeless and never
@@ -265,6 +269,13 @@ moveChoice d np =
       other -> other
   in
     State.modify (\s -> s {Types.stNotePopup = fmap (\p -> p {Types.npPurpose = purpose}) (Types.stNotePopup s)})
+
+remarkTarget :: Types.WorkPopup -> Maybe Conv.Target
+remarkTarget wp =
+  case Types.wpAction wp of
+    Types.ReplyTo target _ -> Just target
+    Types.AskOn _ target -> Just target
+    _ -> Nothing
 
 repliedTo :: Types.St -> Types.WorkPopup -> T.Text
 repliedTo st wp =
@@ -309,7 +320,15 @@ saveNote np = do
       savePlan plan text
       VerdictAction.runDeferredAdvance
     Types.AmendMessage target -> Rebase.applyAmendMessage target text
-    Types.WorkFor wp -> ThreadAction.saveWork wp text
+    Types.WorkFor wp -> do
+      st <- State.get
+      let
+        anchor = Types.wpConv wp >>= \cid -> fmap Conv.convAnchor (Conv.conversationFor cid (Types.stConversations st))
+      case (Types.wpAction wp, anchor) of
+        (Types.AskOn remark _, Just a)
+          | not (T.null text) -> VerdictAction.markAnchorLines (Types.remarkVerdict remark) a
+        _ -> pure ()
+      ThreadAction.saveWork wp text
 
 -- Where the note's text goes: a new note on its lines, a reply on a
 -- note already there, or a join that grows that note.

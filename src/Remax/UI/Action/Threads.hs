@@ -9,6 +9,7 @@ module Remax.UI.Action.Threads
   , Handled (..)
   , replyKey
   , askKey
+  , flagKey
   , commentKey
   , editKey
   , discardKey
@@ -207,7 +208,7 @@ aimAt wp conv =
     { Types.wpConv = Just (Conv.convId conv)
     , Types.wpAction = case Types.wpAction wp of
         Types.ReplyTo _ _ -> Types.ReplyTo (Conv.convTarget conv) (repliedAuthor conv Nothing)
-        Types.AskOn _ -> Types.AskOn (Conv.convTarget conv)
+        Types.AskOn r _ -> Types.AskOn r (Conv.convTarget conv)
         other -> other
     }
 
@@ -219,15 +220,21 @@ quoteReply conv cid post =
     openWorkPopup conv (Types.ReplyTo (Conv.OnComment cid) (Threads.authorName (Conv.postAuthor post))) quoted
 
 askKey :: Brick.EventM Types.Name Types.St Handled
-askKey = do
+askKey = remarkKey Types.AskRemark
+
+flagKey :: Brick.EventM Types.Name Types.St Handled
+flagKey = remarkKey Types.FlagRemark
+
+remarkKey :: Types.AgentRemark -> Brick.EventM Types.Name Types.St Handled
+remarkKey remark = do
   st <- State.get
   case bandPost st of
-    Just (conv, _, _) -> openWorkPopup conv (Types.AskOn (Conv.convTarget conv)) ""
+    Just (conv, _, _) -> openWorkPopup conv (Types.AskOn remark (Conv.convTarget conv)) ""
     Nothing ->
       case lineThreads st of
         [] -> pure Unhandled
         threads@(conv : _) -> do
-          handled <- openWorkPopup conv (Types.AskOn (Conv.convTarget conv)) ""
+          handled <- openWorkPopup conv (Types.AskOn remark (Conv.convTarget conv)) ""
           offerThreads threads
           pure handled
 
@@ -411,10 +418,10 @@ saveWork wp text = do
         Monad.void (MonadIO.liftIO (WorkStore.addPending conn scope target Conv.Viewer body))
         reloadAndBand (Types.wpConv wp)
         Types.setMsg ("reply to " <> author <> " waits for :submit")
-      Types.AskOn target -> do
+      Types.AskOn remark target -> do
         Monad.void (MonadIO.liftIO (WorkStore.addAside conn scope target Conv.Viewer body))
         reloadAndBand (Types.wpConv wp)
-        Types.setMsg "asked the agent"
+        Types.setMsg (case remark of Types.FlagRemark -> "flagged for the agent"; Types.AskRemark -> "asked the agent")
       Types.CommentOn anchor -> do
         lid <- MonadIO.liftIO (WorkStore.newLocalId (Types.repoText st) (anchorKeys anchor))
         Monad.void (MonadIO.liftIO (WorkStore.addPending conn scope (Conv.NewThread lid anchor) Conv.Viewer body))
@@ -575,8 +582,9 @@ editPostedKey = do
           openWorkPopup conv (Types.EditPosted (commentKindOf (Conv.convVenue conv)) cid) (Conv.markdownText (Conv.postBody post))
     _ -> pure Unhandled
 
-{- | Accepting lines retires the notes written on them, and the outdated
-notes drawn under them.
+{- | Accepting lines retires the notes written on them, the outdated
+notes drawn under them, and the talk with the agent on GitHub threads
+over them.
 -}
 retireNotesOn :: [Store.LineKey] -> Brick.EventM Types.Name Types.St ()
 retireNotesOn keys = do
@@ -590,8 +598,21 @@ retireNotesOn keys = do
           drawn = Anchor.conversationsIn st (concatMap (\i -> Map.findWithDefault [] i (Types.fvThreads fv)) rowIxs)
         in
           Maybe.mapMaybe (\c -> if Map.member (Conv.convId c) (Types.stOutdated st) then Conv.targetLocalId (Conv.convTarget c) else Nothing) drawn
+    threadsHere = case Types.currentFileMay st of
+      Nothing -> []
+      Just fv ->
+        let
+          path = T.pack (Types.fvPath fv)
+          rows = filter (\r -> any (`elem` map Store.lineKeyToText keys) (Maybe.catMaybes [DiffModel.rKey r, DiffModel.rRemarkKey r])) (Types.fvRows fv)
+          covers c = any (\r -> Anchor.anchorCovers path r (Conv.convAnchor c)) rows
+          threadId c = case Conv.convVenue c of
+            Conv.ReviewThread (Just tid) _ | covers c -> Just tid
+            _ -> Nothing
+        in
+          Maybe.mapMaybe threadId (Types.stConversations st)
   MonadIO.liftIO (WorkStore.retireNotesOn (Types.stConn st) (Types.repoText st) keys)
   MonadIO.liftIO (mapM_ (WorkStore.retireNote (Types.stConn st) (Types.repoText st)) outdatedHere)
+  MonadIO.liftIO (WorkStore.retireAsides (Types.stConn st) (Types.repoText st) threadsHere)
   WorkModel.reloadWork
 
 anchorKeys :: Conv.Anchor -> [Store.LineKey]

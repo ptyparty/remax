@@ -351,7 +351,7 @@ postKeys keys venue post =
     T.intercalate " \183 " $
       case Conv.postState post of
         Conv.Posted {} ->
-          [key ("r " <> replyWord) ("C-c r " <> replyWord), key "? ask" "C-c ? ask"]
+          [key ("r " <> replyWord) ("C-c r " <> replyWord), key "? ask" "C-c ? ask", key "! flag" "C-c ! flag"]
             ++ (if Conv.postAuthor post == Conv.Viewer && not summary then [key "e edit" "C-c e edit"] else [])
             ++ (if summary then [] else [key "+ react" "C-c + react"])
             ++ [key "y copy link" "C-c y copy link"]
@@ -400,8 +400,8 @@ anchorPlace anchor =
 lineHint :: Config.KeyMode -> T.Text
 lineHint keys =
   case keys of
-    Config.KeysEmacs -> "C-n enters the thread \183 C-c g comment \183 C-c ? ask \183 C-c z fold"
-    _ -> "j enters the thread \183 @ comment \183 ? ask \183 za fold"
+    Config.KeysEmacs -> "C-n enters the thread \183 C-c g comment \183 C-c ? ask \183 C-c ! flag \183 C-c z fold"
+    _ -> "j enters the thread \183 @ comment \183 ? ask \183 ! flag \183 za fold"
 
 noteHint :: Config.KeyMode -> T.Text
 noteHint keys =

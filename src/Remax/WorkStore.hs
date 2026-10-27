@@ -14,6 +14,7 @@ module Remax.WorkStore
   , growNote
   , retireNotesOn
   , retireNote
+  , retireAsides
   , forgetWork
   , newLocalId
   ) where
@@ -359,6 +360,13 @@ retireNote conn repo (Conv.LocalId lid) =
     SQLite.execute conn "DELETE FROM work_target WHERE repo = ? AND local_id = ?" (repo, lid)
     SQLite.execute conn "DELETE FROM work_target_line WHERE repo = ? AND local_id = ?" (repo, lid)
     SQLite.execute conn "DELETE FROM note_post WHERE repo = ? AND group_id = ?" (repo, lid)
+
+retireAsides :: SQLite.Connection -> T.Text -> [Store.RemoteThreadId] -> IO ()
+retireAsides conn repo tids =
+  SQLite.withTransaction conn $
+    mapM_
+      (\(Store.RemoteThreadId t) -> SQLite.execute conn "DELETE FROM work WHERE repo = ? AND target_kind = 'thread' AND target_id = ? AND kind = 'aside'" (repo, t))
+      tids
 
 forgetWork :: SQLite.Connection -> T.Text -> IO ()
 forgetWork conn repo =

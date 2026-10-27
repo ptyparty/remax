@@ -11,6 +11,7 @@ module Remax.UI.Action.Verdicts
   , revertTarget
   , acceptSelection
   , applyVerdict
+  , markAnchorLines
   , runDeferredAdvance
   , clearVerdictBySelection
   , cancelMark
@@ -31,12 +32,14 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Remax.Config qualified as Config
+import Remax.Conversation qualified as Conv
 import Remax.DiffModel qualified as DiffModel
 import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
 import Remax.UI.Action.Conversation qualified as Conversation
 import Remax.UI.Action.Threads qualified as ThreadAction
+import Remax.UI.Core.Anchor qualified as Anchor
 import Remax.UI.Core.Jobs qualified as Jobs
 import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
@@ -335,6 +338,26 @@ applyVerdictLines v = do
       recordLineVerdicts v fv lo picks
       advanceAfterLines v lo hi
       pure True
+
+-- | Mark the lines a GitHub thread sits on, when they are in the session.
+markAnchorLines :: Store.Verdict -> Conv.Anchor -> Brick.EventM Types.Name Types.St ()
+markAnchorLines v anchor = do
+  st <- State.get
+  let
+    covered fv =
+      Maybe.mapMaybe
+        (\r -> if Anchor.anchorCovers (T.pack (Types.fvPath fv)) r anchor then DiffModel.rNewRow r else Nothing)
+        (Types.fvRows fv)
+    marking = do
+      fv <- List.find (not . null . covered) (Types.stFiles st)
+      let
+        newRows = covered fv
+        lo = minimum newRows
+        hi = maximum newRows
+      pure (fv, lo, Nav.selectedChanges True fv lo hi)
+  case marking of
+    Just (fv, lo, picks@(_ : _)) -> recordLineVerdicts v fv lo picks
+    _ -> pure ()
 
 recordLineVerdicts :: Store.Verdict -> Types.FileView -> Int -> [(T.Text, T.Text, Int)] -> Brick.EventM Types.Name Types.St ()
 recordLineVerdicts v fv lo picks = do
