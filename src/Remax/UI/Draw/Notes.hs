@@ -10,6 +10,7 @@ import Brick qualified as Brick
 import Brick.Types qualified as BrickTypes
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
+import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
 import Remax.Modal qualified as Modal
 import Remax.SoftWrap qualified as SoftWrap
@@ -46,7 +47,7 @@ notePopupLayer st np =
           Types.WorkFor wp -> workRows st (boxWidth - 2) budget wp
           _ -> []
       BrickTypes.render $
-        Widgets.floatFrame title (popupHint np) $
+        Widgets.floatFrame title (popupHint (Config.cfgKeys (Types.stConfig st)) np) $
           Brick.hLimit boxWidth $
             Brick.padRight Brick.Max $
               Brick.vLimit bodyRows $
@@ -77,17 +78,17 @@ popupTitle np =
       in
         verb <> " \183 " <> Threads.anchorPlace (Conv.OnLines (Types.planSpan plan)) <> " \183 " <> target
 
-popupHint :: Types.NotePopup -> T.Text
-popupHint np =
+popupHint :: Config.KeyMode -> Types.NotePopup -> T.Text
+popupHint keys np =
   case Types.npPurpose np of
-    Types.AmendMessage _ -> "\9166 amend (nor) \183 C-c cancel"
-    Types.WorkFor wp -> workHint wp
+    Types.AmendMessage _ -> "\9166 amend (nor) \183 " <> discardKey keys <> " cancel"
+    Types.WorkFor wp -> workHint keys wp
     Types.NoteOn plan ->
       let
         several = length (Types.planChoices plan) > 1
       in
         case Modal.edMode (Types.npEd np) of
-          Modal.Insert -> "INS  Esc \9166 saves" <> (if several then " \183 Esc Tab changes the target" else "") <> " \183 C-c cancels the mark"
+          Modal.Insert -> "INS  Esc \9166 saves" <> (if several then " \183 Esc Tab changes the target" else "") <> " \183 " <> discardKey keys <> " cancels the mark"
           Modal.Normal -> "NOR  \9166 saves" <> (if several then " \183 Tab S-Tab target" else "") <> " \183 i edits \183 Esc discards"
 
 -- which line the conversation is about; the popup never used to say
@@ -153,15 +154,27 @@ workTitle wp =
     Types.TakeProposal _ _ author -> "reply \183 to " <> author <> " \183 from the proposal"
     Types.EditPosted _ _ -> "edit \183 your comment on GitHub"
 
-workHint :: Types.WorkPopup -> T.Text
-workHint wp =
+discardKey :: Config.KeyMode -> T.Text
+discardKey keys =
+  case keys of
+    Config.KeysEmacs -> "C-c C-k"
+    _ -> "C-c"
+
+foldKey :: Config.KeyMode -> T.Text
+foldKey keys =
+  case keys of
+    Config.KeysEmacs -> "C-c z"
+    _ -> "za"
+
+workHint :: Config.KeyMode -> Types.WorkPopup -> T.Text
+workHint keys wp =
   case Types.wpAction wp of
-    Types.ReplyTo _ _ -> "\9166 post (nor) \183 C-g inserts a sha \183 C-c discard \183 ? asks the agent instead"
-    Types.AskOn _ -> "\9166 save (nor) \183 C-c discard \183 r replies on GitHub instead"
-    Types.CommentOn _ -> "\9166 save (nor) \183 C-g inserts a sha \183 C-c discard \183 a selection pre-fills a suggestion"
-    Types.EditPending _ _ -> "\9166 save (nor) \183 C-g inserts a sha \183 C-c discard changes"
-    Types.TakeProposal {} -> "\9166 post (nor) \183 C-g inserts a sha \183 C-c discard \183 the proposal goes once you post"
-    Types.EditPosted _ _ -> "\9166 edits on GitHub at once (nor) \183 C-g inserts a sha \183 C-c discard changes"
+    Types.ReplyTo _ _ -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> discardKey keys <> " discard \183 ? asks the agent instead"
+    Types.AskOn _ -> "\9166 save (nor) \183 " <> discardKey keys <> " discard \183 r replies on GitHub instead"
+    Types.CommentOn _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> discardKey keys <> " discard \183 a selection pre-fills a suggestion"
+    Types.EditPending _ _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> discardKey keys <> " discard changes"
+    Types.TakeProposal {} -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> discardKey keys <> " discard \183 the proposal goes once you post"
+    Types.EditPosted _ _ -> "\9166 edits on GitHub at once (nor) \183 C-g inserts a sha \183 " <> discardKey keys <> " discard changes"
 
 -- The thread's log above the editor: the newest two posts in full,
 -- older ones collapsed to one line each, then the rule naming what
@@ -220,12 +233,12 @@ workRows st width budget wp =
         let
           shown = concatMap full opening ++ map collapsed older ++ concatMap full newest
         in
-          (shown, drop (max 0 (length shown - room)) shown, if null older then "" else " \183 C-o unfolds")
+          (shown, drop (max 0 (length shown - room)) shown, if null older then "" else " \183 " <> foldKey (Config.cfgKeys (Types.stConfig st)) <> " unfolds")
       Types.UnfoldedLog ->
         let
           shown = concatMap full posts
         in
-          (shown, take room shown, " \183 C-o folds")
+          (shown, take room shown, " \183 " <> foldKey (Config.cfgKeys (Types.stConfig st)) <> " folds")
     rule =
       Brick.withAttr Attrs.hintAttr (Brick.txt (Widgets.clipT width ("\9472 " <> ruleText wp <> foldHint <> " " <> T.replicate width "\9472")))
   in
