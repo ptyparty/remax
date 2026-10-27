@@ -27,6 +27,7 @@ module Remax.UI.Action.Threads
   , openWorkPopup
   , openWorkPopupAt
   , toggleFoldOf
+  , toggleFoldAtBand
   , switchAction
   , saveWork
   , reloadAndBand
@@ -326,19 +327,36 @@ takeKey = do
 toggleFold :: Brick.EventM Types.Name Types.St ()
 toggleFold = do
   st <- State.get
+  let
+    folding = filter resolved (cursorConversations st)
+    resolved conv = case Conv.convVenue conv of
+      Conv.ReviewThread (Just _) Store.Resolved -> True
+      _ -> False
   case cursorConversations st of
     [] -> Types.setMsg "nothing folded here"
-    convs -> mapM_ toggleFoldOf convs
+    _
+      | null folding -> Types.setMsg "only a resolved thread folds"
+      | otherwise -> mapM_ toggleFoldOf folding
 
 toggleFoldOf :: Conv.Conversation -> Brick.EventM Types.Name Types.St ()
 toggleFoldOf conv =
-  let
-    flip_ tid folded = if Set.member tid folded then Set.delete tid folded else Set.insert tid folded
-  in
-    case Conv.convVenue conv of
-      Conv.ReviewThread (Just tid) Store.Resolved ->
-        State.modify (\s -> s {Types.stUnfolded = flip_ tid (Types.stUnfolded s), Types.stBand = Nothing})
-      _ -> Types.setMsg "only a resolved thread folds"
+  case Conv.convVenue conv of
+    Conv.ReviewThread (Just tid) Store.Resolved ->
+      State.modify (\s -> s {Types.stUnfolded = toggleMember tid (Types.stUnfolded s), Types.stBand = Nothing})
+    _ -> Types.setMsg "only a resolved thread folds"
+
+toggleFoldAtBand :: Brick.EventM Types.Name Types.St ()
+toggleFoldAtBand = do
+  st <- State.get
+  case bandPost st of
+    Just (conv, i, post)
+      | Markdown.hasDetails (Conv.postBody post) ->
+          State.modify (\s -> s {Types.stOpenDetails = toggleMember (Conv.convId conv, i) (Types.stOpenDetails s)})
+      | otherwise -> toggleFoldOf conv
+    Nothing -> toggleFold
+
+toggleMember :: Ord a => a -> Set.Set a -> Set.Set a
+toggleMember x xs = if Set.member x xs then Set.delete x xs else Set.insert x xs
 
 openWorkPopup :: Conv.Conversation -> Types.WorkAction -> T.Text -> Brick.EventM Types.Name Types.St Handled
 openWorkPopup conv action initial = do

@@ -6,6 +6,7 @@ module Remax.UI.Core.Threads
   , rowLines
   , rowLineCount
   , reactionSegs
+  , detailsFold
   , bandable
   , bandIndexes
   , postKeys
@@ -271,13 +272,17 @@ lookOf st bare post =
 slotWidth :: Int
 slotWidth = 8
 
+detailsFold :: Types.St -> Conv.ConversationId -> Int -> Markdown.Fold
+detailsFold st cid i =
+  if Set.member (cid, i) (Types.stOpenDetails st) then Markdown.Unfolded else Markdown.Folded
+
 postRows :: Types.St -> Int -> Int -> Conv.ConversationId -> Bool -> Int -> Conv.Post -> [ThreadLine]
 postRows st width column cid bare i post =
   let
     look = lookOf st bare post
     label = if bare then bareLabel post else authorLabel post
     bodyWidth = max 12 (width - column - 3 - slotWidth - 1)
-    rendered = Markdown.render bodyWidth (Conv.postBody post)
+    rendered = Markdown.render (detailsFold st cid i) bodyWidth (Conv.postBody post)
     rows = if null rendered then [Markdown.plainRow ""] else rendered
     lead j =
       [ Markdown.Segment (lookAuthorAttr look) (T.justifyRight column ' ' (if j == (0 :: Int) then clip column label else "")) Nothing

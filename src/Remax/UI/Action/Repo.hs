@@ -165,6 +165,7 @@ arriveAt target remembered saved mode passId loaded = do
         , Types.stPullPoll = Types.noPullPoll
         , Types.stBand = Nothing
         , Types.stUnfolded = Set.empty
+        , Types.stOpenDetails = Set.empty
         , Types.stConfirm = Nothing
         , Types.stCiting = Nothing
         , Types.stReacting = Nothing

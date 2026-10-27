@@ -457,7 +457,9 @@ mode alike. The header reads `↪ thread · <state> · N on GitHub · N draft
 them`, `your reply is pending` or `resolved`. Each post is a row: the
 author right-aligned in a column, a rail, the body rendered as Markdown
 (headings, bold, code, links, lists and tables; links and images open
-on click in a terminal that supports OSC 8), and its age at the end of
+on click in a terminal that supports OSC 8; a `<details>` block shows
+its summary as `▸ <summary> · za opens`, and `za` with the band on the
+post opens and folds it), and its age at the end of
 the first line. Your pending reply has a `┆` rail and `draft` in the
 age slot, an agent's proposal `✦ claude` and `proposes`, and local
 talk with the agent `⇄ you` with a `╎` rail and `local`. A resolved

@@ -129,7 +129,7 @@ foldHere :: Brick.EventM Types.Name Types.St ()
 foldHere = do
   st <- State.get
   case ThreadAction.bandPost st of
-    Just (conv, _, _) -> ThreadAction.toggleFoldOf conv
+    Just _ -> ThreadAction.toggleFoldAtBand
     Nothing -> Types.setMsg "j onto a thread's post first"
 
 {- | Enter takes a proposal, and on a thread's posted comment opens its
