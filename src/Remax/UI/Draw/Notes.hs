@@ -176,7 +176,8 @@ workRows st width budget wp =
       Conv.Local _ -> True
       _ -> False
     column = max 6 (min 16 (maximum (0 : map (T.length . Threads.authorName . Conv.postAuthor) posts)))
-    (older, newest) = splitAt (max 0 (length posts - 2)) posts
+    (opening, rest) = splitAt 1 posts
+    (older, newest) = splitAt (max 0 (length rest - 2)) rest
     collapsed p =
       Brick.withAttr
         Attrs.hintAttr
@@ -213,7 +214,7 @@ workRows st width budget wp =
             )
       in
         map row (zip [0 ..] rows)
-    logRows = map collapsed older ++ concatMap full newest
+    logRows = concatMap full opening ++ map collapsed older ++ concatMap full newest
     rule =
       Brick.withAttr Attrs.hintAttr (Brick.txt (Widgets.clipT width ("\9472 " <> ruleText wp <> " " <> T.replicate width "\9472")))
     kept = drop (max 0 (length logRows - (budget - 2))) logRows
