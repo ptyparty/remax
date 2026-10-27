@@ -38,14 +38,16 @@ imports its internals. The order within a tree is convention.
    draws under), `Threads` (a conversation as rows), `Widgets`, `Jobs`
    (background work), `Verdict` (pending predicates and the per-file
    remark, pending and thread caches), `Ink` (image painting),
-   `WordDiff`, `View` (window geometry, note lines).
+   `WordDiff`, `View` (window geometry, note lines), `PullView` (the
+   pull request's timeline as rows).
 2. `Model` — `Tray`, `Nav` (parking, scrolling, selection), `Watch`
    (filesystem watching), `Work` (your pending work, the conversations
    drawn from it and the poll, and where outdated ones draw), `Load`
    (loading, rebuilding, refresh, reload, highlighting).
 3. `Action` — `Threads` (the band, the work popups and the GitHub
    writes), `Cite`, `Conversation`, `Verdicts`, `Rebase`, `Notes`, `Settings`,
-   `Submit` (the :submit dialog, after `Open`),
+   `Submit` (the :submit dialog, after `Open`), `PullView` (the PR view,
+   after `Open`),
    `Pull`, `Fuzzy`, `Repo`, `Open`, `Picker`, `Search`, `Tree`, `Files`,
    `TreeKeys`, `Editor`, `Command`, `Menus`.
 4. `Draw` — one module per surface, composed by `Remax.UI.Draw`.

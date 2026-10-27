@@ -36,6 +36,7 @@ module Remax.UI.Core.Types
   , CitePicker (..)
   , ReactionPicker (..)
   , SubmitDialog (..)
+  , PullView (..)
   , SubmitFocus (..)
   , AmendTarget (..)
   , NoteOrigin (..)
@@ -103,7 +104,7 @@ import Remax.Vi qualified as Vi
 import System.FilePath ((</>))
 import System.FilePath qualified as FilePath
 
-data Name = BodyVP | TrayVP | TheCursor
+data Name = BodyVP | TrayVP | PullVP | TheCursor
   deriving (Eq, Ord, Show)
 
 -- FileChangedOnDisk carries an absolute path: the watcher callback is
@@ -337,6 +338,10 @@ data SubmitDialog = SubmitDialog
 data SubmitFocus = SummaryFocus | ListFocus
   deriving (Eq)
 
+-- | The PR view is up; the band says which post is selected.
+data PullView = PullView
+  deriving (Eq)
+
 -- | The eight reactions offered on one posted comment.
 data ReactionPicker = ReactionPicker
   { rkKind :: GitHub.CommentKind
@@ -474,6 +479,7 @@ data St = St
   , stZPending :: Bool -- a z waiting for its a, to fold
   , stReacting :: Maybe ReactionPicker
   , stSubmit :: Maybe SubmitDialog
+  , stPullView :: Maybe PullView -- the pull request's own page, over the body
   , stNow :: Clock.UTCTime -- wall clock, for ages; moved on the attending beat
   , stTour :: [Store.TourStep]
   , stTourKeys :: Map.Map T.Text Int

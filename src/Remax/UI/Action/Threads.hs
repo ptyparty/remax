@@ -25,6 +25,8 @@ module Remax.UI.Action.Threads
   , aimAt
   , retireNotesOn
   , openWorkPopup
+  , openWorkPopupAt
+  , toggleFoldOf
   , switchAction
   , saveWork
   , reloadAndBand
@@ -324,14 +326,19 @@ takeKey = do
 toggleFold :: Brick.EventM Types.Name Types.St ()
 toggleFold = do
   st <- State.get
-  let
-    resolved c = case Conv.convVenue c of
-      Conv.ReviewThread (Just tid) Store.Resolved -> Just tid
-      _ -> Nothing
-    flip_ tid folded = if Set.member tid folded then Set.delete tid folded else Set.insert tid folded
-  case Maybe.mapMaybe resolved (cursorConversations st) of
+  case cursorConversations st of
     [] -> Types.setMsg "nothing folded here"
-    tids -> State.modify (\s -> s {Types.stUnfolded = foldr flip_ (Types.stUnfolded s) tids, Types.stBand = Nothing})
+    convs -> mapM_ toggleFoldOf convs
+
+toggleFoldOf :: Conv.Conversation -> Brick.EventM Types.Name Types.St ()
+toggleFoldOf conv =
+  let
+    flip_ tid folded = if Set.member tid folded then Set.delete tid folded else Set.insert tid folded
+  in
+    case Conv.convVenue conv of
+      Conv.ReviewThread (Just tid) Store.Resolved ->
+        State.modify (\s -> s {Types.stUnfolded = flip_ tid (Types.stUnfolded s), Types.stBand = Nothing})
+      _ -> Types.setMsg "only a resolved thread folds"
 
 openWorkPopup :: Conv.Conversation -> Types.WorkAction -> T.Text -> Brick.EventM Types.Name Types.St Handled
 openWorkPopup conv action initial = do

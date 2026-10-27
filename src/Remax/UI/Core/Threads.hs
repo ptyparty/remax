@@ -5,6 +5,7 @@ module Remax.UI.Core.Threads
   , threadLines
   , rowLines
   , rowLineCount
+  , reactionSegs
   , bandable
   , bandIndexes
   , postKeys

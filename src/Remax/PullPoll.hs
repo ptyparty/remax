@@ -12,6 +12,8 @@ module Remax.PullPoll
   , ReviewSummary (..)
   , PullCommit (..)
   , ForcePush (..)
+  , CheckRow (..)
+  , CheckResult (..)
   , Polled (..)
   , Freshness (..)
   , pollPull
@@ -86,10 +88,22 @@ data ForcePush = ForcePush
   }
   deriving (Eq, Show)
 
+data CheckResult = CheckPassed | CheckFailed | CheckPending | CheckSkipped
+  deriving (Eq, Show)
+
+data CheckRow = CheckRow
+  { checkName :: T.Text
+  , checkResult :: CheckResult
+  }
+  deriving (Eq, Show)
+
 data Snapshot = Snapshot
   { snapshotPull :: Int
   , snapshotHead :: PullHead
   , snapshotChecks :: GitHub.Checks
+  , snapshotCheckRows :: [CheckRow]
+  , snapshotMergeable :: T.Text
+  , snapshotLabels :: [T.Text]
   , snapshotConversation :: [ConversationComment]
   , snapshotReviews :: [ReviewSummary]
   , snapshotCommits :: [PullCommit]
@@ -152,6 +166,9 @@ data GraphAnswer = GraphAnswer
   , graphThreads :: [ThreadRow]
   , graphForcePushes :: [ForcePush]
   , graphChecks :: GitHub.Checks
+  , graphCheckRows :: [CheckRow]
+  , graphMergeable :: T.Text
+  , graphLabels :: [T.Text]
   , graphReactions :: Map.Map Store.CommentId Conv.Reactions
   }
 
@@ -231,6 +248,9 @@ freshSnapshot pr cache = do
       { snapshotPull = Git.prNumber pr
       , snapshotHead = h
       , snapshotChecks = graphChecks graph
+      , snapshotCheckRows = graphCheckRows graph
+      , snapshotMergeable = graphMergeable graph
+      , snapshotLabels = graphLabels graph
       , snapshotConversation = pagedRows (cacheConversation cache)
       , snapshotReviews = pagedRows (cacheReviews cache)
       , snapshotCommits = pagedRows (cacheCommits cache)
@@ -307,6 +327,7 @@ remoteComment c =
     , Conv.remoteCommentReview = reviewCommentReview c
     , Conv.remoteCommentUrl = reviewCommentUrl c
     , Conv.remoteCommentReactions = reviewCommentReactions c
+    , Conv.remoteCommentDiffHunk = reviewCommentDiffHunk c
     }
 
 remotePullComment :: ConversationComment -> Conv.RemotePullComment
@@ -601,7 +622,9 @@ graphQuery =
     <> " } }\
        \ timelineItems(itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT], last: 50) { nodes {\
        \ ... on HeadRefForcePushedEvent { createdAt beforeCommit { oid } afterCommit { oid } } } }\
-       \ commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } } } } }"
+       \ mergeable labels(first: 20) { nodes { name } }\
+       \ commits(last: 1) { nodes { commit { oid statusCheckRollup { state\
+       \ contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion status } ... on StatusContext { context state } } } } } } } } } }"
 
 threadsQuery :: T.Text
 threadsQuery =
@@ -630,7 +653,11 @@ graphJq =
     <> " + "
     <> reactionsJq "$p.comments"
     <> " + [$p.timelineItems.nodes[] | [\"F\", (.createdAt // \"\"), (.beforeCommit.oid // \"\"), (.afterCommit.oid // \"\")]]\
-       \ + [$p.commits.nodes[] | [\"C\", .commit.oid, (.commit.statusCheckRollup.state // \"\")]])\
+       \ + [$p.commits.nodes[] | [\"C\", .commit.oid, (.commit.statusCheckRollup.state // \"\")]]\
+       \ + [[\"M\", ($p.mergeable // \"\")]]\
+       \ + [$p.labels.nodes[] | [\"L\", .name]]\
+       \ + [$p.commits.nodes[].commit.statusCheckRollup.contexts.nodes[]?\
+       \ | [\"K\", (.name // .context // \"\"), (.conclusion // .state // .status // \"\")]])\
        \ | .[] | @tsv"
 
 threadsPageJq :: T.Text
@@ -697,14 +724,40 @@ graphAnswer raw =
         Just (Store.CommentId i, [Conv.ReactionCount {Conv.rcReaction = r, Conv.rcCount = n, Conv.rcMine = mine == "true"}])
       _ -> Nothing
     reacted = Map.fromListWith (flip (++)) (Maybe.mapMaybe reaction rows)
+    checkRow cells = case cells of
+      ["K", name, result] -> Just CheckRow {checkName = name, checkResult = checkResultOf result}
+      _ -> Nothing
+    mergeable cells = case cells of
+      ["M", m] -> Just m
+      _ -> Nothing
+    label cells = case cells of
+      ["L", l] -> Just l
+      _ -> Nothing
   in
     GraphAnswer
       { graphRaw = raw
       , graphThreads = Maybe.mapMaybe thread rows
       , graphForcePushes = Maybe.mapMaybe forcePush rows
       , graphChecks = Maybe.fromMaybe GitHub.ChecksNone (Maybe.listToMaybe (Maybe.mapMaybe checks rows))
+      , graphCheckRows = Maybe.mapMaybe checkRow rows
+      , graphMergeable = Maybe.fromMaybe "" (Maybe.listToMaybe (Maybe.mapMaybe mergeable rows))
+      , graphLabels = Maybe.mapMaybe label rows
       , graphReactions = reacted
       }
+
+checkResultOf :: T.Text -> CheckResult
+checkResultOf t =
+  case T.toUpper t of
+    "SUCCESS" -> CheckPassed
+    "NEUTRAL" -> CheckPassed
+    "SKIPPED" -> CheckSkipped
+    "FAILURE" -> CheckFailed
+    "ERROR" -> CheckFailed
+    "TIMED_OUT" -> CheckFailed
+    "CANCELLED" -> CheckFailed
+    "ACTION_REQUIRED" -> CheckFailed
+    "STARTUP_FAILURE" -> CheckFailed
+    _ -> CheckPending
 
 graphReaction :: T.Text -> Maybe Conv.Reaction
 graphReaction content =

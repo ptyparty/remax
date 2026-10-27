@@ -148,12 +148,13 @@ executable remax
       Remax.UI.Action.Open
       Remax.UI.Action.Picker
       Remax.UI.Action.Pull
+      Remax.UI.Action.PullView
       Remax.UI.Action.Rebase
       Remax.UI.Action.Repo
       Remax.UI.Action.Search
       Remax.UI.Action.Settings
-      Remax.UI.Action.Threads
       Remax.UI.Action.Submit
+      Remax.UI.Action.Threads
       Remax.UI.Action.Tree
       Remax.UI.Action.TreeKeys
       Remax.UI.Action.Verdicts
@@ -162,6 +163,7 @@ executable remax
       Remax.UI.Core.Ink
       Remax.UI.Core.Jobs
       Remax.UI.Core.Markdown
+      Remax.UI.Core.PullView
       Remax.UI.Core.Threads
       Remax.UI.Core.Tour
       Remax.UI.Core.Types
@@ -177,6 +179,7 @@ executable remax
       Remax.UI.Draw.Notes
       Remax.UI.Draw.Picker
       Remax.UI.Draw.Prompt
+      Remax.UI.Draw.PullView
       Remax.UI.Draw.Reactions
       Remax.UI.Draw.Status
       Remax.UI.Draw.Submit

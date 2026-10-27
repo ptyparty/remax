@@ -203,10 +203,14 @@ summaryOf ls =
   let
     joined = T.unwords ls
     afterOpen = snd (T.breakOn "<summary>" joined)
+    untagged t = case T.breakOn "<" t of
+      (before, rest)
+        | T.null rest -> before
+        | otherwise -> before <> untagged (T.drop 1 (snd (T.breakOn ">" rest)))
   in
     if T.null afterOpen
       then "details"
-      else T.strip (fst (T.breakOn "</summary>" (T.drop 9 afterOpen)))
+      else untagged (T.strip (fst (T.breakOn "</summary>" (T.drop 9 afterOpen))))
 
 -- Inlines ----------------------------------------------------------------
 

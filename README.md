@@ -530,6 +530,30 @@ outdated draws the same way, quoting the lines GitHub kept. Notes from
 earlier versions have no commit and never go outdated; when their lines
 are gone they do not draw.
 
+### The PR view
+
+`Space c` (`C-c c` in emacs), or bare `:pr` while a pull request is
+open, shows the pull request's own page in place of the body; `Esc`
+returns. It opens with the title, a line of facts (author, commits,
+force-pushes, reviewers, labels, `draft`), the description rendered as
+Markdown, `checks  ✓ N passed · mergeable` (`c`, or `C-c k`, lists the
+checks), then the conversation on one gutter: each PR-level comment and
+review as a `●` entry with its author, age and event, each review
+thread nested under the review that started it with `path:range ·
+state`, the range's diff lines in full, and its log as the body draws
+it. A resolved thread folds to one line and `za` opens it. Your drafts
+follow the posted entries as `◌ you · draft · <place> · sends with
+:submit`, pending replies sit inside their threads, and the last line
+counts `drafts · N to send · :submit sends`.
+
+`j`/`k` move by post, including posts inside threads, and the selected
+post wears its key strip: `r` replies (on a PR-level comment or a
+review summary, a quote-reply as a new PR-level comment), `?` asks, `+`
+reacts (not on a review summary, which GitHub gives no reactions), `y`
+copies the link, `Space u` resolves a thread, `e` and `dd` act on your pending text, and
+`⏎` takes a proposal or, on a thread's posted comment, opens its lines
+in the diff. `@` drafts a PR-level comment.
+
 ### Submitting
 
 `:submit` opens `submit review · #N` over the code: the event (`h`/`l`
