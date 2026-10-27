@@ -33,15 +33,18 @@ the `ci` flag, and encapsulates `Remax.UI` so nothing outside the session
 imports its internals. The order within a tree is convention.
 
 1. `Core` — `Types` (`St`, `FileView`, `REvent`, every type an `St`
-   field mentions, and the trivial accessors), `Attrs`, `Widgets`, `Jobs`
+   field mentions, and the trivial accessors), `Attrs`, `Markdown`
+   (comment bodies as styled rows), `Anchor` (which row a conversation
+   draws under), `Threads` (a conversation as rows), `Widgets`, `Jobs`
    (background work), `Verdict` (pending predicates and the per-file
-   remark and pending caches), `Ink` (image painting), `WordDiff`,
-   `View` (window geometry, note lines).
+   remark, pending and thread caches), `Ink` (image painting),
+   `WordDiff`, `View` (window geometry, note lines).
 2. `Model` — `Tray`, `Nav` (parking, scrolling, selection), `Watch`
    (filesystem watching), `Load` (loading, rebuilding, refresh, reload,
    highlighting), `Work` (your pending work and the conversations drawn
    from it and the poll).
-3. `Action` — `Conversation`, `Verdicts`, `Rebase`, `Notes`, `Settings`,
+3. `Action` — `Conversation`, `Verdicts`, `Rebase`, `Threads` (the band
+   and the work popups), `Cite`, `Notes`, `Settings`,
    `Pull`, `Fuzzy`, `Repo`, `Open`, `Picker`, `Search`, `Tree`, `Files`,
    `TreeKeys`, `Editor`, `Command`, `Menus`.
 4. `Draw` — one module per surface, composed by `Remax.UI.Draw`.

@@ -15,6 +15,7 @@ import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Picker qualified as PickerAction
 import Remax.UI.Action.Settings qualified as Settings
+import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Action.Tree qualified as TreeAction
 import Remax.UI.Action.Verdicts qualified as VerdictAction
 import Remax.UI.Core.Types qualified as Types
@@ -38,8 +39,9 @@ sayingGroup :: (T.Text, [(T.Text, T.Text)])
 sayingGroup =
   ( "saying something"
   ,
-    [ (":note TEXT", "a one-line note on what you marked")
-    , (":note", "the popup, with the thread so far")
+    [ ("@", "comment on the lines, for GitHub")
+    , ("r", "reply to the thread under the cursor")
+    , ("j", "enter the thread; j k move by post")
     , ("\9251 u", "drop the conversation here")
     ]
   )
@@ -245,18 +247,24 @@ helixEditingGroups =
 -- the infobox is rendered from it and the keystroke is dispatched through
 -- it, so a key cannot be bound without being listed. :tree arrived bound
 -- but invisible precisely because those used to be two lists.
+askOrQuestion :: Brick.EventM Types.Name Types.St ()
+askOrQuestion = do
+  handled <- ThreadAction.askKey
+  case handled of
+    ThreadAction.Handled -> pure ()
+    ThreadAction.Unhandled -> NoteAction.markThenNote Store.Questioned
+
 spaceMenuEntries :: [(T.Text, T.Text, Brick.EventM Types.Name Types.St ())]
 spaceMenuEntries =
   [ ("\9166", "accept as reviewed", VerdictAction.acceptSelection)
   , ("!", "flag it", NoteAction.markThenNote Store.Flagged)
-  , ("q", "question it", NoteAction.markThenNote Store.Questioned)
+  , ("q", "question it", askOrQuestion)
   , ("x", "select the hunk", Nav.selectCurrentHunk)
   , ("f", "find a file", TreeAction.openFileFinder)
   , ("b", "open files", PickerAction.openBufferPicker)
   , ("t", "project tree", TreeAction.openTree)
   , ("R", "switch repository", PickerAction.openRepoPicker)
   , ("'", "last selector", PickerAction.reopenLastSelector)
-  , ("n", "note popup", NoteAction.openNotePopup Types.NoteAsked)
   , ("e", "$EDITOR here", Editor.editCurrent)
   , ("p", "walk filter: pending / unresolved / all", VerdictAction.cycleWalkFilter)
   , ("w", "toggle ignore whitespace", Settings.toggleIgnoreWs)

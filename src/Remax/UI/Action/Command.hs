@@ -58,8 +58,6 @@ commandTable =
   , ("abort!", NoArg, "abort the rebase, no questions")
   , ("amend", NoArg, "edit the commit message; saving amends (+ session edits)")
   , ("accept", ArgDir, "mark everything under a directory reviewed")
-  , ("note", ArgText, "note popup (:note TEXT for a one-liner)")
-  , ("unnote", NoArg, "remove the note from the target lines")
   , ("resolve", ArgText, "resolve the note here; 'all' sweeps answered ones")
   , ("revert", NoArg, "revert hunk under cursor (or selection) to base")
   , ("open", ArgPath, "open a file in the session")
@@ -214,9 +212,6 @@ runCommand input =
     ["abort"] -> Types.setMsg "abort the rebase and lose its progress? :abort! confirms"
     ["abort!"] -> Rebase.abortRebase
     ["amend"] -> Rebase.amendHead
-    ["note"] -> NoteAction.openNotePopup Types.NoteAsked
-    ("note" : rest) -> NoteAction.noteCmd (T.unwords rest)
-    ["unnote"] -> NoteAction.unnoteCmd
     ["revert"] -> VerdictAction.revertTarget
     ["walk"] -> VerdictAction.cycleWalkFilter
     ["tour"] -> VerdictAction.resumeTour

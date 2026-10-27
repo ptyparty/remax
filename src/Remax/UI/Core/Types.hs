@@ -25,6 +25,12 @@ module Remax.UI.Core.Types
   , walkLabel
   , nextWalkFilter
   , PopupPurpose (..)
+  , WorkPopup (..)
+  , WorkAction (..)
+  , WorkOrigin (..)
+  , Band (..)
+  , Confirm (..)
+  , CitePicker (..)
   , AmendTarget (..)
   , NoteOrigin (..)
   , MarkUndo (..)
@@ -253,6 +259,49 @@ nextWalkFilter w =
 data PopupPurpose
   = NoteFor [T.Text] NoteOrigin
   | AmendMessage AmendTarget
+  | WorkFor WorkPopup
+
+{- | A popup that writes to the conversation store: a reply, a question
+for the agent, a new comment, or your pending text opened again.
+-}
+data WorkPopup = WorkPopup
+  { wpAction :: WorkAction
+  , wpConv :: Maybe Conv.ConversationId
+  , wpPlace :: T.Text
+  , wpOpenedWith :: T.Text
+  }
+
+data WorkAction
+  = ReplyTo Conv.Target T.Text
+  | AskOn Conv.Target
+  | CommentOn Conv.Anchor
+  | EditPending Conv.WorkId WorkOrigin
+  | TakeProposal Conv.WorkId Conv.Target T.Text
+
+-- | Which popup a pending text was written in, so `e` reopens the same one.
+data WorkOrigin
+  = ReplyOrigin T.Text
+  | CommentOrigin
+  | AskOrigin
+
+data CitePicker = CitePicker
+  { cpCommits :: [Git.CitedCommit]
+  , cpAt :: Int
+  }
+
+-- | The selected post: a conversation and the index of the post in it.
+data Band = Band
+  { bandConv :: Conv.ConversationId
+  , bandPost :: Int
+  , bandDeleting :: Bool
+  }
+  deriving (Eq)
+
+-- | A yes-or-no question before something irreversible; `y` runs it.
+data Confirm = Confirm
+  { confirmText :: T.Text
+  , confirmRun :: Brick.EventM Name St ()
+  }
 
 data AmendTarget
   = {- | the paths that will be staged along with the message, so the popup
@@ -306,6 +355,7 @@ data FileView = FileView
   , fvHl :: Maybe TS.Highlighter -- vendored tree-sitter grammar, when we have one
   , fvRunDecls :: [T.Text] -- per run: the top-level declaration it falls under
   , fvRemarks :: [Remark]
+  , fvThreads :: Map.Map Int [Conv.ConversationId] -- display row -> the conversations drawn under it
   , fvPending :: !Int
   , fvMtime :: Maybe Clock.UTCTime
   }
@@ -350,6 +400,12 @@ data St = St
   , stThreads :: Map.Map T.Text [Store.Post] -- note conversations by line key, posts in order
   , stWork :: Conv.OwnWork
   , stConversations :: [Conv.Conversation]
+  , stBand :: Maybe Band -- the post the keys act on, when the cursor has entered a thread
+  , stUnfolded :: Set.Set Store.RemoteThreadId -- resolved threads opened with za
+  , stConfirm :: Maybe Confirm
+  , stCiting :: Maybe CitePicker -- the commit picker a popup opened with C-g
+  , stZPending :: Bool -- a z waiting for its a, to fold
+  , stNow :: Clock.UTCTime -- wall clock, for ages; moved on the attending beat
   , stTour :: [Store.TourStep]
   , stTourKeys :: Map.Map T.Text Int
   , stTourMarks :: Map.Map T.Text TourMark

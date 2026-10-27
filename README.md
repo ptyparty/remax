@@ -195,7 +195,7 @@ Normal mode:
 | `u` | undo |
 | `y` | yank the selection (or cursor cell) — line-wise for `x` selections; the yank slot is session-wide, so paste works across files (and the note popup), and it goes to the **system clipboard** too |
 | `p` / `P` | paste after / before: whole lines below/above for a line-wise yank, after/at the cursor otherwise; the paste is selected. Pastes the **system clipboard** when it holds something copied outside the session, the yank slot otherwise |
-| `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `n` note popup, `e` `$EDITOR` here, `p` walk filter (pending / unresolved / all), `w` toggle ignore-whitespace, `u` resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
+| `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `e` `$EDITOR` here, `p` walk filter (pending / unresolved / all), `w` toggle ignore-whitespace, `u` resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
 | `.` | repeat the last insert session (the entering command plus what was typed), helix-style — `c`-fix-`Esc` then `.` applies the same change at the cursor |
 | `Enter` | **accept the selection as reviewed** — a selection is required, so what you accept is always visibly highlighted (`X Enter` for the hunk you're looking at). Completing a hunk jumps to the next pending one; a partial mark steps to the next line |
 | `!` / `?` | flag-to-return-to / question — the selection's lines, or the whole current hunk with none. The note popup opens immediately for the reason (`note-on-flag = 0` in the config turns that off); discarding it (`Ctrl-c`, or `Esc` from its normal mode) cancels the mark as well, since the verdict has not been explained yet — save an empty note to keep the mark without one. The jump to the next hunk waits until the popup closes, and never happens if the mark is cancelled |
@@ -343,8 +343,6 @@ note popup keeps its modal keys in either keymap.
 | `:continue` | fold this stop's edits into the stopped commit and advance — *everything* dirty at the stop counts, including edits made through `$EDITOR` or by an agent, since the stop started clean |
 | `:abort!` | abort the rebase (`:abort` asks first) |
 | `:amend` | open the commit message of the commit under review (HEAD; the stopped commit mid-rebase) in the popup editor — `⏎` in its normal mode amends. Outside a rebase the session's edits fold in with it; at a rebase stop the amend is message-only (`:continue` owns the folding). At a conflict stop, where git has not made the stopped commit yet, the edit sets the message that `:continue` commits. Each paragraph and list item of the body opens as one soft-wrapped line and is wrapped at 72 columns when the message is written; the subject line and trailers are left as typed |
-| `:note TEXT` | post a one-line note on the lines just marked `!`/`?` (or the selection) |
-| `:note` | open the note popup — a small modal buffer (full editing keys); text soft-wraps to the popup and is saved with only the line breaks you type; `⏎` in its normal mode saves, `Ctrl-c` (any mode) or `Esc` in its normal mode discards, saving empty clears the whole conversation. Discarding a popup that `:note` opened leaves the verdict alone — only one opened by `!` or `?` takes its mark with it. A note opened that way covers every line the mark just wrote, and accepting a hunk retires the whole of it: the conversation closes and any lines outside the hunk that were part of the same mark lose their verdict too, since one keystroke made them and one retires them. Lines beside them carrying a *different* conversation are untouched, even one worded identically. Notes are a **conversation**, and the popup shows it: the thread so far sits above what you're typing (`≡ you`, `↪ them`, oldest first, the newest kept when a long thread won't fit), the frame names the line you're annotating, and the title and the verb say which of the three things is happening — a new `note`, `editing yours` when your post is the newest and reopens for rewriting, or `reply to NAME` with `⏎ post` once someone has answered. From any line of a hunk that carries a conversation, `:note` continues that thread |
 | `:unnote` / `:resolve` | drop the whole conversation from the same target |
 | `:resolve all` | sweep every **answered** conversation in the repository — any thread whose newest post isn't yours clears; threads awaiting an answer stay |
 | `:accept PATH` | mark every hunk under a directory (or in one file) reviewed — the bulk verb for generated code; matching is by path component |
@@ -450,6 +448,50 @@ are editable, and `!` and `?` mean what they do anywhere else. A tour
 stays with the pull request across both modes. `:pr review` returns to
 the read-only head as fetched.
 
+### GitHub threads in the body
+
+A review thread on a line opens under it as a log, in review and edit
+mode alike. The header reads `↪ thread · <state> · N on GitHub · N draft
+· N proposal · N local`, where the state is `awaiting you`, `awaiting
+them`, `your reply is pending` or `resolved`. Each post is a row: the
+author right-aligned in a column, a rail, the body rendered as Markdown
+(headings, bold, code, links, lists and tables; links and images open
+on click in a terminal that supports OSC 8), and its age at the end of
+the first line. Your pending reply has a `┆` rail and `draft` in the
+age slot, an agent's proposal `✦ claude` and `proposes`, and local
+talk with the agent `⇄ you` with a `╎` rail and `local`. A resolved
+thread folds to `✓ resolved · <author> · <first line> · za opens`, and
+`za` opens and folds it. The gutter marks a thread's line `↪` and a
+draft's line `@`.
+
+`j` from a line with a thread enters it, and `j`/`k` then move by post
+through the posts bound for GitHub (posted, draft, pending reply,
+proposal), skipping local ones; past the last post the cursor moves on
+down the file, and `k` from the first returns to the line. The
+selected post wears a strip of its keys and the status line names it.
+On another reviewer's post: `r` replies, `?` asks the agent about the
+thread, and (once the next commits land) `+` reacts, `y` copies the
+post's link and `Space u` resolves. On your pending text: `e` reopens
+it in the popup it was written in and `dd` discards it, asking first
+when text was typed. On an agent's proposal: `⏎` takes it as your own
+reply, opening it in the reply popup, and `dd` drops it. Local posts
+never take the band. In the emacs keymap the same verbs sit under
+`C-c`: `C-c r`, `C-c ?`, `C-c g`, `C-c e`, `C-c d`, `C-c C-c` takes
+a proposal, `C-c z` folds, and `C-n` enters the thread.
+
+`r` from a code line with a thread replies to that thread, and `?`
+asks the agent about it; on a line with none, `?` questions the lines
+as anywhere else. `@` comments on the selection or the cursor's line as
+a new thread; a selection pre-fills a ````suggestion```` fence with its
+lines. Each popup shows where it is, the thread's log above the editor
+(older posts collapsed to one line each), a rule naming what the text
+becomes, and its keys: `⏎` in normal mode posts or saves, `C-g` opens a
+picker of the pull request's commits and inserts the chosen sha, `C-c`
+discards, and in the reply popup `?` turns the text into a question
+for the agent while `r` in the ask popup turns it back. Replies,
+comments and taken proposals wait for `:submit`; nothing reaches
+GitHub until then.
+
 `:pr commits` walks the pull request one commit at a time, each reviewed
 read-only against its parent. The git bar shows `commit 3/7`, and `]` past
 the last hunk of a commit moves to the next one, `[` before the first to
@@ -462,7 +504,7 @@ your open session live (files reload, touched lines return to pending);
 your feedback flows back through the store:
 
 1. Mark a line or hunk `!` (fix this) or `?` (explain or fix), and give
-   the reason: `:note use mapMaybe here instead`.
+   the reason in the note popup that opens.
 2. The agent runs `remax -C /path/to/repo list --json` and gets file,
    verdict, exact line text, position, and your note. Feedback given
    during a `:rebase` stop also carries the commit it is about
@@ -473,8 +515,8 @@ your feedback flows back through the store:
 3. For a `?` it can answer in place: `remax reply KEY "text"` (the key
    comes from the JSON) posts into the note's conversation, rendering
    live in order under your note, marked `↪` with the author's name.
-   The thread is ordered and two-way: answer their post with `:note`
-   and it appends as your follow-up. **Accepting the lines resolves the
+   The thread is ordered and two-way: `?` on the noted line answers
+   their post, and it appends as your follow-up. **Accepting the lines resolves the
    whole conversation** — the thread clears when you mark them
    reviewed, so "read the answer, `X Enter`" is the one-gesture close.
    `Space u` dismisses a conversation without accepting anything.

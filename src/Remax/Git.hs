@@ -69,6 +69,9 @@ module Remax.Git
   , emptyTreeRef
   , pickableRefs
   , recentCommits
+  , CitedCommit (..)
+  , PushState (..)
+  , citableCommits
   , branchCommits
   , currentBranch
   , localBranches
@@ -1132,6 +1135,34 @@ logCommits n revs root = do
   pure $ case code of
     Exit.ExitFailure _ -> []
     Exit.ExitSuccess -> Maybe.mapMaybe fourFields (T.lines (T.pack out))
+
+data PushState = Unpushed | OnPullHead | NoPull
+  deriving (Eq, Show)
+
+data CitedCommit = CitedCommit
+  { ccSha :: T.Text
+  , ccAge :: T.Text
+  , ccSubject :: T.Text
+  , ccPushed :: PushState
+  }
+
+{- | The commits a comment may cite: on a pull request its own commits,
+marking the ones not pushed yet; otherwise the recent history.
+-}
+citableCommits :: Maybe PullRequest -> FilePath -> IO [CitedCommit]
+citableCommits pull root =
+  let
+    cite pushed (sha, age, _, subject) = CitedCommit {ccSha = sha, ccAge = age, ccSubject = subject, ccPushed = pushed}
+  in
+    case pull of
+      Nothing -> fmap (map (cite NoPull)) (recentCommits 30 "HEAD" root)
+      Just pr -> do
+        own <- logCommits 50 [T.unpack (prBase pr) ++ "..HEAD"] root
+        unpushed <- logCommits 50 [T.unpack (pullHeadRef (prNumber pr)) ++ "..HEAD"] root
+        let
+          ahead = Set.fromList (map (\(sha, _, _, _) -> sha) unpushed)
+          pushedOf (sha, _, _, _) = if Set.member sha ahead then Unpushed else OnPullHead
+        pure (map (\c -> cite (pushedOf c) c) own)
 
 -- Four tab-separated fields, the last keeping any tabs of its own --
 -- subjects are free text.

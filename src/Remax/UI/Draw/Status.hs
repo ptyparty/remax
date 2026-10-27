@@ -10,11 +10,14 @@ import Brick qualified as Brick
 import Data.List qualified as List
 import Data.Text qualified as T
 import Remax.Config qualified as Config
+import Remax.Conversation qualified as Conv
 import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
 import Remax.UI.Action.Pull qualified as PullAction
+import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Ink qualified as Ink
+import Remax.UI.Core.Threads qualified as Threads
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.View qualified as View
 import Remax.UI.Core.Widgets qualified as Widgets
@@ -23,11 +26,12 @@ import Remax.Vi qualified as Vi
 statusBar :: Types.St -> Brick.Widget Types.Name
 statusBar st =
   let
-    middle = case Types.stPrompt st of
-      Just (Types.SearchPrompt input) ->
+    middle = case (Types.stConfirm st, Types.stPrompt st) of
+      (Just confirm, _) -> Brick.withAttr Attrs.questionMarkAttr (Brick.txt (Widgets.padT (Types.confirmText confirm)))
+      (_, Just (Types.SearchPrompt input)) ->
         Brick.txt (Types.searchSigil st <> input <> "\9612")
-      Just (Types.CmdPrompt input) -> Brick.txt (":" <> input <> "\9612")
-      Nothing -> Brick.withAttr Attrs.msgAttr (Brick.txt (Widgets.padT (Types.stMsg st)))
+      (_, Just (Types.CmdPrompt input)) -> Brick.txt (":" <> input <> "\9612")
+      (_, Nothing) -> Brick.withAttr Attrs.msgAttr (Brick.txt (Widgets.padT (Types.stMsg st)))
   in
     Brick.withDefAttr Attrs.statusAttr $
       modeChip st
@@ -37,7 +41,7 @@ statusBar st =
         <+> meterSeg st
         <+> Brick.txt "  "
         <+> middle
-        <+> Brick.padLeft Brick.Max (Brick.withAttr Attrs.hintAttr (Brick.txt (statusHint st)))
+        <+> Brick.padLeft Brick.Max (Brick.withAttr Attrs.hintAttr (Brick.txt ("  " <> statusHint st)))
 
 chip :: Brick.AttrName -> T.Text -> Brick.Widget Types.Name
 chip dotAttr label =
@@ -52,6 +56,11 @@ chip dotAttr label =
 -- normal — with vi's own resting label saying which keymap you are in
 modeChip :: Types.St -> Brick.Widget Types.Name
 modeChip st
+  | Just np <- Types.stNotePopup st
+  , Types.WorkFor wp <- Types.npPurpose np =
+      chip
+        (if Modal.edMode (Types.npEd np) == Modal.Insert then Attrs.modeDotInsAttr else Attrs.modeDotNorAttr)
+        ((if Modal.edMode (Types.npEd np) == Modal.Insert then "ins " else "nor ") <> popupWord wp)
   | Types.stSpace st = chip Attrs.modeDotNorAttr "spc\8230"
   | Types.stIdleGo st = chip Attrs.modeDotNorAttr "g\8230"
   | otherwise = case Types.stEmacsPrefix st of
@@ -133,16 +142,55 @@ verbHint verbs keys =
         "C-c \9166 accept · " <> flag "C-c ! flag · " <> "C-c ? question · M-x help "
       Config.KeysHelix -> "\9166 accept · " <> flag "! flag · " <> "? question · \9251 menu · \9251? keys "
 
+popupWord :: Types.WorkPopup -> T.Text
+popupWord wp =
+  case Types.wpAction wp of
+    Types.ReplyTo _ _ -> "reply"
+    Types.AskOn _ -> "ask"
+    Types.CommentOn _ -> "comment"
+    Types.EditPending _ origin -> case origin of
+      Types.ReplyOrigin _ -> "reply"
+      Types.CommentOrigin -> "comment"
+      Types.AskOrigin -> "ask"
+    Types.TakeProposal {} -> "reply"
+
+popupStatus :: Types.WorkPopup -> T.Text
+popupStatus wp =
+  case Types.wpAction wp of
+    Types.ReplyTo _ author -> "reply to " <> author
+    Types.AskOn _ -> "ask the agent about " <> T.takeWhile (/= ' ') (Types.wpPlace wp)
+    Types.CommentOn anchor -> "new comment on " <> Threads.anchorPlace anchor
+    Types.EditPending _ _ -> "editing your pending text"
+    Types.TakeProposal _ _ _ -> "editing the proposal as your reply"
+
 statusHint :: Types.St -> T.Text
 statusHint st =
   let
     keys = Config.cfgKeys (Types.stConfig st)
+    lineHint = case ThreadAction.cursorConversations st of
+      [] -> Nothing
+      convs
+        | any isThread convs -> Just (Threads.lineHint keys)
+        | otherwise -> Nothing
+    isThread c = case Conv.convVenue c of
+      Conv.ReviewThread _ _ -> True
+      _ -> False
   in
-    case Types.currentFileMay st of
-      Nothing ->
+    case (Types.stNotePopup st, ThreadAction.bandPost st, Types.currentFileMay st) of
+      (Just np, _, _)
+        | Types.WorkFor wp <- Types.npPurpose np -> popupStatus wp
+      (_, Just (conv, _, post), _) ->
+        Threads.postLabel (Conv.convVenue conv) post
+          <> " \183 "
+          <> Threads.anchorPlace (Conv.convAnchor conv)
+          <> "   "
+          <> Threads.postKeys keys (Conv.convVenue conv) post
+      (_, _, Nothing) ->
         Types.promptKeys keys <> " command · \9251? keys · " <> Types.quitKeys keys <> " quit "
-      Just fv ->
-        (if Types.fvStale fv then "hunks refresh on Esc · " else "") <> verbHint (verbsFor st) keys
+      (_, _, Just fv) ->
+        case lineHint of
+          Just hint -> hint
+          Nothing -> (if Types.fvStale fv then "hunks refresh on Esc · " else "") <> verbHint (verbsFor st) keys
 
 verbsFor :: Types.St -> Verbs
 verbsFor st =

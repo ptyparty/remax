@@ -15,6 +15,7 @@ import Database.SQLite.Simple qualified as SQLite
 import Remax.Conversation qualified as Conv
 import Remax.Git qualified as Git
 import Remax.PullPoll qualified as PullPoll
+import Remax.UI.Core.Anchor qualified as Anchor
 import Remax.UI.Core.Types qualified as Types
 import Remax.WorkStore qualified as WorkStore
 
@@ -47,4 +48,10 @@ remoteOf st =
 
 withConversations :: Types.St -> Types.St
 withConversations st =
-  st {Types.stConversations = Conv.conversations (remoteOf st) (Types.stWork st)}
+  let
+    convs = Conv.conversations (remoteOf st) (Types.stWork st)
+  in
+    st
+      { Types.stConversations = convs
+      , Types.stFiles = map (\fv -> fv {Types.fvThreads = Anchor.anchorIn convs fv}) (Types.stFiles st)
+      }

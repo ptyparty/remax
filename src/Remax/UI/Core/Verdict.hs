@@ -30,9 +30,11 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Remax.Conversation qualified as Conv
 import Remax.DiffModel qualified as DiffModel
 import Remax.Highlight qualified as Highlight
 import Remax.Store qualified as Store
+import Remax.UI.Core.Anchor qualified as Anchor
 import Remax.UI.Core.Jobs qualified as Jobs
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Widgets qualified as Widgets
@@ -146,15 +148,16 @@ remarksFor verdicts threads fv =
   in
     Maybe.mapMaybe pick (Types.fvRows fv)
 
-recountFile :: Map.Map T.Text Store.Verdict -> Map.Map T.Text [Store.Post] -> Types.FileView -> Types.FileView
-recountFile verdicts threads fv =
+recountFile :: Map.Map T.Text Store.Verdict -> Map.Map T.Text [Store.Post] -> [Conv.Conversation] -> Types.FileView -> Types.FileView
+recountFile verdicts threads convs fv =
   fv
     { Types.fvRemarks = remarksFor verdicts threads fv
     , Types.fvPending = length (filter (runPending verdicts) (Types.fvRuns fv))
+    , Types.fvThreads = Anchor.anchorIn convs fv
     }
 
 recountIn :: Types.St -> Types.FileView -> Types.FileView
-recountIn st = recountFile (Types.stVerdicts st) (Types.stThreads st)
+recountIn st = recountFile (Types.stVerdicts st) (Types.stThreads st) (Types.stConversations st)
 
 fileKeys :: Types.FileView -> Set.Set T.Text
 fileKeys fv =

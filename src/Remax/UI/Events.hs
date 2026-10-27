@@ -17,12 +17,14 @@ import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
+import Data.Time.Clock qualified as Clock
 import Graphics.Vty qualified as V
 import Remax.Clipboard qualified as Clipboard
 import Remax.Config qualified as Config
 import Remax.Emacs qualified as Emacs
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
+import Remax.UI.Action.Cite qualified as CiteAction
 import Remax.UI.Action.Command qualified as Command
 import Remax.UI.Action.Editor qualified as Editor
 import Remax.UI.Action.Menus qualified as Menus
@@ -32,6 +34,7 @@ import Remax.UI.Action.Picker qualified as PickerAction
 import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Action.Search qualified as Search
 import Remax.UI.Action.Settings qualified as Settings
+import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Action.Tree qualified as TreeAction
 import Remax.UI.Action.TreeKeys qualified as TreeKeys
 import Remax.UI.Action.Verdicts qualified as VerdictAction
@@ -203,7 +206,8 @@ handleEvent brickEvent =
       WorkModel.reloadWork
       Monad.when (null (Types.stTour st) && not (null steps)) startTour
     Brick.AppEvent (Types.Attending seen) -> do
-      State.modify (\s -> s {Types.stAttending = seen, Types.stThrob = Types.stThrob s + 1})
+      now <- MonadIO.liftIO Clock.getCurrentTime
+      State.modify (\s -> s {Types.stAttending = seen, Types.stThrob = Types.stThrob s + 1, Types.stNow = now})
       Load.pollSubject
       PullAction.pollPullIfDue
     Brick.AppEvent Types.Tick -> Nav.scrollHunkIntoView
@@ -232,6 +236,10 @@ handleEvent brickEvent =
         _
           | Types.stInfoPopup st /= Nothing ->
               State.modify (\s -> s {Types.stInfoPopup = Nothing})
+        _
+          | Just confirm <- Types.stConfirm st -> handleConfirmKey ev confirm
+        _
+          | Just picker <- Types.stCiting st -> CiteAction.handleCiteKey ev picker
         (Just np, _, _) -> NoteAction.handleNotePopupKey ev np
         _
           | Just tv <- Types.stTree st -> TreeKeys.handleTreeKey ev tv
@@ -348,6 +356,13 @@ handlePromptKey ev prompt =
           )
       _ -> pure ()
 
+handleConfirmKey :: V.Event -> Types.Confirm -> Brick.EventM Types.Name Types.St ()
+handleConfirmKey ev confirm = do
+  State.modify (\s -> s {Types.stConfirm = Nothing})
+  case ev of
+    V.EvKey (V.KChar 'y') [] -> Types.confirmRun confirm
+    _ -> Types.setMsg "left alone"
+
 handleModalKey :: V.Event -> Brick.EventM Types.Name Types.St ()
 handleModalKey ev = do
   st <- State.get
@@ -357,10 +372,54 @@ handleModalKey ev = do
     -- the kill slot is session state: whatever was yanked anywhere is
     -- pasteable here
     ed = (Types.fvEd fv) {Modal.edKill = Types.stKill st}
-  case Config.cfgKeys (Types.stConfig st) of
-    Config.KeysEmacs -> handleEmacsKey i ed ev
-    Config.KeysVi -> handleViKey i ed ev
-    Config.KeysHelix -> handleHelixKey i fv ed ev
+    keys = Config.cfgKeys (Types.stConfig st)
+    dispatch = case keys of
+      Config.KeysEmacs -> handleEmacsKey i ed ev
+      Config.KeysVi -> handleViKey i ed ev
+      Config.KeysHelix -> handleHelixKey i fv ed ev
+  case Types.stBand st of
+    Just band | Modal.edMode ed == Modal.Normal && Maybe.isNothing (Types.stEmacsPrefix st) -> handleBandKey keys band ev dispatch
+    _
+      | Types.stZPending st -> do
+          State.modify (\s -> s {Types.stZPending = False})
+          case ev of
+            V.EvKey (V.KChar 'a') [] -> ThreadAction.toggleFold
+            _ -> pure ()
+      | otherwise -> dispatch
+
+-- With the band on a post the plain keys act on it; a key the band
+-- has no use for leaves it and goes to the line as usual.
+handleBandKey :: Config.KeyMode -> Types.Band -> V.Event -> Brick.EventM Types.Name Types.St () -> Brick.EventM Types.Name Types.St ()
+handleBandKey keys band ev dispatch = do
+  State.modify (\s -> s {Types.stBand = Just band {Types.bandDeleting = False}})
+  let
+    plain = keys /= Config.KeysEmacs
+    acted act = do
+      handled <- act
+      case handled of
+        ThreadAction.Handled -> pure ()
+        ThreadAction.Unhandled -> Types.setMsg "not on this post"
+    passOn = do
+      ThreadAction.leaveBand
+      dispatch
+  case ev of
+    V.EvKey V.KDown [] -> ThreadAction.moveBand 1
+    V.EvKey V.KUp [] -> ThreadAction.moveBand (-1)
+    V.EvKey (V.KChar 'n') [V.MCtrl] | not plain -> ThreadAction.moveBand 1
+    V.EvKey (V.KChar 'p') [V.MCtrl] | not plain -> ThreadAction.moveBand (-1)
+    V.EvKey V.KEsc [] -> ThreadAction.leaveBand
+    V.EvKey (V.KChar 'j') [] | plain -> ThreadAction.moveBand 1
+    V.EvKey (V.KChar 'k') [] | plain -> ThreadAction.moveBand (-1)
+    V.EvKey (V.KChar 'r') [] | plain -> acted ThreadAction.replyKey
+    V.EvKey (V.KChar '?') [] | plain -> acted ThreadAction.askKey
+    V.EvKey (V.KChar '@') [] | plain -> acted ThreadAction.commentKey
+    V.EvKey (V.KChar 'e') [] | plain -> acted ThreadAction.editKey
+    V.EvKey V.KEnter [] | plain -> acted ThreadAction.takeKey
+    V.EvKey (V.KChar 'd') []
+      | plain && Types.bandDeleting band -> acted ThreadAction.discardKey
+      | plain -> State.modify (\s -> s {Types.stBand = Just band {Types.bandDeleting = True}})
+    V.EvKey (V.KChar 'c') [V.MCtrl] | not plain -> State.modify (\s -> s {Types.stEmacsPrefix = Just 'c'})
+    _ -> passOn
 
 -- Emacs keymap: editing chords go to Remax.Emacs; M-x and C-s open the
 -- prompts; C-c prefixes the review verbs (same letters as the helix
@@ -390,9 +449,25 @@ handleEmacsKey i ed ev = do
 
 emacsEdit :: Int -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()
 emacsEdit i ed ev =
-  case Emacs.handleEmacs ev ed of
-    Just edNext -> applyEdit i ed edNext
-    Nothing -> pure ()
+  let
+    down = case ev of
+      V.EvKey V.KDown [] -> True
+      V.EvKey (V.KChar 'n') [V.MCtrl] -> True
+      _ -> False
+    move = case Emacs.handleEmacs ev ed of
+      Just edNext -> applyEdit i ed edNext
+      Nothing -> pure ()
+  in
+    if down then actOr ThreadAction.enterThread move else move
+
+-- Try a thread key; when the cursor's line has nothing for it, do what
+-- the key used to do.
+actOr :: Brick.EventM Types.Name Types.St ThreadAction.Handled -> Brick.EventM Types.Name Types.St () -> Brick.EventM Types.Name Types.St ()
+actOr act fallback = do
+  handled <- act
+  case handled of
+    ThreadAction.Handled -> pure ()
+    ThreadAction.Unhandled -> fallback
 
 applyEdit :: Int -> Modal.EdState -> Modal.EdState -> Brick.EventM Types.Name Types.St ()
 applyEdit i ed edNext = do
@@ -411,6 +486,15 @@ applyEdit i ed edNext = do
 handleEmacsPrefixed :: Char -> V.Event -> Brick.EventM Types.Name Types.St ()
 handleEmacsPrefixed pfx ev = do
   st <- State.get
+  let
+    onPost act fallback =
+      if Maybe.isJust (Types.stBand st)
+        then do
+          handled <- act
+          case handled of
+            ThreadAction.Handled -> pure ()
+            ThreadAction.Unhandled -> Types.setMsg "not on this post"
+        else actOr act fallback
   case pfx of
     'x' ->
       case ev of
@@ -419,11 +503,17 @@ handleEmacsPrefixed pfx ev = do
         _ -> pure ()
     _ ->
       case ev of
-        V.EvKey V.KEnter [] -> VerdictAction.acceptSelection
+        V.EvKey V.KEnter []
+          | Maybe.isJust (Types.stBand st) -> actOr ThreadAction.takeKey (pure ())
+          | otherwise -> VerdictAction.acceptSelection
+        V.EvKey (V.KChar 'c') [V.MCtrl] -> actOr ThreadAction.takeKey (pure ())
         V.EvKey (V.KChar '!') [] -> NoteAction.markThenNote Store.Flagged
-        V.EvKey (V.KChar '?') [] -> NoteAction.markThenNote Store.Questioned
-        V.EvKey (V.KChar 'r') [] -> VerdictAction.clearVerdictBySelection
+        V.EvKey (V.KChar '?') [] -> onPost ThreadAction.askKey (NoteAction.markThenNote Store.Questioned)
+        V.EvKey (V.KChar 'g') [] -> onPost ThreadAction.commentKey (pure ())
+        V.EvKey (V.KChar 'r') [] -> onPost ThreadAction.replyKey VerdictAction.clearVerdictBySelection
         V.EvKey (V.KChar 'R') [] -> VerdictAction.clearVerdictBySelection
+        V.EvKey (V.KChar 'd') [] -> onPost ThreadAction.discardKey (pure ())
+        V.EvKey (V.KChar 'z') [] -> ThreadAction.toggleFold
         V.EvKey (V.KChar ']') [] -> PullAction.walkRun 1
         V.EvKey (V.KChar '[') [] -> PullAction.walkRun (-1)
         V.EvKey (V.KChar 'x') [] -> Nav.selectCurrentHunk
@@ -441,7 +531,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'N') [] -> Search.searchRepeat (-1)
         V.EvKey (V.KChar 'f') [] -> TreeAction.openFileFinder
         V.EvKey (V.KChar 'b') [] -> PickerAction.openBufferPicker
-        V.EvKey (V.KChar 'e') [] -> Editor.editCurrent
+        V.EvKey (V.KChar 'e') [] -> onPost ThreadAction.editKey Editor.editCurrent
         V.EvKey (V.KChar ')') [] -> Open.switchFile 1
         V.EvKey (V.KChar '(') [] -> Open.switchFile (-1)
         V.EvKey (V.KChar '\t') [] ->
@@ -522,7 +612,12 @@ helixNormalKey i fv ed ev = do
     V.EvKey (V.KChar '\t') [] -> State.modify (\s -> s {Types.stTray = not (Types.stTray s)})
     V.EvKey V.KEnter [] -> VerdictAction.acceptSelection
     V.EvKey (V.KChar '!') [] -> NoteAction.markThenNote Store.Flagged
-    V.EvKey (V.KChar '?') [] -> NoteAction.markThenNote Store.Questioned
+    V.EvKey (V.KChar '?') [] -> actOr ThreadAction.askKey (NoteAction.markThenNote Store.Questioned)
+    V.EvKey (V.KChar '@') [] -> actOr ThreadAction.commentKey (pure ())
+    V.EvKey (V.KChar 'r') [] -> actOr ThreadAction.replyKey (deferToModal i ed ev)
+    V.EvKey (V.KChar 'j') [] -> actOr ThreadAction.enterThread (deferToModal i ed ev)
+    V.EvKey V.KDown [] -> actOr ThreadAction.enterThread (deferToModal i ed ev)
+    V.EvKey (V.KChar 'z') [] -> State.modify (\s -> s {Types.stZPending = True})
     V.EvKey (V.KChar 'R') [] -> VerdictAction.clearVerdictBySelection
     V.EvKey (V.KChar ']') [] -> PullAction.walkRun 1
     V.EvKey (V.KChar '[') [] -> PullAction.walkRun (-1)
@@ -587,6 +682,11 @@ handleViKey i ed ev = do
           State.modify (\s -> s {Types.stSpace = True})
         V.EvKey (V.KChar 'p') [] -> pasteKey deferToVi i ev
         V.EvKey (V.KChar 'P') [] -> pasteKey deferToVi i ev
+        V.EvKey (V.KChar '@') [] -> actOr ThreadAction.commentKey (pure ())
+        V.EvKey (V.KChar 'r') [] -> actOr ThreadAction.replyKey (deferToVi i ed ev)
+        V.EvKey (V.KChar 'j') [] -> actOr ThreadAction.enterThread (deferToVi i ed ev)
+        V.EvKey V.KDown [] -> actOr ThreadAction.enterThread (deferToVi i ed ev)
+        V.EvKey (V.KChar 'z') [] -> State.modify (\s -> s {Types.stZPending = True})
         _ -> deferToVi i ed ev
 
 -- The vi layer's own state lives in St, so the result carries both a new

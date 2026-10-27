@@ -143,6 +143,7 @@ freshView hls path deleted base newLs =
       Types.fvHl = TS.highlighterFor hls path (Maybe.listToMaybe newLs)
     , Types.fvRunDecls = []
     , Types.fvRemarks = []
+    , Types.fvThreads = Map.empty
     , Types.fvPending = 0
     , Types.fvMtime = Nothing
     }

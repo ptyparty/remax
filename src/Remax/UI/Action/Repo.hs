@@ -81,7 +81,7 @@ switchRepo target = do
               tour <- Tour.loadTourFor conn target (Types.rebaseEffMode rebase mode)
               files <-
                 fmap
-                  (map (Verdict.recountFile verdicts threads))
+                  (map (Verdict.recountFile verdicts threads (Conv.conversations Conv.emptyRemote own)))
                   (Load.loadAll (Types.stConfig st) (Types.stHls st) (Types.rebaseEffMode rebase mode) target)
               -- the watch manager is shared, so following a second repository
               -- costs watch descriptors rather than another inotify instance
@@ -162,6 +162,10 @@ arriveAt target remembered saved mode passId loaded = do
         , Types.stCmdRefs = []
         , Types.stPullMeta = Nothing
         , Types.stPullPoll = Types.noPullPoll
+        , Types.stBand = Nothing
+        , Types.stUnfolded = Set.empty
+        , Types.stConfirm = Nothing
+        , Types.stCiting = Nothing
         , Types.stBaseAt = Nothing
         }
   case remembered of

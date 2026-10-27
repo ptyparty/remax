@@ -14,11 +14,15 @@ import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Graphics.Vty qualified as V
 import Remax.Config qualified as Config
+import Remax.Conversation qualified as Conv
 import Remax.DiffModel qualified as DiffModel
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
+import Remax.UI.Core.Anchor qualified as Anchor
 import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Ink qualified as Ink
+import Remax.UI.Core.Markdown qualified as Markdown
+import Remax.UI.Core.Threads qualified as Threads
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
 import Remax.UI.Core.View qualified as View
@@ -60,6 +64,8 @@ data RowItem = RowItem
   , riNotes :: [Types.NoteLine]
   , riGuide :: [Types.NoteLine]
   , riEmph :: [(Int, Int)]
+  , riThreads :: [Threads.ThreadLine]
+  , riMark :: Maybe (Char, Brick.AttrName)
   }
 
 data WindowView = WindowView
@@ -69,6 +75,7 @@ data WindowView = WindowView
   , wvItems :: [RowItem]
   , wvNoteRows :: [[Types.NoteLine]]
   , wvGuideRows :: [[Types.NoteLine]]
+  , wvThreadRows :: [[Threads.ThreadLine]]
   }
 
 data RowPaint = RowPaint
@@ -80,6 +87,7 @@ data RowPaint = RowPaint
   , rpHOff :: Int
   , rpIsCursor :: Bool
   , rpVerdict :: Maybe Store.Verdict
+  , rpMark :: Maybe (Char, Brick.AttrName)
   }
 
 renderFile :: Int -> Int -> Types.St -> Types.FileView -> BrickTypes.Widget Types.Name
@@ -97,6 +105,7 @@ renderFile paneWidth screenRows st fv =
     cursorIn = wvCursorOut view - wvLo view
     notesAbove =
       sum (map length (take cursorIn (wvNoteRows view)))
+        + sum (map length (take cursorIn (wvThreadRows view)))
         + sum (map length (take (cursorIn + 1) (wvGuideRows view)))
     cursorRender = cursorIn + notesAbove
     scrollOff = Config.cfgScrolloff (Types.stConfig st)
@@ -146,15 +155,36 @@ windowView paneWidth screenRows st fv =
     -- worked out once for the whole file when the rows were built, so
     -- the marks are the same wherever the window happens to sit
     emphs = take (hi - lo) (drop lo (Types.fvEmph fv))
+    convsAt i = Anchor.conversationsAt st fv i
+    threadWidth = View.noteTextWidth paneWidth fv
+    threadRows = take (hi - lo) (drop lo (map (concatMap (Threads.threadLines st threadWidth) . convsAt) [0 .. Types.fvRowCount fv - 1]))
+    marks = take (hi - lo) (drop lo (map (markOf . convsAt) [0 .. Types.fvRowCount fv - 1]))
+    item row point notes guide emph threads mark =
+      RowItem {riRow = row, riPoint = point, riNotes = notes, riGuide = guide, riEmph = emph, riThreads = threads, riMark = mark}
   in
     WindowView
       { wvLo = lo
       , wvHi = hi
       , wvCursorOut = cursorOut
-      , wvItems = List.zipWith5 RowItem windowed points noteRows guideRows emphs
+      , wvItems = List.zipWith7 item windowed points noteRows guideRows emphs threadRows marks
       , wvNoteRows = noteRows
       , wvGuideRows = guideRows
+      , wvThreadRows = threadRows
       }
+
+-- The gutter glyph a conversation gives its line: a GitHub thread
+-- outranks a draft of your own.
+markOf :: [Conv.Conversation] -> Maybe (Char, Brick.AttrName)
+markOf convs =
+  let
+    kind c = case Conv.convVenue c of
+      Conv.ReviewThread (Just _) _ -> Just ('\8618', Attrs.replyInlineAttr)
+      Conv.ReviewThread Nothing _ -> Just ('@', Attrs.questionMarkAttr)
+      _ -> Nothing
+  in
+    case Maybe.mapMaybe kind convs of
+      [] -> Nothing
+      (first : rest) -> Just (Maybe.fromMaybe first (List.find ((== '\8618') . fst) (first : rest)))
 
 -- One row's images: the line itself, then any note rows folded under
 -- it, paired with whether the cursor sits on this line. Counting the
@@ -191,7 +221,11 @@ rowImages paneWidth st fv pens numW hOff item =
         , rpHOff = hOff
         , rpIsCursor = isCursor
         , rpVerdict = verdict
+        , rpMark = riMark item
         }
+    selectedPost = case Types.stBand st of
+      Just band -> Just (Types.bandConv band, Types.bandPost band)
+      Nothing -> Nothing
     -- reviewed lines keep their full syntax colors; the gutter dot
     -- and the tray checkmark already say "answered for", and dimming
     -- whole regions made the buffer feel murky
@@ -209,7 +243,10 @@ rowImages paneWidth st fv pens numW hOff item =
         then Ink.fitRow (Ink.penPlain (rpRowPens paint)) paneWidth drawn
         else drawn
   in
-    (map (guideInk paneWidth paint) (riGuide item), lineImg : map (noteInk paneWidth paint) (riNotes item), isCursor)
+    ( map (guideInk paneWidth paint) (riGuide item)
+    , lineImg : map (noteInk paneWidth paint) (riNotes item) ++ map (threadInk paneWidth paint selectedPost) (riThreads item)
+    , isCursor
+    )
 
 verdictWash :: DiffModel.RowR -> Maybe Store.Verdict -> Maybe Int -> Maybe Brick.AttrName
 verdictWash r verdict settling =
@@ -262,9 +299,10 @@ statusInk paint r left =
       Just Store.Questioned -> Just ('?', Attrs.questionMarkAttr)
       Just Store.Reviewed -> Just ('\10003', Attrs.doneMarkAttr)
       Nothing ->
-        case DiffModel.rKey r of
-          Just _ -> Just ('\8226', Attrs.pendingMarkAttr)
-          Nothing -> Nothing
+        case (rpMark paint, DiffModel.rKey r) of
+          (Just mark, _) -> Just mark
+          (Nothing, Just _) -> Just ('\8226', Attrs.pendingMarkAttr)
+          (Nothing, Nothing) -> Nothing
   in
     case (rpIsCursor paint, statusPick) of
       (True, Just (c, a)) ->
@@ -361,6 +399,31 @@ noteInk paneWidth paint nl =
       [ \left -> Ink.inkT left (Ink.penFor pens (rpBarName paint)) (T.singleton (rpBarGlyph paint))
       , \left -> Ink.inkT left (Ink.penFor pens noteAttr) body
       ]
+
+-- A conversation's row under its line: the author column, the rail
+-- and the body, washed when the band is on its post.
+threadInk :: Int -> RowPaint -> Maybe (Conv.ConversationId, Int) -> Threads.ThreadLine -> V.Image
+threadInk paneWidth paint selected tl =
+  let
+    banded = case (selected, Threads.tlPost tl) of
+      (Just (cid, i), Just j) -> cid == Threads.tlConv tl && i == j
+      _ -> False
+    pens = if banded then Ink.penUnder Attrs.selAttr (rpPens paint) else rpPens paint
+    penOf seg =
+      let
+        base = Ink.penFor pens (Markdown.segAttr seg)
+      in
+        maybe base (V.withURL base) (Markdown.segUrl seg)
+    indent = T.replicate (rpNumW paint + 4) " "
+    pieces =
+      (\left -> Ink.inkT left (Ink.penFor pens (rpBarName paint)) (T.singleton (rpBarGlyph paint)))
+        : (\left -> Ink.inkT left (Ink.penPlain pens) indent)
+        : map (\seg left -> Ink.inkT left (penOf seg) (Markdown.segText seg)) (Threads.tlSegs tl)
+    drawn = Ink.spanInk paneWidth pieces
+  in
+    if banded
+      then Ink.fitRow (Ink.penPlain pens) paneWidth drawn
+      else drawn
 
 -- the cursor's screen row, or nothing at all when the window
 -- carries no row for the cursor's line — an all-removed file

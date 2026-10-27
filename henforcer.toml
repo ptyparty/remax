@@ -721,6 +721,36 @@ qualified = { qualifiedPost = true }
 alias = "Events"
 
 [[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Core.Anchor"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Anchor"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Core.Threads"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Threads"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Threads"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "ThreadAction"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Cite"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "CiteAction"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Draw.Cite"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DrawCite"
+
+[[forAnyModule.allowedQualifications]]
 module = "Remax.UI.Core.Markdown"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }

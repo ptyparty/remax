@@ -3,8 +3,8 @@
 
 module Remax.UI.Action.Notes
   ( markThenNote
-  , noteCmd
   , unnoteCmd
+  , setNotePopupEd
   , openNotePopup
   , handleNotePopupKey
   , popupBoxWidth
@@ -25,14 +25,18 @@ import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Graphics.Vty qualified as V
 import Remax.Config qualified as Config
+import Remax.Conversation qualified as Conv
 import Remax.DiffModel qualified as DiffModel
 import Remax.Modal qualified as Modal
 import Remax.SoftWrap qualified as SoftWrap
 import Remax.Store qualified as Store
+import Remax.UI.Action.Cite qualified as CiteAction
 import Remax.UI.Action.Conversation qualified as Conversation
 import Remax.UI.Action.Rebase qualified as Rebase
+import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Action.Verdicts qualified as VerdictAction
 import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Threads qualified as Threads
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
 import Remax.UI.Core.View qualified as View
@@ -173,15 +177,6 @@ applyNote text keys = do
           then "no verdicts here yet — mark with ! or ? first"
           else "note on " <> Types.tshow n <> " line(s)"
 
-noteCmd :: T.Text -> Brick.EventM Types.Name Types.St ()
-noteCmd text = do
-  st <- State.get
-  let
-    keys = noteTargetKeys st
-  if null keys
-    then Types.setMsg "nothing to note — mark lines with ! or ? first"
-    else applyNote (T.strip text) keys
-
 unnoteCmd :: Brick.EventM Types.Name Types.St ()
 unnoteCmd = do
   st <- State.get
@@ -258,6 +253,8 @@ handleNotePopupKey ev np0 = do
     -- discard works from either popup mode; nobody should need to leave
     -- insert just to bail out
     V.EvKey (V.KChar 'c') [V.MCtrl] -> discardNote np
+    V.EvKey (V.KChar 'g') [V.MCtrl]
+      | Types.WorkFor _ <- Types.npPurpose np -> CiteAction.openCitePicker
     _ ->
       case Modal.edMode (Types.npEd np) of
         Modal.Insert ->
@@ -286,6 +283,14 @@ notePopupNormalKey st np ev =
     -- Esc from insert lands here in the popup's normal mode; Esc
     -- again cancels the dialog outright
     V.EvKey V.KEsc [] -> discardNote np
+    V.EvKey (V.KChar '?') []
+      | Types.WorkFor wp <- Types.npPurpose np
+      , Types.ReplyTo target _ <- Types.wpAction wp ->
+          ThreadAction.switchAction wp (Types.AskOn target)
+    V.EvKey (V.KChar 'r') []
+      | Types.WorkFor wp <- Types.npPurpose np
+      , Types.AskOn target <- Types.wpAction wp ->
+          ThreadAction.switchAction wp (Types.ReplyTo target (repliedTo st wp))
     -- the popup's normal mode follows the session's keymap, so a
     -- vi user gets vi here too; emacs is modeless and never
     -- reaches this branch
@@ -302,6 +307,17 @@ notePopupNormalKey st np ev =
 --
 -- A note asked for by :note is the other case: that mark was already
 -- there and had nothing to do with this popup.
+repliedTo :: Types.St -> Types.WorkPopup -> T.Text
+repliedTo st wp =
+  let
+    posted c = filter (not . Conv.isLocalPost) (Conv.convPosts c)
+    newest = do
+      cid <- Types.wpConv wp
+      conv <- Conv.conversationFor cid (Types.stConversations st)
+      Maybe.listToMaybe (reverse (posted conv))
+  in
+    maybe "the thread" (Threads.authorName . Conv.postAuthor) newest
+
 discardNote :: Types.NotePopup -> Brick.EventM Types.Name Types.St ()
 discardNote np = do
   let
@@ -309,6 +325,7 @@ discardNote np = do
       Types.NoteFor _ Types.NoteAsked -> "note discarded"
       Types.NoteFor _ (Types.NoteFromMark _) -> "mark cancelled"
       Types.AmendMessage _ -> "amend cancelled"
+      Types.WorkFor _ -> "discarded"
   State.modify (\s -> s {Types.stNotePopup = Nothing, Types.stMsg = discardMsg, Types.stVi = Vi.viIdle})
   case Types.npPurpose np of
     Types.NoteFor _ (Types.NoteFromMark undoing) -> do
@@ -326,6 +343,7 @@ saveNote np = do
       applyNote text keys
       VerdictAction.runDeferredAdvance
     Types.AmendMessage target -> Rebase.applyAmendMessage target text
+    Types.WorkFor wp -> ThreadAction.saveWork wp text
 
 notePopupVi :: Types.St -> Types.NotePopup -> V.Event -> Brick.EventM Types.Name Types.St ()
 notePopupVi st np ev =

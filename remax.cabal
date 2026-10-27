@@ -135,6 +135,7 @@ executable remax
       Remax.Tree
       Remax.TreeSitter
       Remax.UI
+      Remax.UI.Action.Cite
       Remax.UI.Action.Command
       Remax.UI.Action.Conversation
       Remax.UI.Action.Editor
@@ -149,13 +150,16 @@ executable remax
       Remax.UI.Action.Repo
       Remax.UI.Action.Search
       Remax.UI.Action.Settings
+      Remax.UI.Action.Threads
       Remax.UI.Action.Tree
       Remax.UI.Action.TreeKeys
       Remax.UI.Action.Verdicts
+      Remax.UI.Core.Anchor
       Remax.UI.Core.Attrs
       Remax.UI.Core.Ink
       Remax.UI.Core.Jobs
       Remax.UI.Core.Markdown
+      Remax.UI.Core.Threads
       Remax.UI.Core.Tour
       Remax.UI.Core.Types
       Remax.UI.Core.Verdict
@@ -164,6 +168,7 @@ executable remax
       Remax.UI.Core.WordDiff
       Remax.UI.Draw
       Remax.UI.Draw.Body
+      Remax.UI.Draw.Cite
       Remax.UI.Draw.Header
       Remax.UI.Draw.Help
       Remax.UI.Draw.Notes
