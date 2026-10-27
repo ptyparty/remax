@@ -35,6 +35,8 @@ module Remax.UI.Core.Types
   , Confirm (..)
   , CitePicker (..)
   , ReactionPicker (..)
+  , SubmitDialog (..)
+  , SubmitFocus (..)
   , AmendTarget (..)
   , NoteOrigin (..)
   , MarkUndo (..)
@@ -94,6 +96,7 @@ import Remax.Highlight qualified as Highlight
 import Remax.Modal qualified as Modal
 import Remax.PullPoll qualified as PullPoll
 import Remax.Store qualified as Store
+import Remax.Submit qualified as Submit
 import Remax.Tree qualified as Tree
 import Remax.TreeSitter qualified as TS
 import Remax.Vi qualified as Vi
@@ -121,6 +124,7 @@ data REvent
   | Pulse
   | Settle
   | JobDone T.Text (Brick.EventM Name St ())
+  | FromJob (Brick.EventM Name St ())
 
 -- The one-line prompt at the bottom of the screen: / search or : command.
 data Prompt = SearchPrompt T.Text | CmdPrompt T.Text
@@ -293,6 +297,7 @@ data WorkPopup = WorkPopup
   , wpOpenedWith :: T.Text
   , wpChoices :: [Conv.Conversation]
   , wpChosen :: Int
+  , wpReturnToSubmit :: Bool
   }
 
 data WorkAction
@@ -313,6 +318,24 @@ data CitePicker = CitePicker
   { cpCommits :: [Git.CitedCommit]
   , cpAt :: Int
   }
+
+{- | The :submit dialog: the review's event and summary, and the list of
+everything pending, placed as it will post.
+-}
+data SubmitDialog = SubmitDialog
+  { sdEvent :: Maybe GitHub.ReviewEvent
+  , sdCommentOnly :: Bool
+  , sdSummary :: Modal.EdState
+  , sdFocus :: SubmitFocus
+  , sdSel :: Int
+  , sdDeleting :: Bool
+  , sdItems :: [Submit.Placed]
+  , sdSending :: Bool
+  , sdFailure :: Maybe T.Text
+  }
+
+data SubmitFocus = SummaryFocus | ListFocus
+  deriving (Eq)
 
 -- | The eight reactions offered on one posted comment.
 data ReactionPicker = ReactionPicker
@@ -450,6 +473,7 @@ data St = St
   , stCiting :: Maybe CitePicker -- the commit picker a popup opened with C-g
   , stZPending :: Bool -- a z waiting for its a, to fold
   , stReacting :: Maybe ReactionPicker
+  , stSubmit :: Maybe SubmitDialog
   , stNow :: Clock.UTCTime -- wall clock, for ages; moved on the attending beat
   , stTour :: [Store.TourStep]
   , stTourKeys :: Map.Map T.Text Int

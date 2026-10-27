@@ -63,6 +63,7 @@ module Remax.Git
   , gitStateWatchDirs
   , headCommit
   , commitAt
+  , resolveFull
   , commitParents
   , resolveShort
   , isSymbolicRef

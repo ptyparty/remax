@@ -530,6 +530,25 @@ outdated draws the same way, quoting the lines GitHub kept. Notes from
 earlier versions have no commit and never go outdated; when their lines
 are gone they do not draw.
 
+### Submitting
+
+`:submit` opens `submit review · #N` over the code: the event (`h`/`l`
+pick Comment, Approve or Request changes; feedback mode offers Comment
+alone), the summary, which opens in insert mode, and `going out · N`
+listing every pending comment and reply with its first line: `@
+path:line new comment`, `↪ path:line reply to <author>`, `@ PR-level
+comment`. `Tab` enters the list, where `j`/`k` pick, `e` opens the
+item's popup and returns to the dialog when it closes, `dd` drops it and
+`⏎` jumps to its line. `⏎` on the summary sends one review on the pull
+request's head with the summary and every new comment whose lines the
+head's diff still holds as an inline comment, then each reply under its
+thread, then each PR-level comment, and a new comment off the diff as a
+PR-level comment naming its file and line. Each item leaves the store
+the moment GitHub accepts it, so a session that dies mid-send does not
+send it again; a refusal keeps the rest in the dialog with
+GitHub's reason, and `⏎` sends them again. `:submit` is refused on a
+merged or closed pull request.
+
 `:pr commits` walks the pull request one commit at a time, each reviewed
 read-only against its parent. The git bar shows `commit 3/7`, and `]` past
 the last hunk of a commit moves to the next one, `[` before the first to

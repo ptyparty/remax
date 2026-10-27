@@ -168,6 +168,7 @@ arriveAt target remembered saved mode passId loaded = do
         , Types.stConfirm = Nothing
         , Types.stCiting = Nothing
         , Types.stReacting = Nothing
+        , Types.stSubmit = Nothing
         , Types.stBaseAt = Nothing
         }
   case remembered of

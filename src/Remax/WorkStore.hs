@@ -176,12 +176,12 @@ loadLegacyNotes conn repo = do
       Just (Conv.OnLinesOnly (Conv.LocalId gid) lineSpan verdict, map post (filter onFirst rows))
   pure (Map.fromList (Maybe.mapMaybe note (Map.toList byGroup)))
 
-loadSubmitted :: SQLite.Connection -> T.Text -> IO (Map.Map Conv.LocalId Store.RemoteThreadId)
+loadSubmitted :: SQLite.Connection -> T.Text -> IO (Map.Map Conv.LocalId Store.CommentId)
 loadSubmitted conn repo = do
   rows <-
     SQLite.query conn "SELECT local_id, thread_id FROM work_submitted WHERE repo = ?" (SQLite.Only repo) ::
       IO [(T.Text, T.Text)]
-  pure (Map.fromList (map (\(l, t) -> (Conv.LocalId l, Store.RemoteThreadId t)) rows))
+  pure (Map.fromList (Maybe.mapMaybe (\(l, t) -> fmap (\c -> (Conv.LocalId l, Store.CommentId c)) (readInt64 t)) rows))
 
 targetColumns :: Conv.Target -> (T.Text, T.Text)
 targetColumns target =
@@ -282,13 +282,13 @@ takeWork conn wid =
         (SQLite.Only i)
     Conv.LegacyPost _ _ -> pure ()
 
-recordSubmitted :: SQLite.Connection -> T.Text -> Conv.LocalId -> Store.RemoteThreadId -> IO ()
-recordSubmitted conn repo lid tid =
+recordSubmitted :: SQLite.Connection -> T.Text -> Conv.LocalId -> Store.CommentId -> IO ()
+recordSubmitted conn repo lid cid =
   SQLite.execute
     conn
     "INSERT INTO work_submitted (repo, local_id, thread_id) VALUES (?, ?, ?)\
     \ ON CONFLICT(local_id) DO UPDATE SET thread_id = excluded.thread_id"
-    (repo, Conv.localIdToText lid, Store.remoteThreadIdToText tid)
+    (repo, Conv.localIdToText lid, T.pack (show (Store.commentIdToInt64 cid)))
 
 {- | A joined note grows to cover the union of its lines and the new
 selection, in file order.

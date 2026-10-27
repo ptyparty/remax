@@ -196,7 +196,7 @@ workBody w =
 data OwnWork = OwnWork
   { workItems :: Map.Map Target [(WorkId, Work)]
   , workVerdicts :: Map.Map Store.LineKey Store.Verdict
-  , workSubmitted :: Map.Map LocalId Store.RemoteThreadId
+  , workSubmitted :: Map.Map LocalId Store.CommentId
   }
   deriving (Eq, Show)
 
@@ -366,16 +366,16 @@ conversations remote own =
     viewer = remoteViewer remote
     threads = map (threadConversation viewer own) (remoteThreads remote)
     known = Map.fromList (map (\t -> (remoteThreadId t, ())) (remoteThreads remote))
+    rootIds = Map.fromList (map (\t -> (remoteCommentId (NEL.head (remoteThreadComments t)), ())) (remoteThreads remote))
     unsubmitted (target, items) =
       case target of
         NewThread lid anchor
-          | Map.notMember lid (workSubmitted own) || not (Map.member (submittedId lid) known) ->
+          | maybe True (`Map.notMember` rootIds) (Map.lookup lid (workSubmitted own)) ->
               Just (newThreadConversation lid anchor items)
         OnLinesOnly lid lineSpan verdict -> Just (noteConversation lid lineSpan verdict items)
         OnThread tid
           | Map.notMember tid known -> Just (orphanThreadConversation tid items)
         _ -> Nothing
-    submittedId lid = Maybe.fromMaybe (Store.RemoteThreadId "") (Map.lookup lid (workSubmitted own))
     locals = Maybe.mapMaybe unsubmitted (Map.toList (workItems own))
     pull =
       if null (remoteComments remote) && not (hasPullWork own)
@@ -430,8 +430,9 @@ threadConversation viewer own t =
       _ -> Nothing
     edits = Map.fromList (Maybe.mapMaybe editOf direct)
     posted = map (remotePost viewer edits) (NEL.toList (remoteThreadComments t))
+    rootId = remoteCommentId (NEL.head (remoteThreadComments t))
     carriedFrom (target, items) = case target of
-      NewThread lid _ | Map.lookup lid (workSubmitted own) == Just tid -> items
+      NewThread lid _ | Map.lookup lid (workSubmitted own) == Just rootId -> items
       _ -> []
     carried = foldMap carriedFrom (Map.toList (workItems own))
   in

@@ -187,6 +187,8 @@ statusHint st =
       _ -> False
   in
     case (Types.stNotePopup st, ThreadAction.bandPost st, Types.currentFileMay st) of
+      _
+        | Just _ <- Types.stSubmit st -> "submit \183 going out"
       (Just np, _, _)
         | Types.WorkFor wp <- Types.npPurpose np -> popupStatus wp
       (_, Just (conv, _, post), _) ->

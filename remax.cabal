@@ -125,12 +125,14 @@ executable remax
       Remax.GitHub
       Remax.Highlight
       Remax.Hunks
+      Remax.Json
       Remax.Key
       Remax.Modal
       Remax.PullPoll
       Remax.Punch
       Remax.SoftWrap
       Remax.Store
+      Remax.Submit
       Remax.Theme
       Remax.Tree
       Remax.TreeSitter
@@ -151,6 +153,7 @@ executable remax
       Remax.UI.Action.Search
       Remax.UI.Action.Settings
       Remax.UI.Action.Threads
+      Remax.UI.Action.Submit
       Remax.UI.Action.Tree
       Remax.UI.Action.TreeKeys
       Remax.UI.Action.Verdicts
@@ -176,6 +179,7 @@ executable remax
       Remax.UI.Draw.Prompt
       Remax.UI.Draw.Reactions
       Remax.UI.Draw.Status
+      Remax.UI.Draw.Submit
       Remax.UI.Draw.Tray
       Remax.UI.Draw.Tree
       Remax.UI.Events

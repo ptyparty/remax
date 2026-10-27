@@ -34,6 +34,7 @@ import Remax.UI.Action.Picker qualified as PickerAction
 import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Action.Search qualified as Search
 import Remax.UI.Action.Settings qualified as Settings
+import Remax.UI.Action.Submit qualified as SubmitAction
 import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Action.Tree qualified as TreeAction
 import Remax.UI.Action.TreeKeys qualified as TreeKeys
@@ -217,6 +218,7 @@ handleEvent brickEvent =
     Brick.AppEvent (Types.JobDone label finish) -> do
       State.modify (\s -> s {Types.stBusy = List.delete label (Types.stBusy s)})
       PickerAction.refreshRangePickerAfter finish
+    Brick.AppEvent (Types.FromJob step) -> step
     Brick.MouseDown name button _ _ -> handleWheel (wheelTargetOf name) button
     Brick.MouseUp {} -> pure ()
     Brick.VtyEvent (V.EvMouseDown col _ button _) -> do
@@ -242,7 +244,11 @@ handleEvent brickEvent =
           | Just picker <- Types.stCiting st -> CiteAction.handleCiteKey ev picker
         _
           | Just picker <- Types.stReacting st -> ThreadAction.handleReactionKey ev picker
-        (Just np, _, _) -> NoteAction.handleNotePopupKey ev np
+        (Just np, _, _) -> do
+          NoteAction.handleNotePopupKey ev np
+          returnToSubmit np
+        _
+          | Just dialog <- Types.stSubmit st -> SubmitAction.handleSubmitKey ev dialog
         _
           | Just tv <- Types.stTree st -> TreeKeys.handleTreeKey ev tv
         (_, Just pk, _) -> PickerAction.handlePickerKey ev pk
@@ -357,6 +363,16 @@ handlePromptKey ev prompt =
                 }
           )
       _ -> pure ()
+
+-- A popup the submit dialog's list opened brings the dialog back once
+-- it closes, saved or discarded.
+returnToSubmit :: Types.NotePopup -> Brick.EventM Types.Name Types.St ()
+returnToSubmit np =
+  case Types.npPurpose np of
+    Types.WorkFor wp | Types.wpReturnToSubmit wp -> do
+      st <- State.get
+      Monad.when (Maybe.isNothing (Types.stNotePopup st)) SubmitAction.reopenSubmit
+    _ -> pure ()
 
 handleConfirmKey :: V.Event -> Types.Confirm -> Brick.EventM Types.Name Types.St ()
 handleConfirmKey ev confirm = do

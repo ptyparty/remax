@@ -38,6 +38,16 @@ module Remax.GitHub
   , addReaction
   , removeReaction
   , editComment
+  , InlineComment (..)
+  , ReviewEvent (..)
+  , reviewEventText
+  , ReviewRequest (..)
+  , SubmittedReview (..)
+  , PostedComment (..)
+  , postReview
+  , reviewComments
+  , postReply
+  , postIssueComment
   ) where
 
 import Control.Exception qualified as Exception
@@ -47,6 +57,7 @@ import Data.Text qualified as T
 import Database.SQLite.Simple qualified as SQLite
 import Remax.Conversation qualified as Conv
 import Remax.Git qualified as Git
+import Remax.Json qualified as Json
 import Remax.Store qualified as Store
 import System.Environment qualified as Env
 import System.Exit qualified as Exit
@@ -58,6 +69,7 @@ data GhFailure
   | GhOffline T.Text
   | GhNotFound T.Text
   | GhFailed T.Text
+  | GhRefused Int T.Text
   deriving (Eq, Show)
 
 failureText :: GhFailure -> T.Text
@@ -68,6 +80,7 @@ failureText failure =
     GhOffline why -> "cannot reach GitHub \8212 check the network (" <> why <> ")"
     GhNotFound why -> "not found on GitHub: " <> why
     GhFailed why -> "gh: " <> why
+    GhRefused status why -> "GitHub " <> T.pack (show status) <> " \183 " <> why
 
 runGh :: FilePath -> [T.Text] -> IO (Either GhFailure T.Text)
 runGh root args = do
@@ -78,7 +91,10 @@ runGh root args = do
     Right (Exit.ExitFailure _, _, err) -> Left (classify (T.strip err))
 
 runGhOutput :: FilePath -> [T.Text] -> IO (Either GhFailure (Exit.ExitCode, T.Text, T.Text))
-runGhOutput root args = do
+runGhOutput root args = runGhInput root args ""
+
+runGhInput :: FilePath -> [T.Text] -> T.Text -> IO (Either GhFailure (Exit.ExitCode, T.Text, T.Text))
+runGhInput root args input = do
   environment <- Env.getEnvironment
   let
     quiet = [("GH_PROMPT_DISABLED", "1"), ("GH_NO_UPDATE_NOTIFIER", "1")]
@@ -87,7 +103,7 @@ runGhOutput root args = do
         { Process.cwd = Just root
         , Process.env = Just (quiet ++ filter ((`notElem` map fst quiet) . fst) environment)
         }
-  got <- Exception.try (Process.readCreateProcessWithExitCode p "")
+  got <- Exception.try (Process.readCreateProcessWithExitCode p (T.unpack input))
   pure $ case got of
     Left e -> let _ = (e :: Exception.IOException) in Left GhMissing
     Right (code, out, err) -> Right (code, T.pack out, T.pack err)
@@ -215,6 +231,172 @@ editComment root repo kind cid body =
   fmap
     (fmap (const ()))
     (runGh root ["api", "-X", "PATCH", commentPath repo kind cid, "-f", "body=" <> body, "--jq", ".id"])
+
+data InlineComment = InlineComment
+  { inlineCommentPath :: T.Text
+  , inlineCommentLine :: Int
+  , inlineCommentSide :: T.Text
+  , inlineCommentStartLine :: Maybe Int
+  , inlineCommentBody :: T.Text
+  }
+  deriving (Eq, Show)
+
+data ReviewEvent = EventComment | EventApprove | EventRequestChanges
+  deriving (Eq, Show)
+
+reviewEventText :: ReviewEvent -> T.Text
+reviewEventText e =
+  case e of
+    EventComment -> "COMMENT"
+    EventApprove -> "APPROVE"
+    EventRequestChanges -> "REQUEST_CHANGES"
+
+data ReviewRequest = ReviewRequest
+  { reviewRequestCommit :: T.Text
+  , reviewRequestEvent :: ReviewEvent
+  , reviewRequestBody :: T.Text
+  , reviewRequestComments :: [InlineComment]
+  }
+  deriving (Eq, Show)
+
+data SubmittedReview = SubmittedReview
+  { submittedReviewId :: Store.ReviewId
+  , submittedReviewAt :: T.Text
+  }
+  deriving (Eq, Show)
+
+postReview :: FilePath -> T.Text -> Int -> ReviewRequest -> IO (Either GhFailure SubmittedReview)
+postReview root repo n request = do
+  got <- postJson root (pullPath repo n <> "/reviews") (reviewJson request) "[(.id | tostring), (.submitted_at // \"\")] | @tsv"
+  pure $ case fmap tsvRows got of
+    Left failure -> Left failure
+    Right [[rid, at]]
+      | Just k <- Git.readCount rid -> Right SubmittedReview {submittedReviewId = Store.ReviewId (fromIntegral k), submittedReviewAt = at}
+    Right _ -> Left (GhFailed "unexpected answer to the review")
+
+reviewJson :: ReviewRequest -> Json.Json
+reviewJson request =
+  let
+    comment c =
+      Json.JObject
+        ( [ ("path", Json.JString (inlineCommentPath c))
+          , ("line", jsonInt (inlineCommentLine c))
+          , ("side", Json.JString (inlineCommentSide c))
+          , ("body", Json.JString (inlineCommentBody c))
+          ]
+            ++ maybe [] (\s -> [("start_line", jsonInt s), ("start_side", Json.JString (inlineCommentSide c))]) (inlineCommentStartLine c)
+        )
+  in
+    Json.JObject
+      ( [ ("commit_id", Json.JString (reviewRequestCommit request))
+        , ("event", Json.JString (reviewEventText (reviewRequestEvent request)))
+        , ("comments", Json.JArray (map comment (reviewRequestComments request)))
+        ]
+          ++ (if T.null (reviewRequestBody request) then [] else [("body", Json.JString (reviewRequestBody request))])
+      )
+
+jsonInt :: Int -> Json.Json
+jsonInt = Json.JNumber . T.pack . show
+
+data PostedComment = PostedComment
+  { postedCommentId :: Store.CommentId
+  , postedCommentPath :: T.Text
+  , postedCommentLine :: Maybe Int
+  , postedCommentCreatedAt :: T.Text
+  , postedCommentUpdatedAt :: T.Text
+  }
+  deriving (Eq, Show)
+
+postedCommentJq :: T.Text
+postedCommentJq =
+  "[(.id | tostring), (.path // \"\"), ((.line // .original_line // \"\") | tostring), .created_at, .updated_at] | @tsv"
+
+postedCommentRow :: [T.Text] -> Maybe PostedComment
+postedCommentRow cells =
+  case cells of
+    [cid, path, line, created, updated] -> do
+      k <- Git.readCount cid
+      Just
+        PostedComment
+          { postedCommentId = Store.CommentId (fromIntegral k)
+          , postedCommentPath = path
+          , postedCommentLine = Git.readCount line
+          , postedCommentCreatedAt = created
+          , postedCommentUpdatedAt = updated
+          }
+    _ -> Nothing
+
+{- | The comments a review posted, so each pending comment can be matched
+to the id GitHub gave it.
+-}
+reviewComments :: FilePath -> T.Text -> Int -> Store.ReviewId -> IO (Either GhFailure [PostedComment])
+reviewComments root repo n rid = do
+  got <-
+    runGh
+      root
+      [ "api"
+      , "--paginate"
+      , pullPath repo n <> "/comments?per_page=100"
+      , "--jq"
+      , ".[] | select(.pull_request_review_id == " <> T.pack (show (Store.reviewIdToInt64 rid)) <> ") | " <> postedCommentJq
+      ]
+  pure (fmap (Maybe.mapMaybe postedCommentRow . tsvRows) got)
+
+postReply :: FilePath -> T.Text -> Int -> Store.CommentId -> T.Text -> IO (Either GhFailure PostedComment)
+postReply root repo n cid body =
+  postComment root (pullPath repo n <> "/comments/" <> T.pack (show (Store.commentIdToInt64 cid)) <> "/replies") body
+
+postIssueComment :: FilePath -> T.Text -> Int -> T.Text -> IO (Either GhFailure PostedComment)
+postIssueComment root repo n body =
+  postComment root ("repos/" <> repo <> "/issues/" <> T.pack (show n) <> "/comments") body
+
+postComment :: FilePath -> T.Text -> T.Text -> IO (Either GhFailure PostedComment)
+postComment root path body = do
+  got <- postJson root path (Json.JObject [("body", Json.JString body)]) postedCommentJq
+  pure $ case fmap tsvRows got of
+    Left failure -> Left failure
+    Right [cells] | Just posted <- postedCommentRow cells -> Right posted
+    Right _ -> Left (GhFailed ("unexpected answer from " <> path))
+
+pullPath :: T.Text -> Int -> T.Text
+pullPath repo n = "repos/" <> repo <> "/pulls/" <> T.pack (show n)
+
+postJson :: FilePath -> T.Text -> Json.Json -> T.Text -> IO (Either GhFailure T.Text)
+postJson root path payload jq = do
+  got <- runGhInput root ["api", "-X", "POST", path, "--input", "-", "--jq", jq] (Json.encode payload)
+  pure $ case got of
+    Left failure -> Left failure
+    Right (Exit.ExitSuccess, out, _) -> Right out
+    Right (Exit.ExitFailure _, out, err) -> Left (refusal out (T.strip err))
+
+{- | What GitHub said no to, when it said: the status from gh's last
+line and the message from the JSON body.
+-}
+refusal :: T.Text -> T.Text -> GhFailure
+refusal body err =
+  let
+    status = do
+      (_, rest) <- Just (T.breakOnEnd "(HTTP " err)
+      Git.readCount (T.takeWhile (/= ')') rest)
+    reasons json =
+      case Json.field "errors" json of
+        Just (Json.JArray es) -> Maybe.mapMaybe errorText es
+        _ -> []
+    errorText e =
+      case e of
+        Json.JString t -> Just t
+        _ -> case Json.field "message" e of
+          Just (Json.JString t) -> Just t
+          _ -> Nothing
+    message json =
+      case (reasons json, Json.field "message" json) of
+        (r : rs, _) -> Just (T.intercalate "; " (r : rs))
+        ([], Just (Json.JString t)) -> Just t
+        _ -> Nothing
+  in
+    case (status, Json.decode body >>= message) of
+      (Just code, Just why) -> GhRefused code why
+      _ -> classify err
 
 viewerLogin :: FilePath -> IO (Either GhFailure T.Text)
 viewerLogin root = fmap (fmap T.strip) (runGh root ["api", "user", "--jq", ".login"])
