@@ -65,6 +65,9 @@ module Remax.UI.Core.Types
   , searchSigil
   , VerdictScope (..)
   , setMsg
+  , Chord (..)
+  , readChord
+  , cancelKeyText
   , TreeMode (..)
   , TreeView (..)
   , TreeOp (..)
@@ -704,6 +707,39 @@ searchSigil :: St -> T.Text
 searchSigil st = if stSearchDir st < 0 then "?" else "/"
 
 data VerdictScope = VerdictHunk | VerdictLines
+
+data Chord
+  = CancelKey
+  | PrefixStarted
+  | PrefixedKey V.Event
+  | PlainKey V.Event
+
+{- | Dialogs cancel on C-c, except in the emacs keymap, where C-c is a
+prefix and C-c C-k cancels.
+-}
+readChord :: V.Event -> Brick.EventM Name St Chord
+readChord ev = do
+  st <- State.get
+  State.modify (\s -> s {stEmacsPrefix = Nothing})
+  let
+    emacs = Config.cfgKeys (stConfig st) == Config.KeysEmacs
+    ctrlC = ev == V.EvKey (V.KChar 'c') [V.MCtrl]
+  case stEmacsPrefix st of
+    Just 'c'
+      | emacs ->
+          pure (if ev == V.EvKey (V.KChar 'k') [V.MCtrl] then CancelKey else PrefixedKey ev)
+    _
+      | ctrlC && emacs -> do
+          State.modify (\s -> s {stEmacsPrefix = Just 'c'})
+          pure PrefixStarted
+      | ctrlC -> pure CancelKey
+      | otherwise -> pure (PlainKey ev)
+
+cancelKeyText :: Config.KeyMode -> T.Text
+cancelKeyText keys =
+  case keys of
+    Config.KeysEmacs -> "C-c C-k"
+    _ -> "C-c"
 
 setMsg :: T.Text -> Brick.EventM Name St ()
 setMsg t = State.modify (\s -> s {stMsg = t})

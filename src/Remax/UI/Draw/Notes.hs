@@ -81,14 +81,14 @@ popupTitle np =
 popupHint :: Config.KeyMode -> Types.NotePopup -> T.Text
 popupHint keys np =
   case Types.npPurpose np of
-    Types.AmendMessage _ -> "\9166 amend (nor) \183 " <> discardKey keys <> " cancel"
+    Types.AmendMessage _ -> "\9166 amend (nor) \183 " <> Types.cancelKeyText keys <> " cancel"
     Types.WorkFor wp -> workHint keys wp
     Types.NoteOn plan ->
       let
         several = length (Types.planChoices plan) > 1
       in
         case Modal.edMode (Types.npEd np) of
-          Modal.Insert -> "INS  Esc \9166 saves" <> (if several then " \183 Esc Tab changes the target" else "") <> " \183 " <> discardKey keys <> " cancels the mark"
+          Modal.Insert -> "INS  Esc \9166 saves" <> (if several then " \183 Esc Tab changes the target" else "") <> " \183 " <> Types.cancelKeyText keys <> " cancels the mark"
           Modal.Normal -> "NOR  \9166 saves" <> (if several then " \183 Tab S-Tab target" else "") <> " \183 i edits \183 Esc discards"
 
 -- which line the conversation is about; the popup never used to say
@@ -154,12 +154,6 @@ workTitle wp =
     Types.TakeProposal _ _ author -> "reply \183 to " <> author <> " \183 from the proposal"
     Types.EditPosted _ _ -> "edit \183 your comment on GitHub"
 
-discardKey :: Config.KeyMode -> T.Text
-discardKey keys =
-  case keys of
-    Config.KeysEmacs -> "C-c C-k"
-    _ -> "C-c"
-
 foldKey :: Config.KeyMode -> T.Text
 foldKey keys =
   case keys of
@@ -169,12 +163,12 @@ foldKey keys =
 workHint :: Config.KeyMode -> Types.WorkPopup -> T.Text
 workHint keys wp =
   case Types.wpAction wp of
-    Types.ReplyTo _ _ -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> discardKey keys <> " discard \183 ? asks the agent instead"
-    Types.AskOn _ -> "\9166 save (nor) \183 " <> discardKey keys <> " discard \183 r replies on GitHub instead"
-    Types.CommentOn _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> discardKey keys <> " discard \183 a selection pre-fills a suggestion"
-    Types.EditPending _ _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> discardKey keys <> " discard changes"
-    Types.TakeProposal {} -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> discardKey keys <> " discard \183 the proposal goes once you post"
-    Types.EditPosted _ _ -> "\9166 edits on GitHub at once (nor) \183 C-g inserts a sha \183 " <> discardKey keys <> " discard changes"
+    Types.ReplyTo _ _ -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 ? asks the agent instead"
+    Types.AskOn _ -> "\9166 save (nor) \183 " <> Types.cancelKeyText keys <> " discard \183 r replies on GitHub instead"
+    Types.CommentOn _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 a selection pre-fills a suggestion"
+    Types.EditPending _ _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard changes"
+    Types.TakeProposal {} -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 the proposal goes once you post"
+    Types.EditPosted _ _ -> "\9166 edits on GitHub at once (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard changes"
 
 -- The thread's log above the editor: the newest two posts in full,
 -- older ones collapsed to one line each, then the rule naming what

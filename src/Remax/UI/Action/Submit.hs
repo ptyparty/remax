@@ -91,10 +91,16 @@ closeDialog = State.modify (\s -> s {Types.stSubmit = Nothing, Types.stVi = Vi.v
 handleSubmitKey :: V.Event -> Types.SubmitDialog -> Brick.EventM Types.Name Types.St ()
 handleSubmitKey ev dialog
   | Types.sdSending dialog = pure ()
-  | otherwise =
-      case Types.sdFocus dialog of
-        Types.SummaryFocus -> summaryKey ev dialog
-        Types.ListFocus -> listKey ev dialog
+  | otherwise = do
+      chord <- Types.readChord ev
+      case chord of
+        Types.CancelKey -> closeDialog
+        Types.PrefixStarted -> pure ()
+        Types.PrefixedKey _ -> Types.setMsg "C-c C-k cancels"
+        Types.PlainKey _ ->
+          case Types.sdFocus dialog of
+            Types.SummaryFocus -> summaryKey ev dialog
+            Types.ListFocus -> listKey ev dialog
 
 summaryKey :: V.Event -> Types.SubmitDialog -> Brick.EventM Types.Name Types.St ()
 summaryKey ev dialog =
@@ -106,7 +112,6 @@ summaryKey ev dialog =
       Modal.InsertUnhandled -> pure ()
   in
     case (Modal.edMode ed, ev) of
-      (_, V.EvKey (V.KChar 'c') [V.MCtrl]) -> closeDialog
       (Modal.Insert, _) -> editing
       (Modal.Normal, V.EvKey V.KEsc []) -> closeDialog
       (Modal.Normal, V.EvKey V.KEnter []) -> post dialog
@@ -141,7 +146,6 @@ listKey ev dialog0 =
     chosen = Types.safeIdx items sel
   in
     case ev of
-      V.EvKey (V.KChar 'c') [V.MCtrl] -> closeDialog
       V.EvKey V.KEsc [] -> setDialog dialog {Types.sdFocus = Types.SummaryFocus}
       V.EvKey (V.KChar '\t') [] -> setDialog dialog {Types.sdFocus = Types.SummaryFocus}
       V.EvKey (V.KChar 'j') [] -> move 1
