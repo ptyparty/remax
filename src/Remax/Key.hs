@@ -12,6 +12,7 @@
 module Remax.Key
   ( lineKeys
   , noteGroupId
+  , sha256Hex
   ) where
 
 import Data.Digest.Pure.SHA qualified as SHA
