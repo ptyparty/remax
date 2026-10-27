@@ -284,7 +284,6 @@ data NoteChoice
   = NewNote
   | ReplyNote Conv.Conversation
   | JoinNote Conv.Conversation
-  | ReplyThread Conv.Conversation
   | ReplyOutdated Conv.Conversation
 
 {- | A popup that writes to the conversation store: a reply, a question

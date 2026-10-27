@@ -515,7 +515,8 @@ range, such as `╶ 78–80`.
 insert mode with *new note* chosen. A `goes to` list under the text
 offers, for each note the selection touches, a reply that leaves the
 note's lines alone and a join that adds the post and grows the note to
-cover the selection; for a GitHub thread it offers a reply only. `Tab`
+cover the selection. To ask the agent about a GitHub thread, use `?` on
+its highlighted row instead. `Tab`
 and `S-Tab` in normal mode (`M-n`/`M-p` in emacs) change the target,
 and the title names it. The popup discards with `C-c`, or `Esc` in
 normal mode. Notes written by earlier versions of remax are read in
