@@ -13,6 +13,7 @@ import Remax.Git qualified as Git
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Widgets qualified as Widgets
 import Remax.UI.Draw.Body qualified as DrawBody
+import Remax.UI.Draw.Cite qualified as DrawCite
 import Remax.UI.Draw.Header qualified as DrawHeader
 import Remax.UI.Draw.Help qualified as DrawHelp
 import Remax.UI.Draw.Notes qualified as DrawNotes
@@ -38,7 +39,8 @@ draw st =
         else [body]
     overlays =
       Maybe.catMaybes
-        [ fmap (DrawNotes.notePopupLayer st) (Types.stNotePopup st)
+        [ fmap DrawCite.citeLayer (Types.stCiting st)
+        , fmap (DrawNotes.notePopupLayer st) (Types.stNotePopup st)
         , DrawTree.fileMenuLayer =<< Types.stTree st
         , fmap (DrawTree.treeLayer st) (Types.stTree st)
         , fmap DrawPicker.pickerLayer (Types.stPicker st)

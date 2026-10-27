@@ -24,6 +24,7 @@ module Remax.Vi
   , viBusy
   , viLabel
   , handleVi
+  , rowStep
   ) where
 
 import Data.Char qualified as Char

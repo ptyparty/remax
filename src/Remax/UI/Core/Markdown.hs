@@ -78,7 +78,16 @@ stripComments t =
       | otherwise -> before <> stripComments (T.drop 3 (snd (T.breakOn "-->" rest)))
 
 blocks :: T.Text -> [Block]
-blocks = collapseBlanks . blocksOf . map T.stripEnd . T.lines . T.replace "\r" ""
+blocks = trimBlanks . collapseBlanks . blocksOf . map T.stripEnd . T.lines . T.replace "\r" ""
+
+trimBlanks :: [Block] -> [Block]
+trimBlanks = reverse . dropWhile isBlank . reverse . dropWhile isBlank
+
+isBlank :: Block -> Bool
+isBlank b =
+  case b of
+    Blank -> True
+    _ -> False
 
 blocksOf :: [T.Text] -> [Block]
 blocksOf ls =

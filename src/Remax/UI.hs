@@ -24,6 +24,7 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Data.Time.Clock qualified as Clock
 import Database.SQLite.Simple qualified as SQLite
 import Graphics.Vty qualified as V
 import Graphics.Vty.CrossPlatform qualified as VtyPlatform
@@ -55,6 +56,7 @@ data Startup = Startup
   , suHighlighters :: TS.HighlighterTable
   , suThreads :: Map.Map T.Text [Store.Post]
   , suWork :: Conv.OwnWork
+  , suNow :: Clock.UTCTime
   , suNoteGroups :: Map.Map T.Text T.Text
   , suTour :: [Store.TourStep]
   , suConfig :: Config.Config
@@ -102,6 +104,7 @@ loadStartup mode root = do
   hls <- TS.initHighlighters
   threads0 <- Store.loadThreads conn (T.pack root)
   work0 <- WorkModel.loadFor conn root mode
+  now0 <- Clock.getCurrentTime
   noteGroups0 <- Store.loadNoteGroups conn (T.pack root)
   cfg <- Config.loadConfig
   rebase0 <- Git.rebaseStatus root
@@ -121,6 +124,7 @@ loadStartup mode root = do
       , suHighlighters = hls
       , suThreads = threads0
       , suWork = work0
+      , suNow = now0
       , suNoteGroups = noteGroups0
       , suTour = tour0
       , suConfig = cfg
@@ -190,6 +194,12 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stNotePopup = Nothing
     , Types.stThreads = suThreads startup
     , Types.stWork = suWork startup
+    , Types.stBand = Nothing
+    , Types.stUnfolded = Set.empty
+    , Types.stConfirm = Nothing
+    , Types.stCiting = Nothing
+    , Types.stZPending = False
+    , Types.stNow = suNow startup
     , Types.stConversations = Conv.conversations Conv.emptyRemote (suWork startup)
     , Types.stTour = suTour startup
     , Types.stTourKeys = Map.empty
