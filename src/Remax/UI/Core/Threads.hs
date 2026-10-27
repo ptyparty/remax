@@ -92,7 +92,7 @@ threadLines st width conv =
         body = postRows st width column cid bare i post
         strip =
           if selected == Just i
-            then [ThreadLine cid (Just i) Nothing (stripSegs column (postKeys keys (Conv.convVenue conv) post))]
+            then [ThreadLine cid (Just i) Nothing (stripSegs column (postKeys keys (Types.flagRule st) (Conv.convVenue conv) post))]
             else []
       in
         body ++ strip
@@ -332,9 +332,12 @@ bandIndexes st conv =
     Conv.LocalOnly _ -> []
     _ -> if isResolvedFold st conv then [] else bandable conv
 
-postKeys :: Config.KeyMode -> Conv.Venue -> Conv.Post -> T.Text
-postKeys keys venue post =
+postKeys :: Config.KeyMode -> Types.FlagRule -> Conv.Venue -> Conv.Post -> T.Text
+postKeys keys rule venue post =
   let
+    flag = case rule of
+      Types.FlagsAllowed -> [key "! flag" "C-c ! flag"]
+      Types.FlagsRefused -> []
     emacs = keys == Config.KeysEmacs
     key plain chord = if emacs then chord else plain
     replyWord = case venue of
@@ -351,7 +354,8 @@ postKeys keys venue post =
     T.intercalate " \183 " $
       case Conv.postState post of
         Conv.Posted {} ->
-          [key ("r " <> replyWord) ("C-c r " <> replyWord), key "? ask" "C-c ? ask", key "! flag" "C-c ! flag"]
+          [key ("r " <> replyWord) ("C-c r " <> replyWord), key "? ask" "C-c ? ask"]
+            ++ flag
             ++ (if Conv.postAuthor post == Conv.Viewer && not summary then [key "e edit" "C-c e edit"] else [])
             ++ (if summary then [] else [key "+ react" "C-c + react"])
             ++ [key "y copy link" "C-c y copy link"]
@@ -397,11 +401,16 @@ anchorPlace anchor =
           name (Conv.spanPath lineSpan) <> ":" <> range (Maybe.fromMaybe 0 (Maybe.listToMaybe numbers)) (Maybe.fromMaybe 0 (Maybe.listToMaybe (reverse numbers)))
       Conv.OnPull -> "PR-level"
 
-lineHint :: Config.KeyMode -> T.Text
-lineHint keys =
-  case keys of
-    Config.KeysEmacs -> "C-n enters the thread \183 C-c g comment \183 C-c ? ask \183 C-c ! flag \183 C-c z fold"
-    _ -> "j enters the thread \183 @ comment \183 ? ask \183 ! flag \183 za fold"
+lineHint :: Config.KeyMode -> Types.FlagRule -> T.Text
+lineHint keys rule =
+  let
+    flag chord = case rule of
+      Types.FlagsAllowed -> chord <> " flag \183 "
+      Types.FlagsRefused -> ""
+  in
+    case keys of
+      Config.KeysEmacs -> "C-n enters the thread \183 C-c g comment \183 C-c ? ask \183 " <> flag "C-c !" <> "C-c z fold"
+      _ -> "j enters the thread \183 @ comment \183 ? ask \183 " <> flag "!" <> "za fold"
 
 noteHint :: Config.KeyMode -> T.Text
 noteHint keys =

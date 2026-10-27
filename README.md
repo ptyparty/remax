@@ -475,8 +475,8 @@ proposal), skipping local ones; past the last post the cursor moves on
 down the file, and `k` from the first returns to the line. The
 selected post wears a strip of its keys and the status line names it.
 On another reviewer's post: `r` replies, `?` asks the agent about the
-thread and `!` flags it for the agent, marking the thread's lines `?` or `!`
-when you save, `+` opens a picker of GitHub's eight reactions (one of yours
+thread and `!` flags it for the agent (outside read-only review), marking
+the thread's lines `?` or `!` when you save, `+` opens a picker of GitHub's eight reactions (one of yours
 again removes it), `y` copies the post's link and `Space u` resolves the
 thread on GitHub at once, or unresolves a resolved one. Accepting its
 lines leaves the thread open on GitHub and clears your talk with the agent

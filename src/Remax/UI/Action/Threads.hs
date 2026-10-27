@@ -223,7 +223,13 @@ askKey :: Brick.EventM Types.Name Types.St Handled
 askKey = remarkKey Types.AskRemark
 
 flagKey :: Brick.EventM Types.Name Types.St Handled
-flagKey = remarkKey Types.FlagRemark
+flagKey = do
+  st <- State.get
+  if Types.flagRule st == Types.FlagsRefused
+    then do
+      Types.setMsg "read-only: @ drafts a comment"
+      pure Handled
+    else remarkKey Types.FlagRemark
 
 remarkKey :: Types.AgentRemark -> Brick.EventM Types.Name Types.St Handled
 remarkKey remark = do
