@@ -21,6 +21,7 @@ import Remax.UI.Draw.Picker qualified as DrawPicker
 import Remax.UI.Draw.Prompt qualified as DrawPrompt
 import Remax.UI.Draw.Reactions qualified as DrawReactions
 import Remax.UI.Draw.Status qualified as DrawStatus
+import Remax.UI.Draw.Submit qualified as DrawSubmit
 import Remax.UI.Draw.Tray qualified as DrawTray
 import Remax.UI.Draw.Tree qualified as DrawTree
 
@@ -41,6 +42,7 @@ draw st =
     overlays =
       Maybe.catMaybes
         [ fmap DrawReactions.reactionLayer (Types.stReacting st)
+        , fmap (DrawSubmit.submitLayer st) (Types.stSubmit st)
         , fmap DrawCite.citeLayer (Types.stCiting st)
         , fmap (DrawNotes.notePopupLayer st) (Types.stNotePopup st)
         , DrawTree.fileMenuLayer =<< Types.stTree st

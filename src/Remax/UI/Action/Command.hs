@@ -28,6 +28,7 @@ import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Action.Rebase qualified as Rebase
 import Remax.UI.Action.Repo qualified as Repo
 import Remax.UI.Action.Settings qualified as Settings
+import Remax.UI.Action.Submit qualified as SubmitAction
 import Remax.UI.Action.Tree qualified as TreeAction
 import Remax.UI.Action.Verdicts qualified as VerdictAction
 import Remax.UI.Core.Types qualified as Types
@@ -72,6 +73,7 @@ commandTable =
   , ("set", ArgSet, "change a setting (live + persisted)")
   , ("checkout", NoArg, "switch branches (picker)")
   , ("pr", ArgPull, "open pull request N read-only; bare :pr or :pr list picks one; :pr commits walks its commits; :pr edit checks it out, :pr review returns")
+  , ("submit", NoArg, "send every pending comment and reply to GitHub as one review")
   , ("q", NoArg, "quit")
   ]
 
@@ -196,6 +198,7 @@ runCommand input =
     ["pr", "list"] -> PickerAction.openPullPicker
     ["pr", "commits"] -> PullAction.startCommitWalk
     ["pr", "edit"] -> PullAction.editPull
+    ["submit"] -> SubmitAction.openSubmit
     ["pr", "review"] -> PullAction.reviewPull
     ["pr", n] | Just k <- GitHub.pullNumber n -> PullAction.openPull k
     ["base", "branch"] -> Settings.setBaseBranch

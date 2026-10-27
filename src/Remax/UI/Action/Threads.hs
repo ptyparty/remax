@@ -356,6 +356,7 @@ openWorkPopupAt _ place cid action initial = do
         , Types.wpOpenedWith = initial
         , Types.wpChoices = []
         , Types.wpChosen = 0
+        , Types.wpReturnToSubmit = False
         }
   State.modify (\s -> s {Types.stNotePopup = Just (Types.NotePopup ed1 (Types.WorkFor popup)), Types.stVi = Vi.viIdle})
   pure Handled

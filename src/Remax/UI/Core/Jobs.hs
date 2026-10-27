@@ -6,6 +6,7 @@ module Remax.UI.Core.Jobs
   , forBounded
   , startJob
   , startQuietJob
+  , fromJob
   , jobFailed
   , withSlot
   , settleKeys
@@ -109,6 +110,12 @@ startQuietJob label work finish = do
       case got of
         Right result -> Right result
         Left e -> Left (T.pack (show (e :: Exception.SomeException)))
+
+{- | Hands a step from a job's thread to the main thread, which runs it
+before the job's finish.
+-}
+fromJob :: BChan.BChan Types.REvent -> Brick.EventM Types.Name Types.St () -> IO ()
+fromJob chan step = BChan.writeBChan chan (Types.FromJob step)
 
 jobFailed :: T.Text -> T.Text -> Brick.EventM Types.Name Types.St ()
 jobFailed label err = Types.setMsg ("! " <> label <> ": " <> err)
