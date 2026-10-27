@@ -351,5 +351,5 @@ choiceLabel lineSpan choice =
         case Conv.convAnchor c of
           Conv.OnLines old -> "join the note on " <> place c <> " \183 it grows to " <> range (Conv.spanUnion old lineSpan) <> " \183 " <> firstLine c
           _ -> "join the note on " <> place c
-      Types.ReplyThread c -> "reply (gh) on " <> place c <> " \183 " <> firstLine c
+      Types.ReplyThread c -> "reply on " <> place c <> " \183 " <> firstLine c
       Types.ReplyOutdated c -> "reply to the outdated note \183 was " <> place c <> " \183 " <> firstLine c

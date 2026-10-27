@@ -72,7 +72,7 @@ popupTitle np =
           Just Types.NewNote -> "new note"
           Just (Types.ReplyNote _) -> "reply"
           Just (Types.JoinNote _) -> "join"
-          Just (Types.ReplyThread _) -> "reply (gh)"
+          Just (Types.ReplyThread _) -> "reply"
           Just (Types.ReplyOutdated _) -> "reply"
           Nothing -> "new note"
       in
