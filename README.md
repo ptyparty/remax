@@ -473,7 +473,7 @@ proposal), skipping local ones; past the last post the cursor moves on
 down the file, and `k` from the first returns to the line. The
 selected post wears a strip of its keys and the status line names it.
 On another reviewer's post: `r` replies, `?` asks the agent about the
-thread, `!` flags it to the agent, `+` opens a picker of GitHub's eight reactions (one of yours
+thread, `+` opens a picker of GitHub's eight reactions (one of yours
 again removes it), `y` copies the post's link and `Space u` resolves the
 thread on GitHub at once, or unresolves a resolved one. Accepting its
 lines leaves the thread as it is. On your own
@@ -515,8 +515,7 @@ range, such as `╶ 78–80`.
 insert mode with *new note* chosen. A `goes to` list under the text
 offers, for each note the selection touches, a reply that leaves the
 note's lines alone and a join that adds the post and grows the note to
-cover the selection. For a GitHub thread it offers only `flag on` (after
-`!`) or `ask on` (after `?`), a message to the agent on the thread. `Tab`
+cover the selection; for a GitHub thread it offers a reply only. `Tab`
 and `S-Tab` in normal mode (`M-n`/`M-p` in emacs) change the target,
 and the title names it. The popup discards with `C-c`, or `Esc` in
 normal mode. Notes written by earlier versions of remax are read in
@@ -553,8 +552,7 @@ counts `drafts · N to send · :submit sends`.
 
 `j`/`k` move by post, including posts inside threads, and the selected
 post wears its key strip: `r` replies (on a PR-level comment or a
-review summary, a quote-reply as a new PR-level comment), `?` asks, `!`
-flags, `+`
+review summary, a quote-reply as a new PR-level comment), `?` asks, `+`
 reacts (not on a review summary, which GitHub gives no reactions), `y`
 copies the link, `Space u` resolves or unresolves a thread, `e` and `dd` act on your pending text, and
 `⏎` takes a proposal or, on a thread's posted comment, opens its lines

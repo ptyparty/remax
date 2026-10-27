@@ -29,8 +29,6 @@ module Remax.UI.Core.Types
   , NoteChoice (..)
   , WorkPopup (..)
   , WorkAction (..)
-  , AgentVerb (..)
-  , agentVerbWord
   , WorkOrigin (..)
   , Band (..)
   , Outdated (..)
@@ -304,19 +302,11 @@ data WorkPopup = WorkPopup
 
 data WorkAction
   = ReplyTo Conv.Target T.Text
-  | ToAgent AgentVerb Conv.Target
+  | AskOn Conv.Target
   | CommentOn Conv.Anchor
   | EditPending Conv.WorkId WorkOrigin
   | TakeProposal Conv.WorkId Conv.Target T.Text
   | EditPosted GitHub.CommentKind Store.CommentId
-
-data AgentVerb = AgentAsk | AgentFlag
-
-agentVerbWord :: AgentVerb -> T.Text
-agentVerbWord verb =
-  case verb of
-    AgentAsk -> "ask"
-    AgentFlag -> "flag"
 
 -- | Which popup a pending text was written in, so `e` reopens the same one.
 data WorkOrigin

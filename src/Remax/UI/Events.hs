@@ -460,7 +460,6 @@ handleBandKey keys band ev dispatch = do
     V.EvKey (V.KChar 'k') [] | plain -> ThreadAction.moveBand (-1)
     V.EvKey (V.KChar 'r') [] | plain -> acted ThreadAction.replyKey
     V.EvKey (V.KChar '?') [] | plain -> acted ThreadAction.askKey
-    V.EvKey (V.KChar '!') [] | plain -> acted ThreadAction.flagKey
     V.EvKey (V.KChar '@') [] | plain -> acted ThreadAction.commentKey
     V.EvKey (V.KChar 'e') [] | plain -> acted ThreadAction.editKey
     V.EvKey (V.KChar '+') [] | plain -> acted ThreadAction.reactKey
@@ -560,7 +559,7 @@ handleEmacsPrefixed pfx ev = do
           | Maybe.isJust (Types.stBand st) -> actOr ThreadAction.takeKey (pure ())
           | otherwise -> VerdictAction.acceptSelection
         V.EvKey (V.KChar 'c') [V.MCtrl] -> actOr ThreadAction.takeKey (pure ())
-        V.EvKey (V.KChar '!') [] -> onPost ThreadAction.flagKey (NoteAction.markThenNote Store.Flagged)
+        V.EvKey (V.KChar '!') [] -> NoteAction.markThenNote Store.Flagged
         V.EvKey (V.KChar '?') [] -> onPost ThreadAction.askKey (NoteAction.markThenNote Store.Questioned)
         V.EvKey (V.KChar 'g') []
           | Maybe.isJust (Types.stPullView st) -> PullViewAction.commentOnPull
