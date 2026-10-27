@@ -119,7 +119,7 @@ headerRows st width =
             ++ (if null reviewers then [] else [T.intercalate ", " reviewers])
             ++ (if null (PullPoll.snapshotLabels snap) then [] else [T.intercalate ", " (PullPoll.snapshotLabels snap)])
             ++ (if PullPoll.pullHeadDraft h == PullPoll.Draft then ["draft"] else [])
-        description = map (\r -> Row Blank (Markdown.rowSegments r) Nothing (Just r)) (Markdown.render (width - 4) (Conv.Markdown (PullPoll.pullHeadBody h)))
+        description = map (\r -> Row Blank (Markdown.rowSegments r) Nothing (Just r)) (Markdown.render Markdown.Folded (width - 4) (Conv.Markdown (PullPoll.pullHeadBody h)))
         emacs = Config.cfgKeys (Types.stConfig st) == Config.KeysEmacs
         checksKey = if emacs then "    C-c k lists them" else "    c lists them"
         conversationKeys = if emacs then "conversation \183 C-n C-p move by post \183 C-c g comment on the PR" else "conversation \183 j/k move by post \183 @ comment on the PR"
@@ -216,7 +216,7 @@ is on it, its keys.
 postBody :: Types.St -> Int -> Conv.ConversationId -> Int -> Conv.Post -> [Row]
 postBody st width cid i post =
   let
-    rendered = Markdown.render (width - 6) (Conv.postBody post)
+    rendered = Markdown.render (Threads.detailsFold st cid i) (width - 6) (Conv.postBody post)
     at = case Conv.postState post of
       Conv.Local _ -> Nothing
       _ -> Just (cid, i)

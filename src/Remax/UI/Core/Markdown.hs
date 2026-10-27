@@ -3,7 +3,9 @@
 module Remax.UI.Core.Markdown
   ( Segment (..)
   , Row (..)
+  , Fold (..)
   , render
+  , hasDetails
   , renderText
   , firstLine
   , plainRow
@@ -39,15 +41,27 @@ data Row = Row
 plainRow :: T.Text -> Row
 plainRow t = Row Nothing [Segment Attrs.msgAttr t Nothing]
 
-render :: Int -> Conv.Markdown -> [Row]
-render width = concatMap (layoutBlock (max 8 width)) . blocks . stripComments . Conv.markdownText
+data Fold = Folded | Unfolded
+  deriving (Eq, Show)
+
+render :: Fold -> Int -> Conv.Markdown -> [Row]
+render fold width = concatMap (layoutBlock fold (max 8 width)) . blocks . stripComments . Conv.markdownText
+
+hasDetails :: Conv.Markdown -> Bool
+hasDetails = any isDetails . blocks . stripComments . Conv.markdownText
+
+isDetails :: Block -> Bool
+isDetails b =
+  case b of
+    Details _ _ -> True
+    _ -> False
 
 renderText :: Row -> T.Text
 renderText = T.concat . map segText . rowSegments
 
 firstLine :: Conv.Markdown -> T.Text
 firstLine body =
-  case render 200 body of
+  case render Folded 200 body of
     [] -> ""
     (r : _) -> renderText r
 
@@ -60,7 +74,7 @@ data Block
   | Quote [Inline]
   | Code [T.Text]
   | Table [[Inline]] [[[Inline]]]
-  | Details T.Text
+  | Details T.Text [Block]
   | Blank
 
 data Inline
@@ -99,7 +113,7 @@ blocksOf ls =
         && Maybe.isNothing (heading l)
         && Maybe.isNothing (bullet l)
         && not (T.isPrefixOf ">" l)
-        && not (T.isPrefixOf "<details" (T.toLower (T.strip l)))
+        && not (opensDetails l)
     continuation l = not (T.null (T.strip l)) && T.isPrefixOf " " l && Maybe.isNothing (bullet l)
   in
     case ls of
@@ -111,11 +125,11 @@ blocksOf ls =
             in
               Code body : go (drop 1 after)
         | T.null (T.strip l) -> Blank : go rest
-        | "<details" `T.isPrefixOf` T.toLower (T.strip l) ->
+        | opensDetails l ->
             let
-              (inside, after) = break (T.isPrefixOf "</details" . T.toLower . T.strip) (l : rest)
+              (inside, after) = detailsSpan (l : rest)
             in
-              Details (summaryOf inside) : go (drop 1 after)
+              Details (summaryOf inside) (trimBlanks (collapseBlanks (go (detailsBody inside)))) : go after
         | Just (level, text) <- heading l -> Heading level (inlines text) : go rest
         | Just item <- bullet l ->
             let
@@ -187,6 +201,39 @@ cells l =
     inner = T.dropWhileEnd (== '|') (T.dropWhile (== '|') (T.strip l))
   in
     map T.strip (T.splitOn "|" inner)
+
+opensDetails :: T.Text -> Bool
+opensDetails = T.isPrefixOf "<details" . T.toLower . T.strip
+
+closesDetails :: T.Text -> Bool
+closesDetails = T.isPrefixOf "</details" . T.toLower . T.strip
+
+-- The lines from a details block's open tag through its own close tag, and the lines after it.
+detailsSpan :: [T.Text] -> ([T.Text], [T.Text])
+detailsSpan =
+  let
+    go depth acc ls =
+      case ls of
+        [] -> (reverse acc, [])
+        (l : rest)
+          | opensDetails l -> go (depth + 1) (l : acc) rest
+          | closesDetails l && depth <= (1 :: Int) -> (reverse (l : acc), rest)
+          | closesDetails l -> go (depth - 1) (l : acc) rest
+          | otherwise -> go depth (l : acc) rest
+  in
+    go 0 []
+
+detailsBody :: [T.Text] -> [T.Text]
+detailsBody ls =
+  let
+    joined = T.intercalate "\n" (take (length ls - 1) ls)
+    afterOpen = T.drop 1 (snd (T.breakOn ">" joined))
+    withoutSummary = case T.breakOn "<summary>" afterOpen of
+      (before, rest)
+        | T.null rest -> afterOpen
+        | otherwise -> before <> T.drop 10 (snd (T.breakOn "</summary>" rest))
+  in
+    T.lines withoutSummary
 
 quoteParagraphs :: [T.Text] -> [[T.Text]]
 quoteParagraphs ls =
@@ -265,8 +312,8 @@ bareUrl t =
 
 -- Layout -----------------------------------------------------------------
 
-layoutBlock :: Int -> Block -> [Row]
-layoutBlock width block =
+layoutBlock :: Fold -> Int -> Block -> [Row]
+layoutBlock fold width block =
   case block of
     Blank -> [Row Nothing []]
     Paragraph ins -> wrapInlines width Attrs.msgAttr "" "" ins
@@ -275,8 +322,16 @@ layoutBlock width block =
     Bullet ins -> wrapInlines width Attrs.msgAttr "\8226 " "  " ins
     Quote ins -> wrapInlines width Attrs.hintAttr "\9474 " "\9474 " ins
     Code ls -> map (\l -> Row (Just Attrs.mdCodeAttr) [Segment Attrs.mdCodeAttr (" " <> T.take (width - 1) l) Nothing]) (if null ls then [""] else ls)
-    Details summary -> [Row Nothing [Segment Attrs.hintAttr ("\9656 " <> summary <> "  za opens") Nothing]]
+    Details summary body ->
+      case fold of
+        Folded -> [Row Nothing [Segment Attrs.hintAttr ("\9656 " <> summary <> " \183 za opens") Nothing]]
+        Unfolded ->
+          Row Nothing [Segment Attrs.hintAttr ("\9662 " <> summary <> " \183 za folds") Nothing]
+            : map indent (concatMap (layoutBlock fold (width - 2)) body)
     Table header body -> tableRows width header body
+
+indent :: Row -> Row
+indent row = row {rowSegments = Segment Attrs.msgAttr "  " Nothing : rowSegments row}
 
 wrapInlines :: Int -> Brick.AttrName -> T.Text -> T.Text -> [Inline] -> [Row]
 wrapInlines width base lead continueLead ins =

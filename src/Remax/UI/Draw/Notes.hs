@@ -201,7 +201,7 @@ workRows st width budget wp =
     full p =
       let
         bodyWidth = max 12 (width - column - 3 - 9)
-        rendered = Markdown.render bodyWidth (Conv.postBody p)
+        rendered = Markdown.render Markdown.Folded bodyWidth (Conv.postBody p)
         rows = if null rendered then [Markdown.plainRow ""] else rendered
         authorAttr = if Conv.postAuthor p == Conv.Viewer then Attrs.noteInlineAttr else Attrs.replyInlineAttr
         row (j, r) =

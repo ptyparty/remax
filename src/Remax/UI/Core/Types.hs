@@ -463,6 +463,7 @@ data St = St
   , stOutdated :: Map.Map Conv.ConversationId Outdated -- where a conversation whose lines left the file draws now
   , stBand :: Maybe Band -- the post the keys act on, when the cursor has entered a thread
   , stUnfolded :: Set.Set Store.RemoteThreadId -- resolved threads opened with za
+  , stOpenDetails :: Set.Set (Conv.ConversationId, Int) -- posts whose details blocks za opened
   , stConfirm :: Maybe Confirm
   , stCiting :: Maybe CitePicker -- the commit picker a popup opened with C-g
   , stZPending :: Bool -- a z waiting for its a, to fold

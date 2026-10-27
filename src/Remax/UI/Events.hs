@@ -438,7 +438,8 @@ handleModalKey ev = do
 -- has no use for leaves it and goes to the line as usual.
 handleBandKey :: Config.KeyMode -> Types.Band -> V.Event -> Brick.EventM Types.Name Types.St () -> Brick.EventM Types.Name Types.St ()
 handleBandKey keys band ev dispatch = do
-  State.modify (\s -> s {Types.stBand = Just band {Types.bandDeleting = False}})
+  zPending <- State.gets Types.stZPending
+  State.modify (\s -> s {Types.stBand = Just band {Types.bandDeleting = False}, Types.stZPending = False})
   let
     plain = keys /= Config.KeysEmacs
     acted act = do
@@ -467,6 +468,8 @@ handleBandKey keys band ev dispatch = do
     V.EvKey (V.KChar 'd') []
       | plain && Types.bandDeleting band -> acted ThreadAction.discardKey
       | plain -> State.modify (\s -> s {Types.stBand = Just band {Types.bandDeleting = True}})
+    V.EvKey (V.KChar 'z') [] | plain -> State.modify (\s -> s {Types.stZPending = True})
+    V.EvKey (V.KChar 'a') [] | plain && zPending -> ThreadAction.toggleFoldAtBand
     V.EvKey (V.KChar 'c') [V.MCtrl] | not plain -> State.modify (\s -> s {Types.stEmacsPrefix = Just 'c'})
     _ -> passOn
 
@@ -565,7 +568,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'r') [] -> onPost ThreadAction.replyKey VerdictAction.clearVerdictBySelection
         V.EvKey (V.KChar 'R') [] -> VerdictAction.clearVerdictBySelection
         V.EvKey (V.KChar 'd') [] -> onPost ThreadAction.discardKey (pure ())
-        V.EvKey (V.KChar 'z') [] -> ThreadAction.toggleFold
+        V.EvKey (V.KChar 'z') [] -> ThreadAction.toggleFoldAtBand
         V.EvKey (V.KChar '+') [] -> onPost ThreadAction.reactKey (pure ())
         V.EvKey (V.KChar 'y') [] -> onPost ThreadAction.copyKey (pure ())
         V.EvKey (V.KChar ']') [] -> PullAction.walkRun 1
