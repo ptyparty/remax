@@ -166,21 +166,21 @@ handleNotePopupKey ev np0 = do
             (Types.npEd np0) {Modal.edKill = Types.stKill st0, Modal.edRowLayout = layout}
         }
     emacs = Config.cfgKeys (Types.stConfig st0) == Config.KeysEmacs
-  State.modify (\s -> s {Types.stZPending = False, Types.stEmacsPrefix = Nothing})
-  case ev of
-    _
-      | emacs
-      , Types.stEmacsPrefix st0 == Just 'c' ->
-          case ev of
-            V.EvKey (V.KChar 'k') [V.MCtrl] -> discardNote np
-            V.EvKey (V.KChar 'z') []
-              | Types.WorkFor wp <- Types.npPurpose np -> toggleLog wp
-            _ -> Types.setMsg "C-c C-k discards"
+  State.modify (\s -> s {Types.stZPending = False})
+  chord <- Types.readChord ev
+  case chord of
     -- discard works from either popup mode; nobody should need to leave
     -- insert just to bail out
-    V.EvKey (V.KChar 'c') [V.MCtrl]
-      | emacs -> State.modify (\s -> s {Types.stEmacsPrefix = Just 'c'})
-      | otherwise -> discardNote np
+    Types.CancelKey -> discardNote np
+    Types.PrefixStarted -> pure ()
+    Types.PrefixedKey (V.EvKey (V.KChar 'z') [])
+      | Types.WorkFor wp <- Types.npPurpose np -> toggleLog wp
+    Types.PrefixedKey _ -> Types.setMsg "C-c C-k discards"
+    Types.PlainKey _ -> notePopupKey st0 np emacs ev
+
+notePopupKey :: Types.St -> Types.NotePopup -> Bool -> V.Event -> Brick.EventM Types.Name Types.St ()
+notePopupKey st0 np emacs ev =
+  case ev of
     V.EvKey (V.KChar 'g') [V.MCtrl]
       | Types.WorkFor _ <- Types.npPurpose np -> CiteAction.openCitePicker
     V.EvKey (V.KChar 'n') [V.MMeta] | emacs -> moveChoice 1 np

@@ -322,7 +322,9 @@ command line, `C-s` the search prompt. Review verbs live behind the
 accept, `C-c !` / `C-c ?` flag/question, `C-c x` select hunk,
 `C-c ]`/`C-c [` hunks, `C-c p` walk filter, `C-c f` files — and
 `C-x C-c` quits, `C-x C-s` saves (edits already write through). The
-note popup keeps its modal keys in either keymap.
+note popup keeps its modal keys in either keymap. Popups and dialogs
+that other keymaps cancel with `C-c` cancel with `C-c C-k`, since `C-c`
+stays a prefix there too.
 
 ## The : command line
 

@@ -28,11 +28,19 @@ openCitePicker = do
     _ -> State.modify (\s -> s {Types.stCiting = Just Types.CitePicker {Types.cpCommits = commits, Types.cpAt = 0}})
 
 handleCiteKey :: V.Event -> Types.CitePicker -> Brick.EventM Types.Name Types.St ()
-handleCiteKey ev picker =
+handleCiteKey ev picker = do
+  chord <- Types.readChord ev
+  case chord of
+    Types.CancelKey -> closeCitePicker
+    Types.PrefixStarted -> pure ()
+    Types.PrefixedKey _ -> Types.setMsg "C-c C-k cancels"
+    Types.PlainKey _ -> citeKey ev picker
+
+citeKey :: V.Event -> Types.CitePicker -> Brick.EventM Types.Name Types.St ()
+citeKey ev picker =
   case ev of
     V.EvKey V.KEsc [] -> closeCitePicker
     V.EvKey (V.KChar 'g') [V.MCtrl] -> closeCitePicker
-    V.EvKey (V.KChar 'c') [V.MCtrl] -> closeCitePicker
     V.EvKey V.KEnter [] -> citeAt picker
     _ -> case Vi.rowStep ev of
       Just d ->

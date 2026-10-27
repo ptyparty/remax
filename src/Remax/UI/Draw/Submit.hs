@@ -7,6 +7,7 @@ module Remax.UI.Draw.Submit
 import Brick qualified as Brick
 import Brick.Types qualified as BrickTypes
 import Data.Text qualified as T
+import Remax.Config qualified as Config
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.Modal qualified as Modal
@@ -46,14 +47,14 @@ submitLayer st dialog =
             ++ (if null items then [Brick.withAttr Attrs.hintAttr (Brick.txt "  nothing pending")] else itemRows)
         )
   in
-    Widgets.floatFrame title (hint dialog) (Brick.hLimit width (Brick.padRight Brick.Max (Brick.padLeftRight 1 body)))
+    Widgets.floatFrame title (hint (Config.cfgKeys (Types.stConfig st)) dialog) (Brick.hLimit width (Brick.padRight Brick.Max (Brick.padLeftRight 1 body)))
 
-hint :: Types.SubmitDialog -> T.Text
-hint dialog =
+hint :: Config.KeyMode -> Types.SubmitDialog -> T.Text
+hint keys dialog =
   case Types.sdFocus dialog of
     Types.SummaryFocus ->
       case Modal.edMode (Types.sdSummary dialog) of
-        Modal.Insert -> "INS  Esc first \183 then h/l event \183 \9166 post \183 Tab list \183 C-c cancel"
+        Modal.Insert -> "INS  Esc first \183 then h/l event \183 \9166 post \183 Tab list \183 " <> Types.cancelKeyText keys <> " cancel"
         Modal.Normal -> "h/l event \183 \9166 post \183 Tab list \183 i edits the summary \183 Esc cancel"
     Types.ListFocus -> "j/k pick \183 e edit \183 dd drop \183 \9166 jumps to its line \183 Tab summary \183 Esc back"
 
