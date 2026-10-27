@@ -22,6 +22,7 @@ import Graphics.Vty qualified as V
 import Remax.Clipboard qualified as Clipboard
 import Remax.Config qualified as Config
 import Remax.Emacs qualified as Emacs
+import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
 import Remax.UI.Action.Cite qualified as CiteAction
@@ -32,6 +33,7 @@ import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Picker qualified as PickerAction
 import Remax.UI.Action.Pull qualified as PullAction
+import Remax.UI.Action.PullView qualified as PullViewAction
 import Remax.UI.Action.Search qualified as Search
 import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Action.Submit qualified as SubmitAction
@@ -145,6 +147,7 @@ wheelTargetOf name =
   case name of
     Types.BodyVP -> WheelBody
     Types.TrayVP -> WheelTray
+    Types.PullVP -> WheelBody
     Types.TheCursor -> WheelNowhere
 
 handleWheel :: WheelTarget -> V.Button -> Brick.EventM Types.Name Types.St ()
@@ -249,6 +252,12 @@ handleEvent brickEvent =
           returnToSubmit np
         _
           | Just dialog <- Types.stSubmit st -> SubmitAction.handleSubmitKey ev dialog
+        _
+          | Just _ <- Types.stPullView st
+          , not (Types.stSpace st)
+          , Maybe.isNothing (Types.stEmacsPrefix st)
+          , Maybe.isNothing (Types.stPrompt st) ->
+              handlePullViewKey ev
         _
           | Just tv <- Types.stTree st -> TreeKeys.handleTreeKey ev tv
         (_, Just pk, _) -> PickerAction.handlePickerKey ev pk
@@ -364,6 +373,19 @@ handlePromptKey ev prompt =
           )
       _ -> pure ()
 
+-- The PR view takes the keys the body would, apart from the command
+-- line and the leaders, which reach their menus as anywhere.
+handlePullViewKey :: V.Event -> Brick.EventM Types.Name Types.St ()
+handlePullViewKey ev =
+  case ev of
+    V.EvKey (V.KChar ':') [] -> Command.openCmdPrompt
+    V.EvKey (V.KChar 'x') [V.MMeta] -> Command.openCmdPrompt
+    V.EvKey (V.KChar ' ') [] -> State.modify (\s -> s {Types.stSpace = True})
+    V.EvKey (V.KChar 'c') [V.MCtrl] -> State.modify (\s -> s {Types.stEmacsPrefix = Just 'c'})
+    V.EvKey (V.KChar 'x') [V.MCtrl] -> State.modify (\s -> s {Types.stEmacsPrefix = Just 'x'})
+    V.EvKey (V.KChar '\t') [] -> State.modify (\s -> s {Types.stTray = not (Types.stTray s)})
+    _ -> PullViewAction.handlePullViewKey ev
+
 -- A popup the submit dialog's list opened brings the dialog back once
 -- it closes, saved or discarded.
 returnToSubmit :: Types.NotePopup -> Brick.EventM Types.Name Types.St ()
@@ -373,6 +395,13 @@ returnToSubmit np =
       st <- State.get
       Monad.when (Maybe.isNothing (Types.stNotePopup st)) SubmitAction.reopenSubmit
     _ -> pure ()
+
+pullViewOrCommit :: Brick.EventM Types.Name Types.St ()
+pullViewOrCommit = do
+  st <- State.get
+  case Git.subjectOf (Types.stMode st) of
+    Git.Pull _ _ -> PullViewAction.togglePullView
+    _ -> VerdictAction.showCommitPopup
 
 handleConfirmKey :: V.Event -> Types.Confirm -> Brick.EventM Types.Name Types.St ()
 handleConfirmKey ev confirm = do
@@ -529,7 +558,10 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'c') [V.MCtrl] -> actOr ThreadAction.takeKey (pure ())
         V.EvKey (V.KChar '!') [] -> NoteAction.markThenNote Store.Flagged
         V.EvKey (V.KChar '?') [] -> onPost ThreadAction.askKey (NoteAction.markThenNote Store.Questioned)
-        V.EvKey (V.KChar 'g') [] -> onPost ThreadAction.commentKey (pure ())
+        V.EvKey (V.KChar 'g') []
+          | Maybe.isJust (Types.stPullView st) -> PullViewAction.commentOnPull
+          | otherwise -> onPost ThreadAction.commentKey (pure ())
+        V.EvKey (V.KChar 'k') [] | Maybe.isJust (Types.stPullView st) -> PullViewAction.listChecks
         V.EvKey (V.KChar 'r') [] -> onPost ThreadAction.replyKey VerdictAction.clearVerdictBySelection
         V.EvKey (V.KChar 'R') [] -> VerdictAction.clearVerdictBySelection
         V.EvKey (V.KChar 'd') [] -> onPost ThreadAction.discardKey (pure ())
@@ -546,7 +578,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'v') [] -> VerdictAction.revertTarget
         V.EvKey (V.KChar 'a') [] -> Open.gotoAltFile
         V.EvKey (V.KChar '/') [] -> PickerAction.openGrepPicker ""
-        V.EvKey (V.KChar 'c') [] -> VerdictAction.showCommitPopup
+        V.EvKey (V.KChar 'c') [] -> pullViewOrCommit
         V.EvKey (V.KChar '\'') [] -> Nav.jumpToAnchor
         V.EvKey (V.KChar '*') [] -> Search.searchWordUnderCursor
         V.EvKey (V.KChar 'n') [] -> Search.searchRepeat 1

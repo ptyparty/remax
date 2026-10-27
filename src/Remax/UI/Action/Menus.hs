@@ -7,13 +7,16 @@ module Remax.UI.Action.Menus
   ) where
 
 import Brick qualified as Brick
+import Control.Monad.State qualified as State
 import Data.Text qualified as T
 import Remax.Config qualified as Config
+import Remax.Git qualified as Git
 import Remax.Store qualified as Store
 import Remax.UI.Action.Editor qualified as Editor
 import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Picker qualified as PickerAction
+import Remax.UI.Action.PullView qualified as PullViewAction
 import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Action.Tree qualified as TreeAction
@@ -247,6 +250,13 @@ helixEditingGroups =
 -- the infobox is rendered from it and the keystroke is dispatched through
 -- it, so a key cannot be bound without being listed. :tree arrived bound
 -- but invisible precisely because those used to be two lists.
+pullViewOrCommit :: Brick.EventM Types.Name Types.St ()
+pullViewOrCommit = do
+  st <- State.get
+  case Git.subjectOf (Types.stMode st) of
+    Git.Pull _ _ -> PullViewAction.togglePullView
+    _ -> VerdictAction.showCommitPopup
+
 resolveOrUnnote :: Brick.EventM Types.Name Types.St ()
 resolveOrUnnote = do
   handled <- ThreadAction.resolveKey
@@ -280,6 +290,6 @@ spaceMenuEntries =
   , ("r", "revert hunk to base", VerdictAction.revertTarget)
   , ("a", "alternate file", Open.gotoAltFile)
   , ("/", "project search", PickerAction.openGrepPicker "")
-  , ("c", "commit message", VerdictAction.showCommitPopup)
+  , ("c", "PR view, or the commit message", pullViewOrCommit)
   , ("?", "keys", Types.showHelp)
   ]

@@ -254,6 +254,7 @@ data RemoteComment = RemoteComment
   , remoteCommentReview :: Maybe Store.ReviewId
   , remoteCommentUrl :: T.Text
   , remoteCommentReactions :: Reactions
+  , remoteCommentDiffHunk :: T.Text
   }
   deriving (Eq, Ord, Show)
 

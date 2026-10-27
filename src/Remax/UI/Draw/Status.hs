@@ -9,6 +9,7 @@ import Brick ((<+>))
 import Brick qualified as Brick
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
@@ -36,6 +37,7 @@ statusBar st =
   in
     Brick.withDefAttr Attrs.statusAttr $
       modeChip st
+        <+> (if Maybe.isJust (Types.stPullView st) then Brick.withAttr Attrs.hintAttr (Brick.txt " PR view ") else Brick.txt "")
         <+> pollChip st
         <+> pullChip st
         <+> declSeg st
@@ -143,6 +145,12 @@ verbHint verbs keys =
         "C-c \9166 accept · " <> flag "C-c ! flag · " <> "C-c ? question · M-x help "
       Config.KeysHelix -> "\9166 accept · " <> flag "! flag · " <> "? question · \9251 menu · \9251? keys "
 
+pullViewHint :: Config.KeyMode -> T.Text
+pullViewHint keys =
+  case keys of
+    Config.KeysEmacs -> "C-n C-p move by post \183 C-c g comment \183 C-c k checks \183 esc body"
+    _ -> "j/k move by post \183 @ comment \183 c checks \183 esc body"
+
 popupWord :: Types.WorkPopup -> T.Text
 popupWord wp =
   case Types.wpAction wp of
@@ -189,6 +197,8 @@ statusHint st =
     case (Types.stNotePopup st, ThreadAction.bandPost st, Types.currentFileMay st) of
       _
         | Just _ <- Types.stSubmit st -> "submit \183 going out"
+      (Nothing, Nothing, _)
+        | Just _ <- Types.stPullView st -> pullViewHint keys
       (Just np, _, _)
         | Types.WorkFor wp <- Types.npPurpose np -> popupStatus wp
       (_, Just (conv, _, post), _) ->

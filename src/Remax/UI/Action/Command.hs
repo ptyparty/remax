@@ -25,6 +25,7 @@ import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Picker qualified as PickerAction
 import Remax.UI.Action.Pull qualified as PullAction
+import Remax.UI.Action.PullView qualified as PullViewAction
 import Remax.UI.Action.Rebase qualified as Rebase
 import Remax.UI.Action.Repo qualified as Repo
 import Remax.UI.Action.Settings qualified as Settings
@@ -247,7 +248,7 @@ barePullCommand :: Brick.EventM Types.Name Types.St ()
 barePullCommand = do
   st <- State.get
   case Git.subjectOf (Types.stMode st) of
-    Git.Pull pr _ -> Types.setMsg ("PR #" <> Types.tshow (Git.prNumber pr) <> " has no PR view yet \8212 :pr list picks a pull request")
+    Git.Pull _ _ -> PullViewAction.openPullView
     _ -> PickerAction.openPullPicker
 
 setWalkNamed :: T.Text -> Brick.EventM Types.Name Types.St ()

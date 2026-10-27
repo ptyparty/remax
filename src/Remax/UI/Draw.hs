@@ -19,6 +19,7 @@ import Remax.UI.Draw.Help qualified as DrawHelp
 import Remax.UI.Draw.Notes qualified as DrawNotes
 import Remax.UI.Draw.Picker qualified as DrawPicker
 import Remax.UI.Draw.Prompt qualified as DrawPrompt
+import Remax.UI.Draw.PullView qualified as DrawPullView
 import Remax.UI.Draw.Reactions qualified as DrawReactions
 import Remax.UI.Draw.Status qualified as DrawStatus
 import Remax.UI.Draw.Submit qualified as DrawSubmit
@@ -28,13 +29,14 @@ import Remax.UI.Draw.Tree qualified as DrawTree
 draw :: Types.St -> [BrickTypes.Widget Types.Name]
 draw st =
   let
-    body = case Types.currentFileMay st of
-      Just fv ->
+    body = case (Types.stPullView st, Types.currentFileMay st) of
+      (Just _, _) -> DrawPullView.pullViewBody st
+      (Nothing, Just fv) ->
         Brick.viewport Types.BodyVP Brick.Vertical $
           BrickTypes.Widget BrickTypes.Greedy BrickTypes.Fixed $ do
             ctx <- BrickTypes.getContext
             BrickTypes.render (DrawBody.renderFile (BrickTypes.availWidth ctx) (BrickTypes.windowHeight ctx) st fv)
-      Nothing -> DrawBody.idleBody st
+      (Nothing, Nothing) -> DrawBody.idleBody st
     panes =
       if Types.stTray st && not (null (Types.stFiles st))
         then [DrawTray.tray st, body]
