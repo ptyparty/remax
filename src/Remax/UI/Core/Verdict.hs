@@ -149,16 +149,16 @@ remarksFor verdicts threads convs fv =
   in
     Maybe.mapMaybe pick (Types.fvRows fv)
 
-recountFile :: Map.Map T.Text Store.Verdict -> Map.Map T.Text [Store.Post] -> [Conv.Conversation] -> Types.FileView -> Types.FileView
-recountFile verdicts threads convs fv =
+recountFile :: Map.Map T.Text Store.Verdict -> Map.Map T.Text [Store.Post] -> [Conv.Conversation] -> Map.Map Conv.ConversationId Types.Outdated -> Types.FileView -> Types.FileView
+recountFile verdicts threads convs outdated fv =
   fv
     { Types.fvRemarks = remarksFor verdicts threads convs fv
     , Types.fvPending = length (filter (runPending verdicts) (Types.fvRuns fv))
-    , Types.fvThreads = Anchor.anchorIn convs fv
+    , Types.fvThreads = Anchor.anchorIn outdated convs fv
     }
 
 recountIn :: Types.St -> Types.FileView -> Types.FileView
-recountIn st = recountFile (Types.stVerdicts st) (Types.stThreads st) (Types.stConversations st)
+recountIn st = recountFile (Types.stVerdicts st) (Types.stThreads st) (Types.stConversations st) (Types.stOutdated st)
 
 fileKeys :: Types.FileView -> Set.Set T.Text
 fileKeys fv =

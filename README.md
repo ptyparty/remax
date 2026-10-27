@@ -517,6 +517,19 @@ and the title names it. The popup discards with `C-c`, or `Esc` in
 normal mode. Notes written by earlier versions of remax are read in
 place and take replies like any other.
 
+A note stays on its lines while its first and last lines survive in
+order; a note grown by a join counts all its lines. Otherwise it is
+outdated, and it draws once, after the line the diff from its commit
+maps its old lines to, as `╭ outdated · was 765–794, which left the
+file`, then its old lines with their old numbers (the first three, then
+`⋯ N more lines`), then its log. On that line the status line reads
+`960 · 1 outdated note   ? reply to the agent · ⏎ accept retires it with
+the hunk`; `?` there lists `reply to the outdated note` under `goes to`,
+and accepting that hunk retires it. A GitHub thread GitHub marks
+outdated draws the same way, quoting the lines GitHub kept. Notes from
+earlier versions have no commit and never go outdated; when their lines
+are gone they do not draw.
+
 `:pr commits` walks the pull request one commit at a time, each reviewed
 read-only against its parent. The git bar shows `commit 3/7`, and `]` past
 the last hunk of a commit moves to the next one, `[` before the first to

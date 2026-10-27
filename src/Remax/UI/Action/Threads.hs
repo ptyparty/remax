@@ -564,11 +564,23 @@ editPostedKey = do
           openWorkPopup conv (Types.EditPosted (commentKindOf (Conv.convVenue conv)) cid) (Conv.markdownText (Conv.postBody post))
     _ -> pure Unhandled
 
--- | Accepting lines retires the notes written on them, old and new.
+{- | Accepting lines retires the notes written on them, and the outdated
+notes drawn under them.
+-}
 retireNotesOn :: [Store.LineKey] -> Brick.EventM Types.Name Types.St ()
 retireNotesOn keys = do
   st <- State.get
+  let
+    outdatedHere = case Types.currentFileMay st of
+      Nothing -> []
+      Just fv ->
+        let
+          rowIxs = Maybe.mapMaybe (\(i, r) -> if maybe False (`elem` map Store.lineKeyToText keys) (DiffModel.rKey r) then Just i else Nothing) (zip [0 ..] (Types.fvRows fv))
+          drawn = Anchor.conversationsIn st (concatMap (\i -> Map.findWithDefault [] i (Types.fvThreads fv)) rowIxs)
+        in
+          Maybe.mapMaybe (\c -> if Map.member (Conv.convId c) (Types.stOutdated st) then Conv.targetLocalId (Conv.convTarget c) else Nothing) drawn
   MonadIO.liftIO (WorkStore.retireNotesOn (Types.stConn st) (Types.repoText st) keys)
+  MonadIO.liftIO (mapM_ (WorkStore.retireNote (Types.stConn st) (Types.repoText st)) outdatedHere)
   WorkModel.reloadWork
 
 anchorKeys :: Conv.Anchor -> [Store.LineKey]

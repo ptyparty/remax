@@ -31,6 +31,7 @@ module Remax.UI.Core.Types
   , WorkAction (..)
   , WorkOrigin (..)
   , Band (..)
+  , Outdated (..)
   , Confirm (..)
   , CitePicker (..)
   , ReactionPicker (..)
@@ -280,6 +281,7 @@ data NoteChoice
   | ReplyNote Conv.Conversation
   | JoinNote Conv.Conversation
   | ReplyThread Conv.Conversation
+  | ReplyOutdated Conv.Conversation
 
 {- | A popup that writes to the conversation store: a reply, a question
 for the agent, a new comment, or your pending text opened again.
@@ -320,6 +322,15 @@ data ReactionPicker = ReactionPicker
   , rkReactions :: Conv.Reactions
   , rkPreview :: T.Text
   }
+
+{- | Where an outdated conversation draws: the file, and the line git
+maps its old lines to, 1-based, with 0 for before the first line.
+-}
+data Outdated = Outdated
+  { outdatedPath :: T.Text
+  , outdatedLine :: Int
+  }
+  deriving (Eq, Show)
 
 -- | The selected post: a conversation and the index of the post in it.
 data Band = Band
@@ -432,6 +443,7 @@ data St = St
   , stThreads :: Map.Map T.Text [Store.Post] -- note conversations by line key, posts in order
   , stWork :: Conv.OwnWork
   , stConversations :: [Conv.Conversation]
+  , stOutdated :: Map.Map Conv.ConversationId Outdated -- where a conversation whose lines left the file draws now
   , stBand :: Maybe Band -- the post the keys act on, when the cursor has entered a thread
   , stUnfolded :: Set.Set Store.RemoteThreadId -- resolved threads opened with za
   , stConfirm :: Maybe Confirm

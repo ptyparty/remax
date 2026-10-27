@@ -45,6 +45,7 @@ import Remax.UI.Core.View qualified as View
 import Remax.UI.Core.WordDiff qualified as WordDiff
 import Remax.UI.Model.Nav qualified as Nav
 import Remax.UI.Model.Watch qualified as Watch
+import Remax.UI.Model.Work qualified as WorkModel
 import Remax.Zipper qualified as Z
 import System.Directory qualified as Directory
 import System.FilePath ((</>))
@@ -314,6 +315,7 @@ rebuildWith i ed = do
       if i == Types.stCurF st then Nav.currentRunOf st i else Nothing
   (rebuilt, degraded) <- MonadIO.liftIO (rebuildFV (Types.stConfig st) (Types.repoText st) fv)
   State.modify (Verdict.updateFile i (const rebuilt))
+  WorkModel.placeOutdated
   Monad.when (i == Types.stCurF st) $
     State.modify (\s -> s {Types.stCurH = Nav.matchRun oldCur (Types.fvRuns rebuilt)})
   Monad.when degraded $
@@ -436,6 +438,7 @@ installReload plan i current rebuilt newRow = do
       Nothing -> 0
     oldCur = if i == Types.stCurF latest then Nav.currentRunOf latest i else Nothing
   State.modify (Verdict.updateFile i (const installed))
+  WorkModel.placeOutdated
   Monad.when (i == Types.stCurF latest) $
     State.modify (\s -> s {Types.stCurH = Nav.matchRun oldCur (Types.fvRuns installed)})
   reloaded <- State.get
@@ -688,6 +691,7 @@ installRefresh before refresh = do
   Monad.forM_ remaining (MonadIO.liftIO . Types.stWatch latest . Types.fileDir (Types.stRoot latest) . Types.fvPath)
   Monad.when gitMoved (MonadIO.liftIO (Watch.watchTracked (Types.stWatch latest) (Types.stRoot latest)))
   applyChangeSet remaining
+  WorkModel.placeOutdated
   State.modify (\s -> Tour.installTour (Types.stTour s) s)
   settled <- State.get
   Monad.when (Types.stWalk settled == Types.WalkTour && not (null (Types.stTour settled)) && null (Tour.tourOrder settled)) $

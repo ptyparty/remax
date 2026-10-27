@@ -8,6 +8,7 @@ module Remax.UI.Draw.Status
 import Brick ((<+>))
 import Brick qualified as Brick
 import Data.List qualified as List
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
@@ -169,9 +170,12 @@ statusHint :: Types.St -> T.Text
 statusHint st =
   let
     keys = Config.cfgKeys (Types.stConfig st)
+    outdatedHere = filter (\c -> Map.member (Conv.convId c) (Types.stOutdated st)) (ThreadAction.cursorConversations st)
+    cursorLine = maybe 0 (\fv -> fst (Modal.cursorRC (Types.fvEd fv)) + 1) (Types.currentFileMay st)
     lineHint = case ThreadAction.cursorConversations st of
       [] -> Nothing
       convs
+        | not (null outdatedHere) -> Just (Threads.outdatedHint keys cursorLine (length outdatedHere))
         | any isThread convs -> Just (Threads.lineHint keys)
         | any isNote convs -> Just (Threads.noteHint keys)
         | otherwise -> Nothing

@@ -202,6 +202,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stReacting = Nothing
     , Types.stNow = suNow startup
     , Types.stConversations = Conv.conversations Conv.emptyRemote (suWork startup)
+    , Types.stOutdated = Map.empty
     , Types.stTour = suTour startup
     , Types.stTourKeys = Map.empty
     , Types.stTourMarks = Map.empty

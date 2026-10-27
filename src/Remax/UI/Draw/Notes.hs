@@ -73,6 +73,7 @@ popupTitle np =
           Just (Types.ReplyNote _) -> "reply"
           Just (Types.JoinNote _) -> "join"
           Just (Types.ReplyThread _) -> "reply"
+          Just (Types.ReplyOutdated _) -> "reply"
           Nothing -> "new note"
       in
         verb <> " \183 " <> Threads.anchorPlace (Conv.OnLines (Types.planSpan plan)) <> " \183 " <> target
