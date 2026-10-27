@@ -76,6 +76,7 @@ import Database.SQLite.Simple qualified as SQLite
 import Graphics.Vty qualified as V
 import Remax.Clipboard qualified as Clipboard
 import Remax.Config qualified as Config
+import Remax.Conversation qualified as Conv
 import Remax.DiffModel qualified as DiffModel
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
@@ -347,6 +348,8 @@ data St = St
     stTraySeen :: (Int, Int)
   , stNotePopup :: Maybe NotePopup
   , stThreads :: Map.Map T.Text [Store.Post] -- note conversations by line key, posts in order
+  , stWork :: Conv.OwnWork
+  , stConversations :: [Conv.Conversation]
   , stTour :: [Store.TourStep]
   , stTourKeys :: Map.Map T.Text Int
   , stTourMarks :: Map.Map T.Text TourMark

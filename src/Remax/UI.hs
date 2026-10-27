@@ -29,6 +29,7 @@ import Graphics.Vty qualified as V
 import Graphics.Vty.CrossPlatform qualified as VtyPlatform
 import Remax.Clipboard qualified as Clipboard
 import Remax.Config qualified as Config
+import Remax.Conversation qualified as Conv
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.Store qualified as Store
@@ -44,6 +45,7 @@ import Remax.UI.Events qualified as Events
 import Remax.UI.Model.Load qualified as Load
 import Remax.UI.Model.Nav qualified as Nav
 import Remax.UI.Model.Watch qualified as Watch
+import Remax.UI.Model.Work qualified as WorkModel
 import Remax.Vi qualified as Vi
 import System.Environment qualified as Env
 
@@ -52,6 +54,7 @@ data Startup = Startup
   , suVerdicts :: Map.Map T.Text Store.Verdict
   , suHighlighters :: TS.HighlighterTable
   , suThreads :: Map.Map T.Text [Store.Post]
+  , suWork :: Conv.OwnWork
   , suNoteGroups :: Map.Map T.Text T.Text
   , suTour :: [Store.TourStep]
   , suConfig :: Config.Config
@@ -98,6 +101,7 @@ loadStartup mode root = do
   verdicts <- Store.loadVerdicts conn (T.pack root)
   hls <- TS.initHighlighters
   threads0 <- Store.loadThreads conn (T.pack root)
+  work0 <- WorkModel.loadFor conn root mode
   noteGroups0 <- Store.loadNoteGroups conn (T.pack root)
   cfg <- Config.loadConfig
   rebase0 <- Git.rebaseStatus root
@@ -116,6 +120,7 @@ loadStartup mode root = do
       , suVerdicts = verdicts
       , suHighlighters = hls
       , suThreads = threads0
+      , suWork = work0
       , suNoteGroups = noteGroups0
       , suTour = tour0
       , suConfig = cfg
@@ -184,6 +189,8 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stTraySeen = (0, 0)
     , Types.stNotePopup = Nothing
     , Types.stThreads = suThreads startup
+    , Types.stWork = suWork startup
+    , Types.stConversations = Conv.conversations Conv.emptyRemote (suWork startup)
     , Types.stTour = suTour startup
     , Types.stTourKeys = Map.empty
     , Types.stTourMarks = Map.empty

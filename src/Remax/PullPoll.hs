@@ -9,9 +9,6 @@ module Remax.PullPoll
   , PullState (..)
   , Draftness (..)
   , ConversationComment (..)
-  , ReviewComment (..)
-  , Side (..)
-  , ThreadRow (..)
   , ReviewSummary (..)
   , PullCommit (..)
   , ForcePush (..)
@@ -25,8 +22,12 @@ import Control.Concurrent qualified as Concurrent
 import Control.Exception qualified as Exception
 import Control.Monad qualified as Monad
 import Data.Int qualified as DataInt
+import Data.List qualified as List
+import Data.List.NonEmpty qualified as NEL
+import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
+import Remax.Conversation qualified as Conv
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.Store qualified as Store
@@ -55,6 +56,8 @@ data ConversationComment = ConversationComment
   , conversationCreatedAt :: T.Text
   , conversationUpdatedAt :: T.Text
   , conversationBody :: T.Text
+  , conversationUrl :: T.Text
+  , conversationReactions :: Conv.Reactions
   }
   deriving (Eq, Show)
 
@@ -65,6 +68,7 @@ data ReviewSummary = ReviewSummary
   , reviewSummaryCommit :: T.Text
   , reviewSummarySubmittedAt :: T.Text
   , reviewSummaryBody :: T.Text
+  , reviewSummaryUrl :: T.Text
   }
   deriving (Eq, Show)
 
@@ -90,8 +94,7 @@ data Snapshot = Snapshot
   , snapshotReviews :: [ReviewSummary]
   , snapshotCommits :: [PullCommit]
   , snapshotForcePushes :: [ForcePush]
-  , snapshotReviewComments :: [ReviewComment]
-  , snapshotThreads :: [ThreadRow]
+  , snapshotRemote :: Conv.Remote
   }
   deriving (Eq, Show)
 
@@ -116,20 +119,24 @@ pullStateText s =
     PullClosed -> "CLOSED"
     PullMerged -> "MERGED"
 
-data Side = LeftSide | RightSide
-  deriving (Eq, Show)
-
 data ReviewComment = ReviewComment
   { reviewCommentId :: Store.CommentId
   , reviewCommentAuthor :: T.Text
   , reviewCommentReplyTo :: Maybe Store.CommentId
   , reviewCommentPath :: T.Text
   , reviewCommentLine :: Maybe Int
-  , reviewCommentSide :: Side
+  , reviewCommentSide :: Conv.Side
   , reviewCommentStartLine :: Maybe Int
   , reviewCommentCreatedAt :: T.Text
   , reviewCommentUpdatedAt :: T.Text
   , reviewCommentBody :: T.Text
+  , reviewCommentUrl :: T.Text
+  , reviewCommentReview :: Maybe Store.ReviewId
+  , reviewCommentOriginalLine :: Maybe Int
+  , reviewCommentOriginalStartLine :: Maybe Int
+  , reviewCommentOriginalCommit :: T.Text
+  , reviewCommentDiffHunk :: T.Text
+  , reviewCommentReactions :: Conv.Reactions
   }
   deriving (Eq, Show)
 
@@ -154,6 +161,7 @@ data Cached a = Cached
 
 data PollCache = PollCache
   { pollCachePull :: Int
+  , cacheViewer :: Maybe Conv.Login
   , cacheHead :: Maybe (Cached PullHead)
   , cacheReviewComments :: Maybe [Cached [ReviewComment]]
   , cacheConversation :: Maybe [Cached [ConversationComment]]
@@ -166,6 +174,7 @@ emptyPollCache :: Int -> PollCache
 emptyPollCache n =
   PollCache
     { pollCachePull = n
+    , cacheViewer = Nothing
     , cacheHead = Nothing
     , cacheReviewComments = Nothing
     , cacheConversation = Nothing
@@ -225,9 +234,96 @@ freshSnapshot pr cache = do
       , snapshotReviews = pagedRows (cacheReviews cache)
       , snapshotCommits = pagedRows (cacheCommits cache)
       , snapshotForcePushes = graphForcePushes graph
-      , snapshotReviewComments = pagedRows (cacheReviewComments cache)
-      , snapshotThreads = graphThreads graph
+      , snapshotRemote = freshRemote cache
       }
+
+freshRemote :: PollCache -> Conv.Remote
+freshRemote cache =
+  Conv.Remote
+    { Conv.remoteViewer = cacheViewer cache
+    , Conv.remoteThreads = remoteThreads (pagedRows (cacheReviewComments cache)) (maybe [] graphThreads (cacheGraph cache))
+    , Conv.remoteComments = map remotePullComment (pagedRows (cacheConversation cache))
+    , Conv.remoteReviews = map remoteReview (pagedRows (cacheReviews cache))
+    }
+
+remoteThreads :: [ReviewComment] -> [ThreadRow] -> [Conv.RemoteThread]
+remoteThreads comments threads =
+  let
+    rootOf c = Maybe.fromMaybe (reviewCommentId c) (reviewCommentReplyTo c)
+    byRoot = Map.fromListWith (flip (++)) (map (\c -> (rootOf c, [c])) comments)
+    thread t = do
+      cs <- Map.lookup (threadRowRoot t) byRoot
+      let
+        (firsts, replies) = List.partition (Maybe.isNothing . reviewCommentReplyTo) cs
+      first <- Maybe.listToMaybe firsts
+      Just
+        Conv.RemoteThread
+          { Conv.remoteThreadId = threadRowId t
+          , Conv.remoteThreadWhere = commentPlace first
+          , Conv.remoteThreadResolution = threadRowResolution t
+          , Conv.remoteThreadComments = remoteComment first NEL.:| map remoteComment (List.sortOn reviewCommentCreatedAt replies)
+          }
+  in
+    Maybe.mapMaybe thread threads
+
+commentPlace :: ReviewComment -> Either Conv.Outdated Conv.Position
+commentPlace c =
+  case reviewCommentLine c of
+    Just line ->
+      Right
+        Conv.Position
+          { Conv.posPath = reviewCommentPath c
+          , Conv.posSide = reviewCommentSide c
+          , Conv.posLine = line
+          , Conv.posStartLine = reviewCommentStartLine c
+          }
+    Nothing ->
+      Left
+        Conv.Outdated
+          { Conv.outPath = reviewCommentPath c
+          , Conv.outSide = reviewCommentSide c
+          , Conv.outLine = Maybe.fromMaybe 0 (reviewCommentOriginalLine c)
+          , Conv.outStartLine = reviewCommentOriginalStartLine c
+          , Conv.outCommit = Conv.CommitSha (reviewCommentOriginalCommit c)
+          , Conv.outDiffHunk = reviewCommentDiffHunk c
+          }
+
+remoteComment :: ReviewComment -> Conv.RemoteComment
+remoteComment c =
+  Conv.RemoteComment
+    { Conv.remoteCommentId = reviewCommentId c
+    , Conv.remoteCommentAuthor = Conv.Login (reviewCommentAuthor c)
+    , Conv.remoteCommentBody = Conv.Markdown (reviewCommentBody c)
+    , Conv.remoteCommentCreatedAt = reviewCommentCreatedAt c
+    , Conv.remoteCommentUpdatedAt = reviewCommentUpdatedAt c
+    , Conv.remoteCommentReview = reviewCommentReview c
+    , Conv.remoteCommentUrl = reviewCommentUrl c
+    , Conv.remoteCommentReactions = reviewCommentReactions c
+    }
+
+remotePullComment :: ConversationComment -> Conv.RemotePullComment
+remotePullComment c =
+  Conv.RemotePullComment
+    { Conv.pullCommentId = conversationId c
+    , Conv.pullCommentAuthor = Conv.Login (conversationAuthor c)
+    , Conv.pullCommentBody = Conv.Markdown (conversationBody c)
+    , Conv.pullCommentCreatedAt = conversationCreatedAt c
+    , Conv.pullCommentUpdatedAt = conversationUpdatedAt c
+    , Conv.pullCommentUrl = conversationUrl c
+    , Conv.pullCommentReactions = conversationReactions c
+    }
+
+remoteReview :: ReviewSummary -> Conv.RemoteReview
+remoteReview r =
+  Conv.RemoteReview
+    { Conv.remoteReviewId = reviewSummaryId r
+    , Conv.remoteReviewAuthor = Conv.Login (reviewSummaryAuthor r)
+    , Conv.remoteReviewState = reviewSummaryState r
+    , Conv.remoteReviewCommit = reviewSummaryCommit r
+    , Conv.remoteReviewSubmittedAt = reviewSummarySubmittedAt r
+    , Conv.remoteReviewBody = Conv.Markdown (reviewSummaryBody r)
+    , Conv.remoteReviewUrl = reviewSummaryUrl r
+    }
 
 fetchAll :: FilePath -> Git.PullRequest -> PollCache -> IO (Either GitHub.GhFailure (Freshness, PollCache))
 fetchAll root pr cache = do
@@ -236,12 +332,14 @@ fetchAll root pr cache = do
     n = T.pack (show (Git.prNumber pr))
     pulls = "repos/" <> repo <> "/pulls/" <> n
     issue = "repos/" <> repo <> "/issues/" <> n
+  awaitViewer <- inBackground (viewerOnce root (cacheViewer cache))
   awaitHeads <- inBackground (fetchCached root pulls headJq parseHead (cacheHead cache))
   awaitComments <- inBackground (fetchPages root (pulls <> "/comments") reviewCommentJq reviewCommentRow (cacheReviewComments cache))
   awaitConversation <- inBackground (fetchPages root (issue <> "/comments") conversationJq conversationRow (cacheConversation cache))
   awaitReviews <- inBackground (fetchPages root (pulls <> "/reviews") reviewJq reviewRow (cacheReviews cache))
   awaitCommits <- inBackground (fetchPages root (pulls <> "/commits") commitJq commitRow (cacheCommits cache))
   graph <- fetchGraph root pr (cacheGraph cache)
+  viewer <- awaitViewer
   heads <- awaitHeads
   comments <- awaitComments
   conversation <- awaitConversation
@@ -257,7 +355,8 @@ fetchAll root pr cache = do
     Right
       ( f1 <> f2 <> f3 <> f4 <> f5 <> f6
       , cache
-          { cacheHead = Just h
+          { cacheViewer = viewer
+          , cacheHead = Just h
           , cacheReviewComments = Just c
           , cacheConversation = Just v
           , cacheReviews = Just r
@@ -265,6 +364,12 @@ fetchAll root pr cache = do
           , cacheGraph = Just g
           }
       )
+
+viewerOnce :: FilePath -> Maybe Conv.Login -> IO (Maybe Conv.Login)
+viewerOnce root known =
+  case known of
+    Just login -> pure (Just login)
+    Nothing -> fmap (either (const Nothing) (Just . Conv.Login)) (GitHub.viewerLogin root)
 
 inBackground :: IO a -> IO (IO a)
 inBackground act = do
@@ -353,12 +458,30 @@ reviewCommentJq :: T.Text
 reviewCommentJq =
   ".[] | [(.id | tostring), .user.login, ((.in_reply_to_id // \"\") | tostring), .path\
   \, ((.line // \"\") | tostring), (.side // \"\"), ((.start_line // \"\") | tostring)\
-  \, .created_at, .updated_at, .body] | @tsv"
+  \, .created_at, .updated_at, .body, (.html_url // \"\"), ((.pull_request_review_id // \"\") | tostring)\
+  \, ((.original_line // \"\") | tostring), ((.original_start_line // \"\") | tostring)\
+  \, (.original_commit_id // \"\"), (.diff_hunk // \"\"), "
+    <> reactionsJq
+    <> "] | @tsv"
+
+reactionsJq :: T.Text
+reactionsJq =
+  "((.reactions // {}) | [.[\"+1\"], .[\"-1\"], .laugh, .confused, .heart, .hooray, .rocket, .eyes]\
+  \ | map((. // 0) | tostring) | join(\",\"))"
+
+parseReactions :: T.Text -> Conv.Reactions
+parseReactions t =
+  let
+    count (r, n) = case Git.readCount n of
+      Just k | k > 0 -> Just Conv.ReactionCount {Conv.rcReaction = r, Conv.rcCount = k, Conv.rcMine = False}
+      _ -> Nothing
+  in
+    Maybe.mapMaybe count (zip Conv.allReactions (T.splitOn "," t))
 
 reviewCommentRow :: [T.Text] -> Maybe ReviewComment
 reviewCommentRow cells =
   case cells of
-    [cid, author, replyTo, path, line, side, startLine, createdAt, updatedAt, body] -> do
+    [cid, author, replyTo, path, line, side, startLine, createdAt, updatedAt, body, url, review, origLine, origStart, origCommit, hunk, reactions] -> do
       i <- readId cid
       Just
         ReviewComment
@@ -367,21 +490,31 @@ reviewCommentRow cells =
           , reviewCommentReplyTo = fmap Store.CommentId (readId replyTo)
           , reviewCommentPath = path
           , reviewCommentLine = Git.readCount line
-          , reviewCommentSide = if side == "LEFT" then LeftSide else RightSide
+          , reviewCommentSide = if side == "LEFT" then Conv.BaseSide else Conv.HeadSide
           , reviewCommentStartLine = Git.readCount startLine
           , reviewCommentCreatedAt = createdAt
           , reviewCommentUpdatedAt = updatedAt
           , reviewCommentBody = body
+          , reviewCommentUrl = url
+          , reviewCommentReview = fmap Store.ReviewId (readId review)
+          , reviewCommentOriginalLine = Git.readCount origLine
+          , reviewCommentOriginalStartLine = Git.readCount origStart
+          , reviewCommentOriginalCommit = origCommit
+          , reviewCommentDiffHunk = hunk
+          , reviewCommentReactions = parseReactions reactions
           }
     _ -> Nothing
 
 conversationJq :: T.Text
-conversationJq = ".[] | [(.id | tostring), .user.login, .created_at, .updated_at, (.body // \"\")] | @tsv"
+conversationJq =
+  ".[] | [(.id | tostring), .user.login, .created_at, .updated_at, (.body // \"\"), (.html_url // \"\"), "
+    <> reactionsJq
+    <> "] | @tsv"
 
 conversationRow :: [T.Text] -> Maybe ConversationComment
 conversationRow cells =
   case cells of
-    [cid, author, createdAt, updatedAt, body] -> do
+    [cid, author, createdAt, updatedAt, body, url, reactions] -> do
       i <- readId cid
       Just
         ConversationComment
@@ -390,18 +523,20 @@ conversationRow cells =
           , conversationCreatedAt = createdAt
           , conversationUpdatedAt = updatedAt
           , conversationBody = body
+          , conversationUrl = url
+          , conversationReactions = parseReactions reactions
           }
     _ -> Nothing
 
 reviewJq :: T.Text
 reviewJq =
   ".[] | [(.id | tostring), .user.login, .state, (.commit_id // \"\"), (.submitted_at // \"\")\
-  \, (.body // \"\")] | @tsv"
+  \, (.body // \"\"), (.html_url // \"\")] | @tsv"
 
 reviewRow :: [T.Text] -> Maybe ReviewSummary
 reviewRow cells =
   case cells of
-    [rid, author, state, commit, submittedAt, body] -> do
+    [rid, author, state, commit, submittedAt, body, url] -> do
       i <- readId rid
       Just
         ReviewSummary
@@ -411,6 +546,7 @@ reviewRow cells =
           , reviewSummaryCommit = commit
           , reviewSummarySubmittedAt = submittedAt
           , reviewSummaryBody = body
+          , reviewSummaryUrl = url
           }
     _ -> Nothing
 

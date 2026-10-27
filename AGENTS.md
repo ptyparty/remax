@@ -39,7 +39,8 @@ imports its internals. The order within a tree is convention.
    `View` (window geometry, note lines).
 2. `Model` — `Tray`, `Nav` (parking, scrolling, selection), `Watch`
    (filesystem watching), `Load` (loading, rebuilding, refresh, reload,
-   highlighting).
+   highlighting), `Work` (your pending work and the conversations drawn
+   from it and the poll).
 3. `Action` — `Conversation`, `Verdicts`, `Rebase`, `Notes`, `Settings`,
    `Pull`, `Fuzzy`, `Repo`, `Open`, `Picker`, `Search`, `Tree`, `Files`,
    `TreeKeys`, `Editor`, `Command`, `Menus`.
@@ -60,7 +61,8 @@ Placement rules:
   private.
 - Imports follow the rules under Imports below; sibling `Remax.UI.*`
   modules are no exception.
-- `Remax.Git`, `Remax.Store`, `Remax.DiffModel`, `Remax.Modal` and the
+- `Remax.Git`, `Remax.Store`, `Remax.Conversation`, `Remax.WorkStore`,
+  `Remax.DiffModel`, `Remax.Modal` and the
   other `Remax.*` modules are below all of `Remax.UI.*` and know nothing
   about the session state.
 
