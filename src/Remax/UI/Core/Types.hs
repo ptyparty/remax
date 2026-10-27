@@ -50,6 +50,8 @@ module Remax.UI.Core.Types
   , currentFileMay
   , rebaseEffMode
   , effectiveMode
+  , FlagRule (..)
+  , flagRule
   , rebaseShown
   , whenWritable
   , settleLevel
@@ -611,6 +613,18 @@ rebaseEffMode mRebase mode =
       | Git.rebaseConflicted rs -> Git.VsRef "HEAD"
       | otherwise -> Git.VsRef "HEAD^"
     _ -> mode
+
+-- | Reviewing someone else's pull request leaves nothing for the agent to fix.
+data FlagRule
+  = FlagsAllowed
+  | FlagsRefused
+  deriving (Eq)
+
+flagRule :: St -> FlagRule
+flagRule st =
+  case Git.subjectOf (effectiveMode st) of
+    Git.Pull _ Git.ReadOnly -> FlagsRefused
+    _ -> FlagsAllowed
 
 effectiveMode :: St -> Git.ReviewMode
 effectiveMode st = rebaseEffMode (stRebase st) (stMode st)

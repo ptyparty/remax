@@ -47,7 +47,7 @@ notePopupLayer st np =
           Types.WorkFor wp -> workRows st (boxWidth - 2) budget wp
           _ -> []
       BrickTypes.render $
-        Widgets.floatFrame title (popupHint (Config.cfgKeys (Types.stConfig st)) np) $
+        Widgets.floatFrame title (popupHint (Config.cfgKeys (Types.stConfig st)) (Types.flagRule st) np) $
           Brick.hLimit boxWidth $
             Brick.padRight Brick.Max $
               Brick.vLimit bodyRows $
@@ -78,11 +78,11 @@ popupTitle np =
       in
         verb <> " \183 " <> Threads.anchorPlace (Conv.OnLines (Types.planSpan plan)) <> " \183 " <> target
 
-popupHint :: Config.KeyMode -> Types.NotePopup -> T.Text
-popupHint keys np =
+popupHint :: Config.KeyMode -> Types.FlagRule -> Types.NotePopup -> T.Text
+popupHint keys rule np =
   case Types.npPurpose np of
     Types.AmendMessage _ -> "\9166 amend (nor) \183 " <> Types.cancelKeyText keys <> " cancel"
-    Types.WorkFor wp -> workHint keys wp
+    Types.WorkFor wp -> workHint keys rule wp
     Types.NoteOn plan ->
       let
         several = length (Types.planChoices plan) > 1
@@ -160,15 +160,23 @@ foldKey keys =
     Config.KeysEmacs -> "C-c z"
     _ -> "za"
 
-workHint :: Config.KeyMode -> Types.WorkPopup -> T.Text
-workHint keys wp =
-  case Types.wpAction wp of
-    Types.ReplyTo _ _ -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 ? or ! goes to the agent instead"
-    Types.AskOn _ _ -> "\9166 save (nor) \183 " <> Types.cancelKeyText keys <> " discard \183 ? ask \183 ! flag \183 r replies on GitHub instead"
-    Types.CommentOn _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 a selection pre-fills a suggestion"
-    Types.EditPending _ _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard changes"
-    Types.TakeProposal {} -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 the proposal goes once you post"
-    Types.EditPosted _ _ -> "\9166 edits on GitHub at once (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard changes"
+workHint :: Config.KeyMode -> Types.FlagRule -> Types.WorkPopup -> T.Text
+workHint keys rule wp =
+  let
+    remarks = case rule of
+      Types.FlagsAllowed -> "? or !"
+      Types.FlagsRefused -> "?"
+    flag = case rule of
+      Types.FlagsAllowed -> " \183 ! flag"
+      Types.FlagsRefused -> ""
+  in
+    case Types.wpAction wp of
+      Types.ReplyTo _ _ -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 " <> remarks <> " goes to the agent instead"
+      Types.AskOn _ _ -> "\9166 save (nor) \183 " <> Types.cancelKeyText keys <> " discard \183 ? ask" <> flag <> " \183 r replies on GitHub instead"
+      Types.CommentOn _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 a selection pre-fills a suggestion"
+      Types.EditPending _ _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard changes"
+      Types.TakeProposal {} -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 the proposal goes once you post"
+      Types.EditPosted _ _ -> "\9166 edits on GitHub at once (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard changes"
 
 -- The thread's log above the editor: the newest two posts in full,
 -- older ones collapsed to one line each, then the rule naming what

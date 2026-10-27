@@ -236,7 +236,7 @@ stripRow st cid i post =
             venue = maybe Conv.PullComments Conv.convVenue (Conv.conversationFor cid (Types.stConversations st))
             keys = Config.cfgKeys (Types.stConfig st)
           in
-            [Row Rail [Markdown.Segment Attrs.hintAttr ("  \9584 " <> Threads.postKeys keys venue post) Nothing] (Just (cid, i)) Nothing]
+            [Row Rail [Markdown.Segment Attrs.hintAttr ("  \9584 " <> Threads.postKeys keys (Types.flagRule st) venue post) Nothing] (Just (cid, i)) Nothing]
     _ -> []
 
 {- | A review thread under the review that started it: its place and

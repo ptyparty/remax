@@ -238,7 +238,8 @@ notePopupNormalKey st np ev =
           ThreadAction.switchAction wp (Types.AskOn Types.AskRemark target)
     V.EvKey (V.KChar '!') []
       | Types.WorkFor wp <- Types.npPurpose np
-      , Just target <- remarkTarget wp ->
+      , Just target <- remarkTarget wp
+      , Types.flagRule st == Types.FlagsAllowed ->
           ThreadAction.switchAction wp (Types.AskOn Types.FlagRemark target)
     V.EvKey (V.KChar 'r') []
       | Types.WorkFor wp <- Types.npPurpose np

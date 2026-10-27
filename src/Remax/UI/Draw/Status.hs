@@ -185,7 +185,7 @@ statusHint st =
       [] -> Nothing
       convs
         | not (null outdatedHere) -> Just (Threads.outdatedHint keys cursorLine (length outdatedHere))
-        | any isThread convs -> Just (Threads.lineHint keys)
+        | any isThread convs -> Just (Threads.lineHint keys (Types.flagRule st))
         | any isNote convs -> Just (Threads.noteHint keys)
         | otherwise -> Nothing
     isThread c = case Conv.convVenue c of
@@ -207,7 +207,7 @@ statusHint st =
           <> " \183 "
           <> Threads.anchorPlace (Conv.convAnchor conv)
           <> "   "
-          <> Threads.postKeys keys (Conv.convVenue conv) post
+          <> Threads.postKeys keys (Types.flagRule st) (Conv.convVenue conv) post
       (_, _, Nothing) ->
         Types.promptKeys keys <> " command · \9251? keys · " <> Types.quitKeys keys <> " quit "
       (_, _, Just fv) ->
