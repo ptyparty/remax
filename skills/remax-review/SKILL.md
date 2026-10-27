@@ -124,7 +124,15 @@ file named by `conversation.file`, which is always relative to
 exactly one repository, so remax finds the owner itself and tells you
 which one it landed in.
 
-- `id` — the conversation's address for `remax reply`.
+- `id` — the conversation's address for `remax reply` and
+  `remax comment --revise`: a GitHub thread's own id (`PRRT_…`) or a
+  note's, which a note keeps when the reviewer grows it over more lines.
+  It is not a line key; hold only a line, and `list --json` is how you
+  find its conversation.
+- `kind` — `"thread"` for a GitHub review thread the session has polled,
+  `"note"` for a `!`/`?` note between you and the reviewer, `"draft"`
+  for a comment pending until the reviewer submits, `"pull"` for the
+  PR-level comments and `"review"` for a review summary.
 - `lines` — the lines the conversation is about, by `line_no`. The `-`
   and `+` sides of a change are numbered separately, so they can
   interleave; pair them by content, not by position. Each has its own
@@ -139,14 +147,17 @@ which one it landed in.
 - `line_no` — where the line sat when the verdict was recorded;
   advisory, may have drifted. Trust `line` over `line_no`.
 - `thread` — the conversation, oldest first. Each post has an `author`
-  (`"reviewer"` is the human; agents appear under the name they replied
-  with) and a `body`. **Read the whole thread and act on the newest
-  reviewer post**; if your own post is already the last word and still
-  answers it, don't repeat yourself.
-- `awaiting` — whose turn it is. `"agent"`: the reviewer spoke last, so
-  act on it. `"reviewer"`: your post is the last word, so leave it unless
-  they answer. `"note"`: a verdict with no note yet — see *A
-  conversation with no note yet*.
+  (`"reviewer"` is the human; a GitHub login is another reviewer; agents
+  appear under the name they replied with), a `body` and a `state`:
+  `"posted"` on GitHub, `"pending"` until the reviewer submits,
+  `"proposal"` for text you proposed, `"local"` for talk between you and
+  the reviewer that never reaches GitHub. **Read the whole thread and act
+  on the newest reviewer post**; if your own post is already the last
+  word and still answers it, don't repeat yourself.
+- `awaiting` — whose turn it is. `"agent"`: the reviewer or a GitHub
+  reviewer spoke last, so act on it. `"reviewer"`: your post is the last
+  word, so leave it unless they answer. `"note"`: a verdict with no note
+  yet — see *A conversation with no note yet*.
 - `lines_in_file` — whether the conversation's `+` and unchanged lines
   still stand together in the working file, spaced as their `line_no`s
   were: `"all"`, `"some"` or `"none"`. The block may have moved up or
@@ -155,11 +166,10 @@ which one it landed in.
   then say so with `reply` rather than editing again. `null` when there
   is nothing distinctive to look for: every line is a `-` line, blank,
   or only punctuation such as `}`.
-- `commit_sha` — set when the feedback was given during a
-  commit-by-commit rebase review: that is the commit the feedback is
-  about. Look its subject up in the top-level `commits` map. `null` for
-  ambient reviews; recover the introducing commit yourself from the line
-  text when it matters (`git log -S"<line text>"` or `git blame`).
+- `commit_sha` — the commit the note was written on, when the session
+  knew one. `null` otherwise; recover the introducing commit yourself
+  from the line text when it matters (`git log -S"<line text>"` or
+  `git blame`).
 
 One `id` can head more than one conversation. That happens when some of
 a note's lines differ from the rest in thread, file or commit: the
@@ -282,16 +292,38 @@ is writing to.
 remax -C /path/to/repo reply ID "answer text"
 ```
 
-`ID` is the conversation's `id` from `list --json`. The reply **appends
-a post to that conversation** and renders inline, in order and
-under your name, in the reviewer's live session — this is the primary
-way to answer a `?`, because the answer appears exactly where the
-question was asked. Also summarize the answer in your chat reply when
+`ID` is the conversation's `id` from `list --json`, a GitHub thread's
+or a note's. The reply **appends a local post to that conversation** and
+renders inline, in order and under your name, in the reviewer's live
+session — this is the primary way to answer a `?`, because the answer
+appears exactly where the question was asked. A reply never reaches
+GitHub: on a GitHub thread it is talk beside the thread that only the
+reviewer sees. Also summarize the answer in your chat reply when
 you're in a conversation with the human. The thread is ordered: the
 reviewer may answer your post with another of theirs, so re-check
 `list --json` for posts newer than yours instead of assuming your
 answer was the last word. Accepting the hunk (or resolving the note)
 closes the whole conversation.
+
+## Drafting review comments
+
+```sh
+remax -C /path/to/repo comment HUNK_ID "comment text"   # draft on a hunk
+remax -C /path/to/repo comment --revise ID "new text"   # propose a rewrite
+```
+
+`HUNK_ID` comes from `remax hunks`. `comment` writes a GitHub comment on
+the hunk's lines in the reviewer's name, marked as written by you,
+pending until they submit it; they can edit or drop it first. `--revise`
+records a proposal on a conversation by its `id`: text for a reply, or
+for a draft of theirs. Nothing happens until the reviewer takes it with
+Enter, which makes it their own pending text, and a new proposal
+replaces the old. Draft or revise only when asked to.
+
+The session writes each poll of the pull request to a cache file that
+`list` reads, so GitHub threads appear in the listing while a session
+has the pull request open, and `list --wait` wakes on a new GitHub post
+as on a new note.
 
 ## Addressing feedback on the reviewer's own pull request
 

@@ -121,6 +121,7 @@ executable remax
       Remax.Conversation
       Remax.DiffModel
       Remax.Emacs
+      Remax.Feedback
       Remax.Git
       Remax.GitHub
       Remax.Highlight
@@ -130,6 +131,7 @@ executable remax
       Remax.Modal
       Remax.PullPoll
       Remax.Punch
+      Remax.RemoteCache
       Remax.SoftWrap
       Remax.Store
       Remax.Submit

@@ -53,7 +53,8 @@ remax list --wait     # ... but block until it changes, so an agent can wait
 remax watching        # hold a mark in the session's header for as long as this
                       #   runs: working while the agent is busy, watching while
                       #   it is blocked on you, gone seconds after it dies
-remax reply KEY TEXT  # agent posts in a note's conversation; shows live in the session
+remax reply ID TEXT   # agent posts in a conversation; shows live in the session
+remax comment HUNK TEXT  # agent drafts a GitHub comment for you, pending until :submit
 remax -C DIR ...      # any of the above, as if started in DIR
 ```
 
@@ -593,9 +594,13 @@ your feedback flows back through the store:
    an agent can land fixes in the introducing commits; ambient feedback
    carries no commit and agents recover one from the line text with
    `git blame` when it matters.
-3. For a `?` it can answer in place: `remax reply KEY "text"` (the key
-   comes from the JSON) posts into the note's conversation, rendering
-   live in order under your note, marked `↪` with the author's name.
+3. For a `?` it can answer in place: `remax reply ID "text"` (the id
+   comes from the JSON: a note's own, or a GitHub thread's) posts into
+   the conversation, rendering live in order under your note with the
+   agent's name. On a GitHub thread the post stays local to the two of
+   you. `remax comment HUNK TEXT` drafts a GitHub comment in your name,
+   marked as the agent's, pending until `:submit`; `remax comment
+   --revise ID TEXT` proposes text you take with `⏎`.
    The thread is ordered and two-way: `?` on the noted line answers
    their post, and it appends as your follow-up. **Accepting the lines resolves the
    whole conversation** — the thread clears when you mark them
