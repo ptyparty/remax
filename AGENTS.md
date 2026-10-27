@@ -43,8 +43,8 @@ imports its internals. The order within a tree is convention.
    (filesystem watching), `Load` (loading, rebuilding, refresh, reload,
    highlighting), `Work` (your pending work and the conversations drawn
    from it and the poll).
-3. `Action` — `Conversation`, `Verdicts`, `Rebase`, `Threads` (the band
-   and the work popups), `Cite`, `Notes`, `Settings`,
+3. `Action` — `Threads` (the band, the work popups and the GitHub
+   writes), `Cite`, `Conversation`, `Verdicts`, `Rebase`, `Notes`, `Settings`,
    `Pull`, `Fuzzy`, `Repo`, `Open`, `Picker`, `Search`, `Tree`, `Files`,
    `TreeKeys`, `Editor`, `Command`, `Menus`.
 4. `Draw` — one module per surface, composed by `Remax.UI.Draw`.

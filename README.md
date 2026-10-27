@@ -470,14 +470,17 @@ proposal), skipping local ones; past the last post the cursor moves on
 down the file, and `k` from the first returns to the line. The
 selected post wears a strip of its keys and the status line names it.
 On another reviewer's post: `r` replies, `?` asks the agent about the
-thread, and (once the next commits land) `+` reacts, `y` copies the
-post's link and `Space u` resolves. On your pending text: `e` reopens
+thread, `+` opens a picker of GitHub's eight reactions (one of yours
+again removes it), `y` copies the post's link and `Space u` resolves the
+thread on GitHub at once, as accepting its lines does. On your own
+posted comment `e` reopens it and saving edits it on GitHub at once. On your pending text: `e` reopens
 it in the popup it was written in and `dd` discards it, asking first
 when text was typed. On an agent's proposal: `⏎` takes it as your own
 reply, opening it in the reply popup, and `dd` drops it. Local posts
 never take the band. In the emacs keymap the same verbs sit under
-`C-c`: `C-c r`, `C-c ?`, `C-c g`, `C-c e`, `C-c d`, `C-c C-c` takes
-a proposal, `C-c z` folds, and `C-n` enters the thread.
+`C-c`: `C-c r`, `C-c ?`, `C-c g`, `C-c e`, `C-c d`, `C-c +`, `C-c y`,
+`C-c u`, `C-c C-c` takes a proposal, `C-c z` folds, and `C-n` enters
+the thread.
 
 `r` from a code line with a thread replies to that thread, and `?`
 asks the agent about it; on a line with none, `?` questions the lines

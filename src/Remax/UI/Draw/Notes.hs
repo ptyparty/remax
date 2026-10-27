@@ -123,6 +123,7 @@ workTitle wp =
       Types.CommentOrigin -> "comment \183 " <> T.takeWhile (/= ' ') (Types.wpPlace wp)
       Types.AskOrigin -> "ask \183 the agent"
     Types.TakeProposal _ _ author -> "reply \183 to " <> author <> " \183 from the proposal"
+    Types.EditPosted _ _ -> "edit \183 your comment on GitHub"
 
 workHint :: Types.WorkPopup -> T.Text
 workHint wp =
@@ -132,6 +133,7 @@ workHint wp =
     Types.CommentOn _ -> "\9166 save (nor) \183 C-g inserts a sha \183 C-c discard \183 a selection pre-fills a suggestion"
     Types.EditPending _ _ -> "\9166 save (nor) \183 C-g inserts a sha \183 C-c discard changes"
     Types.TakeProposal {} -> "\9166 post (nor) \183 C-g inserts a sha \183 C-c discard \183 the proposal goes once you post"
+    Types.EditPosted _ _ -> "\9166 edits on GitHub at once (nor) \183 C-g inserts a sha \183 C-c discard changes"
 
 -- The thread's log above the editor: the newest two posts in full,
 -- older ones collapsed to one line each, then the rule naming what
@@ -203,6 +205,7 @@ ruleText wp =
       Types.CommentOrigin -> "your comment \183 waits for :submit"
       Types.AskOrigin -> "ask the agent"
     Types.TakeProposal _ _ author -> "reply to " <> author <> " \183 waits for :submit"
+    Types.EditPosted _ _ -> "your posted comment \183 edits on GitHub when you save"
 
 -- an amend that quietly stages files is the surprise this is here
 -- to remove: say what folds in before ⏎ does it

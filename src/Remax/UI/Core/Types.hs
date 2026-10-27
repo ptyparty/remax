@@ -31,6 +31,7 @@ module Remax.UI.Core.Types
   , Band (..)
   , Confirm (..)
   , CitePicker (..)
+  , ReactionPicker (..)
   , AmendTarget (..)
   , NoteOrigin (..)
   , MarkUndo (..)
@@ -277,6 +278,7 @@ data WorkAction
   | CommentOn Conv.Anchor
   | EditPending Conv.WorkId WorkOrigin
   | TakeProposal Conv.WorkId Conv.Target T.Text
+  | EditPosted GitHub.CommentKind Store.CommentId
 
 -- | Which popup a pending text was written in, so `e` reopens the same one.
 data WorkOrigin
@@ -287,6 +289,15 @@ data WorkOrigin
 data CitePicker = CitePicker
   { cpCommits :: [Git.CitedCommit]
   , cpAt :: Int
+  }
+
+-- | The eight reactions offered on one posted comment.
+data ReactionPicker = ReactionPicker
+  { rkKind :: GitHub.CommentKind
+  , rkComment :: Store.CommentId
+  , rkOwner :: T.Text -- "your" or "<login>'s"
+  , rkReactions :: Conv.Reactions
+  , rkPreview :: T.Text
   }
 
 -- | The selected post: a conversation and the index of the post in it.
@@ -405,6 +416,7 @@ data St = St
   , stConfirm :: Maybe Confirm
   , stCiting :: Maybe CitePicker -- the commit picker a popup opened with C-g
   , stZPending :: Bool -- a z waiting for its a, to fold
+  , stReacting :: Maybe ReactionPicker
   , stNow :: Clock.UTCTime -- wall clock, for ages; moved on the attending beat
   , stTour :: [Store.TourStep]
   , stTourKeys :: Map.Map T.Text Int

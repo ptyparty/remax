@@ -14,6 +14,14 @@ module Remax.UI.Action.Threads
   , discardKey
   , takeKey
   , toggleFold
+  , reactKey
+  , handleReactionKey
+  , copyKey
+  , resolveKey
+  , editPostedKey
+  , resolveOnAccept
+  , githubJob
+  , pollSoon
   , openWorkPopup
   , switchAction
   , saveWork
@@ -26,13 +34,22 @@ import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
 import Data.List qualified as List
 import Data.List.NonEmpty qualified as NEL
+import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Graphics.Vty qualified as V
+import Remax.Clipboard qualified as Clipboard
 import Remax.Conversation qualified as Conv
+import Remax.DiffModel qualified as DiffModel
+import Remax.Git qualified as Git
+import Remax.GitHub qualified as GitHub
 import Remax.Modal qualified as Modal
+import Remax.PullPoll qualified as PullPoll
 import Remax.Store qualified as Store
 import Remax.UI.Core.Anchor qualified as Anchor
+import Remax.UI.Core.Jobs qualified as Jobs
+import Remax.UI.Core.Markdown qualified as Markdown
 import Remax.UI.Core.Threads qualified as Threads
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.View qualified as View
@@ -224,7 +241,7 @@ editKey = do
       | Conv.Draft <- Conv.postState post
       , Just wid <- Conv.postWork post ->
           openWorkPopup conv (Types.EditPending wid (originOf conv post)) (Conv.markdownText (Conv.postBody post))
-    _ -> pure Unhandled
+    _ -> editPostedKey
 
 originOf :: Conv.Conversation -> Conv.Post -> Types.WorkOrigin
 originOf conv post =
@@ -347,6 +364,166 @@ saveWork wp text = do
         MonadIO.liftIO (WorkStore.editWork conn wid body)
         reloadAndBand (Types.wpConv wp)
         Types.setMsg ("taken as your reply to " <> author <> " \183 waits for :submit")
+      Types.EditPosted kind cid ->
+        case pullOf st of
+          Just pr -> githubJob "editing the comment" (GitHub.editComment (Types.stRoot st) (Git.prRepo pr) kind cid text) "edited on GitHub"
+          Nothing -> Types.setMsg "no pull request open"
+
+-- GitHub writes --------------------------------------------------------
+
+{- | Run a call that writes to GitHub off the event loop, then say how it
+went and ask the poll to read the result back soon.
+-}
+githubJob :: T.Text -> IO (Either GitHub.GhFailure ()) -> T.Text -> Brick.EventM Types.Name Types.St ()
+githubJob label work done = do
+  st <- State.get
+  let
+    epoch = Types.stEpoch st
+  Jobs.startJob label work $ \outcome -> do
+    latest <- State.get
+    Monad.when (Types.stEpoch latest == epoch) $
+      case outcome of
+        Left err -> Jobs.jobFailed label err
+        Right (Left failure) -> Types.setMsg ("! " <> GitHub.failureText failure)
+        Right (Right ()) -> do
+          Types.setMsg done
+          pollSoon
+
+pollSoon :: Brick.EventM Types.Name Types.St ()
+pollSoon = State.modify (\s -> s {Types.stPullPoll = (Types.stPullPoll s) {Types.ppStarted = 0}})
+
+pullOf :: Types.St -> Maybe Git.PullRequest
+pullOf st =
+  case Git.subjectOf (Types.stMode st) of
+    Git.Pull pr _ -> Just pr
+    _ -> Nothing
+
+commentKindOf :: Conv.Venue -> GitHub.CommentKind
+commentKindOf venue =
+  case venue of
+    Conv.PullComments -> GitHub.IssueCommentKind
+    Conv.ReviewSummary _ _ -> GitHub.IssueCommentKind
+    _ -> GitHub.ReviewCommentKind
+
+reactKey :: Brick.EventM Types.Name Types.St Handled
+reactKey = do
+  st <- State.get
+  case bandPost st of
+    Just (conv, _, _)
+      | Conv.ReviewSummary {} <- Conv.convVenue conv -> do
+          Types.setMsg "GitHub takes no reactions on a review summary"
+          pure Handled
+    Just (conv, _, post)
+      | Conv.Posted cid _ _ <- Conv.postState post -> do
+          State.modify $ \s ->
+            s
+              { Types.stReacting =
+                  Just
+                    Types.ReactionPicker
+                      { Types.rkKind = commentKindOf (Conv.convVenue conv)
+                      , Types.rkComment = cid
+                      , Types.rkOwner = Threads.possessive (Conv.postAuthor post)
+                      , Types.rkReactions = Conv.postReactions post
+                      , Types.rkPreview = Markdown.firstLine (Conv.postBody post)
+                      }
+              }
+          pure Handled
+    _ -> pure Unhandled
+
+handleReactionKey :: V.Event -> Types.ReactionPicker -> Brick.EventM Types.Name Types.St ()
+handleReactionKey ev picker = do
+  State.modify (\s -> s {Types.stReacting = Nothing})
+  st <- State.get
+  let
+    chosen = case ev of
+      V.EvKey (V.KChar c) [] | c >= '1' && c <= '8' -> Types.safeIdx Conv.allReactions (fromEnum c - fromEnum '1')
+      _ -> Nothing
+  case (chosen, pullOf st) of
+    (Just reaction, Just pr) -> do
+      let
+        repo = Git.prRepo pr
+        kind = Types.rkKind picker
+        cid = Types.rkComment picker
+        mine = any (\c -> Conv.rcReaction c == reaction && Conv.rcMine c) (Types.rkReactions picker)
+        viewer = Types.ppSnapshot (Types.stPullPoll st) >>= Conv.remoteViewer . PullPoll.snapshotRemote
+      case (mine, viewer) of
+        (True, Just login) ->
+          githubJob "removing the reaction" (GitHub.removeReaction (Types.stRoot st) repo kind cid login reaction) "reaction removed"
+        (True, Nothing) -> Types.setMsg "who you are on GitHub is still loading"
+        (False, _) ->
+          githubJob "reacting" (GitHub.addReaction (Types.stRoot st) repo kind cid reaction) ("reacted " <> Conv.reactionGlyph reaction)
+    (Just _, Nothing) -> Types.setMsg "no pull request open"
+    (Nothing, _) -> pure ()
+
+copyKey :: Brick.EventM Types.Name Types.St Handled
+copyKey = do
+  st <- State.get
+  case bandPost st of
+    Just (_, _, post)
+      | Just url <- Conv.postUrl post -> do
+          vty <- Brick.getVtyHandle
+          ok <- MonadIO.liftIO (Clipboard.writeClipboard (Types.stClip st) (V.outputByteBuffer (V.outputIface vty)) url)
+          State.modify (\s -> s {Types.stKill = url, Types.stClipSent = if ok then url else Types.stClipSent s})
+          Types.setMsg (if ok then "copied " <> url else "no clipboard helper here \8212 the link is in the yank slot")
+          pure Handled
+    _ -> pure Unhandled
+
+-- | Resolve the selected post's thread, or the thread under the line.
+resolveKey :: Brick.EventM Types.Name Types.St Handled
+resolveKey = do
+  st <- State.get
+  let
+    conv = fmap (\(c, _, _) -> c) (bandPost st)
+  case conv of
+    Just c -> resolveConversation c
+    Nothing ->
+      case lineThread st of
+        Just c -> resolveConversation c
+        Nothing -> pure Unhandled
+
+resolveConversation :: Conv.Conversation -> Brick.EventM Types.Name Types.St Handled
+resolveConversation conv = do
+  st <- State.get
+  case Conv.convVenue conv of
+    Conv.ReviewThread (Just tid) Store.Unresolved -> do
+      leaveBand
+      githubJob "resolving the thread" (GitHub.resolveThread (Types.stRoot st) tid) "resolved on GitHub"
+      pure Handled
+    Conv.ReviewThread (Just _) Store.Resolved -> do
+      Types.setMsg "already resolved"
+      pure Handled
+    _ -> pure Unhandled
+
+-- | Accepting lines resolves the open GitHub threads that sit on them.
+resolveOnAccept :: Types.FileView -> [T.Text] -> Brick.EventM Types.Name Types.St ()
+resolveOnAccept fv keys = do
+  st <- State.get
+  let
+    path = T.pack (Types.fvPath fv)
+    acceptedRows = filter (\r -> maybe False (`elem` keys) (DiffModel.rKey r)) (Types.fvRows fv)
+    onAccepted conv = any (\r -> Anchor.anchorCovers path r (Conv.convAnchor conv)) acceptedRows
+    open conv = case Conv.convVenue conv of
+      Conv.ReviewThread (Just tid) Store.Unresolved -> Just tid
+      _ -> Nothing
+    here = Anchor.conversationsIn st (concat (Map.elems (Types.fvThreads fv)))
+    tids = Maybe.mapMaybe open (filter onAccepted here)
+  Monad.forM_ tids $ \tid ->
+    githubJob "resolving the thread" (GitHub.resolveThread (Types.stRoot st) tid) "resolved on GitHub"
+
+editPostedKey :: Brick.EventM Types.Name Types.St Handled
+editPostedKey = do
+  st <- State.get
+  case bandPost st of
+    Just (conv, _, post)
+      | Conv.ReviewSummary {} <- Conv.convVenue conv
+      , Conv.postAuthor post == Conv.Viewer -> do
+          Types.setMsg "edit the review summary on GitHub"
+          pure Handled
+    Just (conv, _, post)
+      | Conv.Posted cid _ _ <- Conv.postState post
+      , Conv.postAuthor post == Conv.Viewer ->
+          openWorkPopup conv (Types.EditPosted (commentKindOf (Conv.convVenue conv)) cid) (Conv.markdownText (Conv.postBody post))
+    _ -> pure Unhandled
 
 anchorKeys :: Conv.Anchor -> [Store.LineKey]
 anchorKeys anchor =

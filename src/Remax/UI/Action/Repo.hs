@@ -166,6 +166,7 @@ arriveAt target remembered saved mode passId loaded = do
         , Types.stUnfolded = Set.empty
         , Types.stConfirm = Nothing
         , Types.stCiting = Nothing
+        , Types.stReacting = Nothing
         , Types.stBaseAt = Nothing
         }
   case remembered of
