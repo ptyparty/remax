@@ -1,25 +1,20 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Remax.UI.Action.Notes
   ( markThenNote
   , unnoteCmd
-  , setNotePopupEd
-  , openNotePopup
   , handleNotePopupKey
   , popupBoxWidth
   , popupRowWidth
-  , NoteAct (..)
-  , noteAct
-  , transcriptPosts
-  , postRows
+  , setNotePopupEd
+  , choiceLabel
   ) where
 
 import Brick qualified as Brick
-import Control.Applicative ((<|>))
 import Control.Monad qualified as Monad
 import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
+import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
@@ -35,14 +30,15 @@ import Remax.UI.Action.Conversation qualified as Conversation
 import Remax.UI.Action.Rebase qualified as Rebase
 import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Action.Verdicts qualified as VerdictAction
-import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Anchor qualified as Anchor
+import Remax.UI.Core.Markdown qualified as Markdown
 import Remax.UI.Core.Threads qualified as Threads
 import Remax.UI.Core.Types qualified as Types
-import Remax.UI.Core.Verdict qualified as Verdict
 import Remax.UI.Core.View qualified as View
 import Remax.UI.Model.Nav qualified as Nav
+import Remax.UI.Model.Work qualified as WorkModel
 import Remax.Vi qualified as Vi
-import Remax.Zipper qualified as Z
+import Remax.WorkStore qualified as WorkStore
 
 -- A flag or question wants its reason on record: the note popup opens
 -- right away (config: note-on-flag = 0 turns this off), targeting the
@@ -65,166 +61,82 @@ markThenNote v = do
         undoing =
           Types.MarkUndo
             { Types.muRows = Types.stLastRows after
-            , Types.muBefore =
-                Map.fromList
-                  [ (k, Map.lookup k (Types.stVerdicts preSt))
-                  | k <- Types.stLastMarked after
-                  ]
+            , Types.muBefore = Map.fromList (map (\k -> (k, Map.lookup k (Types.stVerdicts preSt))) (Types.stLastMarked after))
             , Types.muCounts = Types.stCounts preSt
             , Types.muPunch = Types.stPunch preSt
             }
-      openNotePopup (Types.NoteFromMark undoing)
+      openNotePopup v (Types.NoteFromMark undoing)
       opened <- State.get
       case Types.stNotePopup opened of
         Nothing -> VerdictAction.runDeferredAdvance
         Just _ -> pure ()
     else State.modify (\s -> s {Types.stDeferAdvance = False})
 
--- What a note applies to: an active selection wins; then the line under
--- the cursor, when it already carries a verdict or a note (sitting on a
--- noted line and typing :note must open THAT note — a noted line's
--- whole group comes along, so the note stays one note); then whatever
--- was just marked (marking auto-advances, so the cursor has already
--- moved on); with none of those, the current hunk.
-noteTargetKeys :: Types.St -> [T.Text]
-noteTargetKeys st =
-  let
-    selectionKeys = do
-      fv <- Types.currentFileMay st
-      (lo, hi) <- View.activeSelectionRows (Types.fvEd fv)
-      pure (changeKeys fv lo hi)
-    cursorKeys = Types.currentFileMay st >>= cursorNoteKeys st
-    hunkKeys = do
-      fv <- Types.currentFileMay st
-      r <- Types.safeIdx (Types.fvRuns fv) (Types.clampH (Types.fvRuns fv) (Types.stCurH st))
-      pure (DiffModel.runKeys r)
-    lastKeys =
-      if null (Types.stLastMarked st) then Nothing else Just (Types.stLastMarked st)
-  in
-    Maybe.fromMaybe [] (selectionKeys <|> cursorKeys <|> lastKeys <|> hunkKeys)
+-- The lines the mark just wrote, as the span a note covers, in file
+-- order with the text and number each line has now.
+markedSpan :: Types.St -> Maybe Conv.LineSpan
+markedSpan st = do
+  fv <- Types.currentFileMay st
+  Anchor.lineSpanFor st fv (map (\(key, _, _, _) -> key) (Types.stLastRows st))
 
-changeKeys :: Types.FileView -> Int -> Int -> [T.Text]
-changeKeys fv lo hi = map (\(k, _, _) -> k) (Nav.selectedChanges True fv lo hi)
-
--- The keys a note under the cursor is about: the whole group of a noted
--- line or hunk, or the marked lines of the cursor's row.
-cursorNoteKeys :: Types.St -> Types.FileView -> Maybe [T.Text]
-cursorNoteKeys st fv = do
-  let
-    row = fst (Modal.cursorRC (Types.fvEd fv))
-    ks = changeKeys fv row row
-    relevant k = Map.member k (Types.stVerdicts st) || Map.member k (Types.stThreads st)
-    groupAmong keys = Maybe.listToMaybe (Maybe.mapMaybe (\k -> Map.lookup k (Types.stNoteGroups st)) keys)
-    -- a conversation anywhere in the hunk under the cursor: from any
-    -- line of the hunk, :note continues that thread rather than
-    -- opening a second one a few lines away
-    hunkGroup = do
-      h <- Nav.hunkUnderCursor st
-      r <- Types.safeIdx (Types.fvRuns fv) h
-      groupAmong (DiffModel.runKeys r)
-  case groupAmong ks <|> hunkGroup of
-    Just gid -> Just (groupKeys st fv gid)
-    Nothing
-      | any relevant ks -> Just (filter relevant ks)
-      | otherwise -> Nothing
-
--- The whole group, found by its name, so editing keeps it a
--- single thread rather than forking per line.
---
--- By name and not by what the note says: two notes worded the
--- same — "typo", "why?" — are two notes, and matching on the
--- words made them one. Editing one then rewrote the other, and
--- an agent's reply to one appeared under both.
-groupKeys :: Types.St -> Types.FileView -> T.Text -> [T.Text]
-groupKeys st fv gid =
-  let
-    inGroup r =
-      Maybe.listToMaybe (filter (\k -> Map.lookup k (Types.stNoteGroups st) == Just gid) (Verdict.rowFeedbackKeys r))
-  in
-    Maybe.mapMaybe inGroup (Types.fvRows fv)
-
--- Save the reviewer's side of the conversation (empty text clears the
--- whole thread instead), keep the in-memory view in step, and report
--- where it landed. While the reviewer's own post is the newest it stays
--- editable in place; once someone answered, saving appends the next
--- post.
-applyNote :: T.Text -> [T.Text] -> Brick.EventM Types.Name Types.St ()
-applyNote text keys = do
-  st <- State.get
-  if T.null text
-    then do
-      n <- MonadIO.liftIO (Store.clearThread (Types.stConn st) (Types.repoText st) keys)
-      State.modify $ \s ->
-        s {Types.stThreads = foldr Map.delete (Types.stThreads s) keys}
-      Conversation.refreshNoteGroups
-      Types.setMsg $
-        if n == 0
-          then "no notes here"
-          else "removed the conversation from " <> Types.tshow n <> " line(s)"
-    else do
-      n <- MonadIO.liftIO (Store.saveReviewerPost (Types.stConn st) (Types.repoText st) text keys)
+-- The conversations the span touches, oldest first: a note offers a
+-- reply and a join, a GitHub thread a reply only.
+choicesFor :: Types.St -> Conv.LineSpan -> [Types.NoteChoice]
+choicesFor st lineSpan =
+  case Types.currentFileMay st of
+    Nothing -> [Types.NewNote]
+    Just fv ->
       let
-        markedKeys = filter (`Map.member` Types.stVerdicts st) keys
-        place thread = case reverse thread of
-          (Store.Post "reviewer" _ : older) -> reverse (Store.Post "reviewer" text : older)
-          _ -> thread ++ [Store.Post "reviewer" text]
-        update k m = Map.insert k (place (Map.findWithDefault [] k m)) m
-      State.modify $ \s ->
-        s {Types.stThreads = foldr update (Types.stThreads s) markedKeys}
-      Conversation.refreshNoteGroups
-      Types.setMsg $
-        if n == 0
-          then "no verdicts here yet — mark with ! or ? first"
-          else "note on " <> Types.tshow n <> " line(s)"
+        path = T.pack (Types.fvPath fv)
+        keys = map Store.lineKeyToText (Conv.spanKeys lineSpan)
+        spanRows = filter (\r -> any (`elem` keys) (Maybe.catMaybes [DiffModel.rKey r, DiffModel.rRemarkKey r])) (Types.fvRows fv)
+        touches conv = any (\r -> Anchor.anchorCovers path r (Conv.convAnchor conv)) spanRows
+        touched = List.sortOn Conv.conversationTime (filter touches (Types.stConversations st))
+        choices conv = case Conv.convVenue conv of
+          Conv.LocalOnly _ -> [Types.ReplyNote conv, Types.JoinNote conv]
+          Conv.ReviewThread (Just _) _ -> [Types.ReplyThread conv]
+          _ -> []
+      in
+        Types.NewNote : concatMap choices touched
 
+openNotePopup :: Store.Verdict -> Types.NoteOrigin -> Brick.EventM Types.Name Types.St ()
+openNotePopup v origin = do
+  st <- State.get
+  case markedSpan st of
+    Nothing -> Types.setMsg "nothing to note — mark lines with ! or ? first"
+    Just lineSpan -> do
+      let
+        ed0 = Modal.newEdState 0 [""]
+        ed1 = ed0 {Modal.edMode = Modal.Insert}
+        plan =
+          Types.NotePlan
+            { Types.planVerdict = v
+            , Types.planSpan = lineSpan
+            , Types.planOrigin = origin
+            , Types.planChoices = choicesFor st lineSpan
+            , Types.planChosen = 0
+            }
+      State.modify (\s -> s {Types.stNotePopup = Just (Types.NotePopup ed1 (Types.NoteOn plan)), Types.stVi = Vi.viIdle})
+
+-- Space u on a plain line: retire the notes written on it.
 unnoteCmd :: Brick.EventM Types.Name Types.St ()
 unnoteCmd = do
   st <- State.get
   let
-    keys = noteTargetKeys st
-  if null keys
-    then Types.setMsg "nothing here to unnote"
-    else applyNote "" keys
-
--- The note popup: a small modal buffer with the full editing keys.
--- Enter in its normal mode saves, Ctrl-c discards; an empty note clears.
--- Discarding one that ! or ? opened cancels that mark too.
-openNotePopup :: Types.NoteOrigin -> Brick.EventM Types.Name Types.St ()
-openNotePopup origin = do
-  st <- State.get
-  let
-    -- A note that ! or ? opened is about what that keystroke just
-    -- marked, all of it. Asking noteTargetKeys instead lands it on the
-    -- line under the cursor alone, because marking collapses the
-    -- selection on its way out and the cursor is left on whichever line
-    -- the selection happened to end at — so a note written across four
-    -- lines was recorded against one of them, and if that one was
-    -- unchanged it belonged to no hunk and nothing could ever resolve it.
-    keys = case origin of
-      Types.NoteFromMark _ | not (null (Types.stLastMarked st)) -> Types.stLastMarked st
-      _ -> noteTargetKeys st
-  if null keys
-    then Types.setMsg "nothing to note — mark lines with ! or ? first"
+    notes = filter isNote (ThreadAction.cursorConversations st)
+    isNote c = case Conv.convVenue c of
+      Conv.LocalOnly _ -> True
+      _ -> False
+    keys = concatMap (noteKeys . Conv.convAnchor) notes
+    noteKeys anchor = case anchor of
+      Conv.OnLines lineSpan -> Conv.spanKeys lineSpan
+      _ -> []
+  if null notes
+    then Types.setMsg "nothing here to resolve"
     else do
-      let
-        existing = case Maybe.mapMaybe (`Map.lookup` Types.stThreads st) keys of
-          (thread : _) -> case reverse thread of
-            (Store.Post "reviewer" body : _) -> body
-            _ -> ""
-          [] -> ""
-        ls = if T.null existing then [""] else T.lines existing
-        lastRow = length ls - 1
-        lastCol = case reverse ls of
-          (l : _) -> T.length l
-          [] -> 0
-        ed0 = Modal.newEdState lastRow ls
-        ed1 =
-          ed0
-            { Modal.edZipper = Z.moveCursor (lastRow, lastCol) (Modal.edZipper ed0)
-            , Modal.edMode = Modal.Insert
-            }
-      State.modify
-        (\s -> s {Types.stNotePopup = Just (Types.NotePopup ed1 (Types.NoteFor keys origin)), Types.stVi = Vi.viIdle})
+      ThreadAction.retireNotesOn keys
+      Conversation.resolveNotesInMemory (map Store.lineKeyToText keys)
+      Types.setMsg ("resolved " <> Types.tshow (length notes) <> " note(s)")
 
 setNotePopupEd :: Modal.EdState -> Brick.EventM Types.Name Types.St ()
 setNotePopupEd ed = do
@@ -249,12 +161,15 @@ handleNotePopupKey ev np0 = do
         { Types.npEd =
             (Types.npEd np0) {Modal.edKill = Types.stKill st0, Modal.edRowLayout = layout}
         }
+    emacs = Config.cfgKeys (Types.stConfig st0) == Config.KeysEmacs
   case ev of
     -- discard works from either popup mode; nobody should need to leave
     -- insert just to bail out
     V.EvKey (V.KChar 'c') [V.MCtrl] -> discardNote np
     V.EvKey (V.KChar 'g') [V.MCtrl]
       | Types.WorkFor _ <- Types.npPurpose np -> CiteAction.openCitePicker
+    V.EvKey (V.KChar 'n') [V.MMeta] | emacs -> moveChoice 1 np
+    V.EvKey (V.KChar 'p') [V.MMeta] | emacs -> moveChoice (-1) np
     _ ->
       case Modal.edMode (Types.npEd np) of
         Modal.Insert ->
@@ -283,6 +198,8 @@ notePopupNormalKey st np ev =
     -- Esc from insert lands here in the popup's normal mode; Esc
     -- again cancels the dialog outright
     V.EvKey V.KEsc [] -> discardNote np
+    V.EvKey (V.KChar '\t') [] -> moveChoice 1 np
+    V.EvKey V.KBackTab [] -> moveChoice (-1) np
     V.EvKey (V.KChar '?') []
       | Types.WorkFor wp <- Types.npPurpose np
       , Types.ReplyTo target _ <- Types.wpAction wp ->
@@ -299,18 +216,31 @@ notePopupNormalKey st np ev =
         Config.KeysVi -> notePopupVi st np ev
         _ -> Monad.forM_ (Modal.handleNormal ev (Types.npEd np)) setNotePopupEd
 
--- Backing out of a note that ! or ? opened takes the mark with it.
--- The verdict was made by that same keystroke and has not been
--- explained yet, so abandoning the sentence abandons what it was
--- going to be about — and the advance the mark would have made never
--- happens either, since there is nothing to move on from.
---
--- A note asked for by :note is the other case: that mark was already
--- there and had nothing to do with this popup.
+-- Tab and S-Tab walk the `goes to` list of a note or a reply with
+-- several threads to choose from.
+moveChoice :: Int -> Types.NotePopup -> Brick.EventM Types.Name Types.St ()
+moveChoice d np =
+  let
+    step n total = if total <= 1 then 0 else (n + d) `mod` total
+    purpose = case Types.npPurpose np of
+      Types.NoteOn plan -> Types.NoteOn plan {Types.planChosen = step (Types.planChosen plan) (length (Types.planChoices plan))}
+      Types.WorkFor wp
+        | not (null (Types.wpChoices wp)) ->
+            let
+              chosen = step (Types.wpChosen wp) (length (Types.wpChoices wp))
+            in
+              Types.WorkFor (maybe wp (ThreadAction.aimAt wp {Types.wpChosen = chosen}) (Types.safeIdx (Types.wpChoices wp) chosen))
+      other -> other
+  in
+    State.modify (\s -> s {Types.stNotePopup = fmap (\p -> p {Types.npPurpose = purpose}) (Types.stNotePopup s)})
+
 repliedTo :: Types.St -> Types.WorkPopup -> T.Text
 repliedTo st wp =
   let
-    posted c = filter (not . Conv.isLocalPost) (Conv.convPosts c)
+    posted c = filter isPosted (Conv.convPosts c)
+    isPosted p = case Conv.postState p of
+      Conv.Posted {} -> True
+      _ -> False
     newest = do
       cid <- Types.wpConv wp
       conv <- Conv.conversationFor cid (Types.stConversations st)
@@ -318,19 +248,26 @@ repliedTo st wp =
   in
     maybe "the thread" (Threads.authorName . Conv.postAuthor) newest
 
+-- Backing out of a note that ! or ? opened takes the mark with it.
+-- The verdict was made by that same keystroke and has not been
+-- explained yet, so abandoning the sentence abandons what it was
+-- going to be about — and the advance the mark would have made never
+-- happens either, since there is nothing to move on from.
 discardNote :: Types.NotePopup -> Brick.EventM Types.Name Types.St ()
 discardNote np = do
   let
     discardMsg = case Types.npPurpose np of
-      Types.NoteFor _ Types.NoteAsked -> "note discarded"
-      Types.NoteFor _ (Types.NoteFromMark _) -> "mark cancelled"
+      Types.NoteOn plan -> case Types.planOrigin plan of
+        Types.NoteAsked -> "note discarded"
+        Types.NoteFromMark _ -> "mark cancelled"
       Types.AmendMessage _ -> "amend cancelled"
       Types.WorkFor _ -> "discarded"
   State.modify (\s -> s {Types.stNotePopup = Nothing, Types.stMsg = discardMsg, Types.stVi = Vi.viIdle})
   case Types.npPurpose np of
-    Types.NoteFor _ (Types.NoteFromMark undoing) -> do
-      VerdictAction.cancelMark undoing
-      State.modify (\s -> s {Types.stDeferAdvance = False})
+    Types.NoteOn plan
+      | Types.NoteFromMark undoing <- Types.planOrigin plan -> do
+          VerdictAction.cancelMark undoing
+          State.modify (\s -> s {Types.stDeferAdvance = False})
     _ -> VerdictAction.runDeferredAdvance
 
 saveNote :: Types.NotePopup -> Brick.EventM Types.Name Types.St ()
@@ -339,11 +276,50 @@ saveNote np = do
   let
     text = T.strip (T.intercalate "\n" (Modal.bufferLines (Types.npEd np)))
   case Types.npPurpose np of
-    Types.NoteFor keys _ -> do
-      applyNote text keys
+    Types.NoteOn plan -> do
+      savePlan plan text
       VerdictAction.runDeferredAdvance
     Types.AmendMessage target -> Rebase.applyAmendMessage target text
     Types.WorkFor wp -> ThreadAction.saveWork wp text
+
+-- Where the note's text goes: a new note on its lines, a reply on a
+-- note or thread already there, or a join that grows that note.
+savePlan :: Types.NotePlan -> T.Text -> Brick.EventM Types.Name Types.St ()
+savePlan plan text = do
+  st <- State.get
+  let
+    conn = Types.stConn st
+    scope = WorkModel.scopeOf st
+    body = Conv.Markdown text
+    lineSpan = Types.planSpan plan
+    chosen = Maybe.fromMaybe Types.NewNote (Types.safeIdx (Types.planChoices plan) (Types.planChosen plan))
+    rangeText = Threads.anchorPlace . Conv.OnLines
+  if T.null text
+    then Types.setMsg "empty note \8212 the mark stays"
+    else case chosen of
+      Types.NewNote -> do
+        lid <- MonadIO.liftIO (WorkStore.newLocalId (Types.repoText st) (Conv.spanKeys lineSpan))
+        Monad.void (MonadIO.liftIO (WorkStore.addAside conn scope (Conv.OnLinesOnly lid lineSpan (Types.planVerdict plan)) Conv.Viewer body))
+        WorkModel.reloadWork
+        Types.setMsg ("note on " <> rangeText lineSpan)
+      Types.ReplyNote conv -> do
+        Monad.void (MonadIO.liftIO (WorkStore.addAside conn scope (Conv.convTarget conv) Conv.Viewer body))
+        WorkModel.reloadWork
+        Types.setMsg ("reply on " <> Threads.anchorPlace (Conv.convAnchor conv))
+      Types.JoinNote conv ->
+        case Conv.convTarget conv of
+          Conv.OnLinesOnly lid old verdict -> do
+            let
+              grown = Conv.spanUnion old lineSpan
+            Monad.void (MonadIO.liftIO (WorkStore.addAside conn scope (Conv.OnLinesOnly lid old verdict) Conv.Viewer body))
+            MonadIO.liftIO (WorkStore.growNote conn (Types.repoText st) lid grown)
+            WorkModel.reloadWork
+            Types.setMsg ("on " <> rangeText lineSpan <> " \183 the note under " <> rangeText old <> " now covers " <> rangeText grown)
+          _ -> Types.setMsg "that conversation cannot grow"
+      Types.ReplyThread conv -> do
+        Monad.void (MonadIO.liftIO (WorkStore.addAside conn scope (Conv.convTarget conv) Conv.Viewer body))
+        WorkModel.reloadWork
+        Types.setMsg ("asked the agent about " <> Threads.anchorPlace (Conv.convAnchor conv))
 
 notePopupVi :: Types.St -> Types.NotePopup -> V.Event -> Brick.EventM Types.Name Types.St ()
 notePopupVi st np ev =
@@ -354,51 +330,19 @@ notePopupVi st np ev =
       State.modify (\s -> s {Types.stVi = keys})
       setNotePopupEd ed
 
--- What the popup is about to do. The old chrome never said: a fresh
--- note, a rewrite of your own latest post, and a follow-up to somebody
--- else's answer all looked exactly alike.
-data NoteAct = NoteNew | NoteEdit | NoteReply T.Text
-
-noteAct :: [Store.Post] -> NoteAct
-noteAct thread =
-  case reverse thread of
-    [] -> NoteNew
-    (Store.Post author _ : _)
-      | author == "reviewer" -> NoteEdit
-      | otherwise -> NoteReply author
-
--- The posts to show above the editor. The whole conversation, except
--- that when you are rewriting your own latest post that post is already
--- in the editor and would otherwise appear twice.
-transcriptPosts :: [Store.Post] -> [Store.Post]
-transcriptPosts thread =
-  case noteAct thread of
-    NoteEdit -> init thread
-    _ -> thread
-
--- One post as rendered transcript rows: the same glyphs the inline
--- conversation uses, wrapped to the popup, continuations indented under
--- the text so the authorship stays scannable down the left edge.
-postRows :: Int -> Store.Post -> [Brick.Widget Types.Name]
-postRows width post =
+-- One row of the `goes to` list.
+choiceLabel :: Conv.LineSpan -> Types.NoteChoice -> T.Text
+choiceLabel lineSpan choice =
   let
-    mine = Store.postAuthor post == "reviewer"
-    lead =
-      if mine
-        then "\8801 you \183 "
-        else "\8618 " <> Store.postAuthor post <> " \183 "
-    attr = if mine then Attrs.noteInlineAttr else Attrs.replyInlineAttr
-    -- a stored post keeps the reviewer's own line breaks; the transcript
-    -- is a quotation, so re-wrap it to whatever width the popup got
-    packed =
-      case Modal.greedyWrap
-        (max 12 (width - T.length lead))
-        (T.words (T.unwords (T.lines (Store.postBody post)))) of
-        [] -> [""]
-        wss -> map T.unwords wss
+    range = Threads.anchorPlace . Conv.OnLines
+    firstLine c = maybe "" (Markdown.firstLine . Conv.postBody) (Maybe.listToMaybe (Conv.convPosts c))
+    place c = Threads.anchorPlace (Conv.convAnchor c)
   in
-    case packed of
-      [] -> []
-      (first : rest) ->
-        Brick.withAttr attr (Brick.txt (lead <> first))
-          : map (\l -> Brick.withAttr attr (Brick.txt ("  " <> l))) rest
+    case choice of
+      Types.NewNote -> "new note on " <> range lineSpan
+      Types.ReplyNote c -> "reply on " <> place c <> " \183 the note stays on " <> place c <> " \183 " <> firstLine c
+      Types.JoinNote c ->
+        case Conv.convAnchor c of
+          Conv.OnLines old -> "join the note on " <> place c <> " \183 it grows to " <> range (Conv.spanUnion old lineSpan) <> " \183 " <> firstLine c
+          _ -> "join the note on " <> place c
+      Types.ReplyThread c -> "reply on " <> place c <> " \183 " <> firstLine c

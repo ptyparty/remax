@@ -61,7 +61,6 @@ idleBody st =
 data RowItem = RowItem
   { riRow :: DiffModel.RowR
   , riPoint :: Int
-  , riNotes :: [Types.NoteLine]
   , riGuide :: [Types.NoteLine]
   , riEmph :: [(Int, Int)]
   , riThreads :: [Threads.ThreadLine]
@@ -73,7 +72,6 @@ data WindowView = WindowView
   , wvHi :: Int
   , wvCursorOut :: Int
   , wvItems :: [RowItem]
-  , wvNoteRows :: [[Types.NoteLine]]
   , wvGuideRows :: [[Types.NoteLine]]
   , wvThreadRows :: [[Threads.ThreadLine]]
   }
@@ -104,8 +102,7 @@ renderFile paneWidth screenRows st fv =
     -- note rows above the cursor shift where it lands in the rendering
     cursorIn = wvCursorOut view - wvLo view
     notesAbove =
-      sum (map length (take cursorIn (wvNoteRows view)))
-        + sum (map length (take cursorIn (wvThreadRows view)))
+      sum (map length (take cursorIn (wvThreadRows view)))
         + sum (map length (take (cursorIn + 1) (wvGuideRows view)))
     cursorRender = cursorIn + notesAbove
     scrollOff = Config.cfgScrolloff (Types.stConfig st)
@@ -148,8 +145,6 @@ windowView paneWidth screenRows st fv =
         [] -> View.lastRestingRow fv
     points =
       drop 1 (scanr (\row acc -> Maybe.fromMaybe acc (DiffModel.rNewRow row)) seedPoint windowed)
-    noteRows =
-      take (hi - lo) (drop lo (View.shownNoteLines (View.noteTextWidth paneWidth fv) st rows))
     guideRows =
       take (hi - lo) (drop lo (View.shownGuideLines (View.noteTextWidth paneWidth fv) st rows))
     -- worked out once for the whole file when the rows were built, so
@@ -157,17 +152,16 @@ windowView paneWidth screenRows st fv =
     emphs = take (hi - lo) (drop lo (Types.fvEmph fv))
     convsAt i = Anchor.conversationsAt st fv i
     threadWidth = View.noteTextWidth paneWidth fv
-    threadRows = take (hi - lo) (drop lo (map (concatMap (Threads.threadLines st threadWidth) . convsAt) [0 .. Types.fvRowCount fv - 1]))
+    threadRows = take (hi - lo) (drop lo (map (Threads.rowLines st threadWidth . convsAt) [0 .. Types.fvRowCount fv - 1]))
     marks = take (hi - lo) (drop lo (map (markOf . convsAt) [0 .. Types.fvRowCount fv - 1]))
-    item row point notes guide emph threads mark =
-      RowItem {riRow = row, riPoint = point, riNotes = notes, riGuide = guide, riEmph = emph, riThreads = threads, riMark = mark}
+    item row point guide emph threads mark =
+      RowItem {riRow = row, riPoint = point, riGuide = guide, riEmph = emph, riThreads = threads, riMark = mark}
   in
     WindowView
       { wvLo = lo
       , wvHi = hi
       , wvCursorOut = cursorOut
-      , wvItems = List.zipWith7 item windowed points noteRows guideRows emphs threadRows marks
-      , wvNoteRows = noteRows
+      , wvItems = List.zipWith6 item windowed points guideRows emphs threadRows marks
       , wvGuideRows = guideRows
       , wvThreadRows = threadRows
       }
@@ -244,7 +238,7 @@ rowImages paneWidth st fv pens numW hOff item =
         else drawn
   in
     ( map (guideInk paneWidth paint) (riGuide item)
-    , lineImg : map (noteInk paneWidth paint) (riNotes item) ++ map (threadInk paneWidth paint selectedPost) (riThreads item)
+    , lineImg : map (threadInk paneWidth paint selectedPost) (riThreads item)
     , isCursor
     )
 
@@ -376,28 +370,6 @@ guideInk paneWidth paint nl =
       paneWidth
       [ \left -> Ink.inkT left (Ink.penFor (rpPens paint) (rpBarName paint)) (T.singleton (rpBarGlyph paint))
       , \left -> Ink.fitRow attr left (Ink.inkT left attr body)
-      ]
-
-noteInk :: Int -> RowPaint -> Types.NoteLine -> V.Image
-noteInk paneWidth paint nl =
-  let
-    pens = rpPens paint
-    fromReviewer = Types.nlAuthor nl == "reviewer"
-    glyph
-      | not (Types.nlOpens nl) = "  "
-      | fromReviewer = "\9492 \8801 "
-      | otherwise = "\8618 "
-    label =
-      if Types.nlOpens nl && not fromReviewer
-        then Types.nlAuthor nl <> " · "
-        else ""
-    noteAttr = if fromReviewer then Attrs.noteInlineAttr else Attrs.replyInlineAttr
-    body = T.replicate (rpNumW paint + 4) " " <> glyph <> label <> Widgets.padT (Types.nlText nl)
-  in
-    Ink.spanInk
-      paneWidth
-      [ \left -> Ink.inkT left (Ink.penFor pens (rpBarName paint)) (T.singleton (rpBarGlyph paint))
-      , \left -> Ink.inkT left (Ink.penFor pens noteAttr) body
       ]
 
 -- A conversation's row under its line: the author column, the rail

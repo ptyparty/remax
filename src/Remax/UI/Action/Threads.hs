@@ -22,6 +22,8 @@ module Remax.UI.Action.Threads
   , resolveOnAccept
   , githubJob
   , pollSoon
+  , aimAt
+  , retireNotesOn
   , openWorkPopup
   , switchAction
   , saveWork
@@ -133,18 +135,22 @@ moveBand d = do
 leaveBand :: Brick.EventM Types.Name Types.St ()
 leaveBand = State.modify (\s -> s {Types.stBand = Nothing})
 
-{- | The thread a reply from a code line goes to: the first GitHub
-thread under it.
--}
-lineThread :: Types.St -> Maybe Conv.Conversation
-lineThread st =
-  List.find
-    ( \c -> case Conv.convVenue c of
-        Conv.ReviewThread _ _ -> True
-        Conv.PullComments -> True
-        _ -> False
+-- | The GitHub threads under the cursor's line, oldest first.
+lineThreads :: Types.St -> [Conv.Conversation]
+lineThreads st =
+  List.sortOn
+    Conv.conversationTime
+    ( filter
+        ( \c -> case Conv.convVenue c of
+            Conv.ReviewThread _ _ -> True
+            Conv.PullComments -> True
+            _ -> False
+        )
+        (cursorConversations st)
     )
-    (cursorConversations st)
+
+lineThread :: Types.St -> Maybe Conv.Conversation
+lineThread = Maybe.listToMaybe . lineThreads
 
 repliedAuthor :: Conv.Conversation -> Maybe Conv.Post -> T.Text
 repliedAuthor conv post =
@@ -171,9 +177,37 @@ replyKey = do
             _ -> quoteReply conv cid post
         _ -> pure Handled
     Nothing ->
-      case lineThread st of
-        Just conv -> openWorkPopup conv (Types.ReplyTo (Conv.convTarget conv) (repliedAuthor conv Nothing)) ""
-        Nothing -> pure Unhandled
+      case lineThreads st of
+        [] -> pure Unhandled
+        threads@(conv : _) -> do
+          handled <- openWorkPopup conv (Types.ReplyTo (Conv.convTarget conv) (repliedAuthor conv Nothing)) ""
+          offerThreads threads
+          pure handled
+
+offerThreads :: [Conv.Conversation] -> Brick.EventM Types.Name Types.St ()
+offerThreads threads =
+  Monad.when (length threads > 1) $
+    State.modify $ \s ->
+      s
+        { Types.stNotePopup =
+            fmap
+              ( \np -> case Types.npPurpose np of
+                  Types.WorkFor wp -> np {Types.npPurpose = Types.WorkFor wp {Types.wpChoices = threads, Types.wpChosen = 0}}
+                  _ -> np
+              )
+              (Types.stNotePopup s)
+        }
+
+-- | Point a reply popup at another of the threads under its line.
+aimAt :: Types.WorkPopup -> Conv.Conversation -> Types.WorkPopup
+aimAt wp conv =
+  wp
+    { Types.wpConv = Just (Conv.convId conv)
+    , Types.wpAction = case Types.wpAction wp of
+        Types.ReplyTo _ _ -> Types.ReplyTo (Conv.convTarget conv) (repliedAuthor conv Nothing)
+        Types.AskOn _ -> Types.AskOn (Conv.convTarget conv)
+        other -> other
+    }
 
 quoteReply :: Conv.Conversation -> Store.CommentId -> Conv.Post -> Brick.EventM Types.Name Types.St Handled
 quoteReply conv cid post =
@@ -188,9 +222,12 @@ askKey = do
   case bandPost st of
     Just (conv, _, _) -> openWorkPopup conv (Types.AskOn (Conv.convTarget conv)) ""
     Nothing ->
-      case lineThread st of
-        Just conv -> openWorkPopup conv (Types.AskOn (Conv.convTarget conv)) ""
-        Nothing -> pure Unhandled
+      case lineThreads st of
+        [] -> pure Unhandled
+        threads@(conv : _) -> do
+          handled <- openWorkPopup conv (Types.AskOn (Conv.convTarget conv)) ""
+          offerThreads threads
+          pure handled
 
 {- | @: a new comment on the selection or the cursor's line, a selection
 pre-filling a suggestion fence with its lines.
@@ -317,6 +354,8 @@ openWorkPopupAt _ place cid action initial = do
         , Types.wpConv = cid
         , Types.wpPlace = place
         , Types.wpOpenedWith = initial
+        , Types.wpChoices = []
+        , Types.wpChosen = 0
         }
   State.modify (\s -> s {Types.stNotePopup = Just (Types.NotePopup ed1 (Types.WorkFor popup)), Types.stVi = Vi.viIdle})
   pure Handled
@@ -524,6 +563,13 @@ editPostedKey = do
       , Conv.postAuthor post == Conv.Viewer ->
           openWorkPopup conv (Types.EditPosted (commentKindOf (Conv.convVenue conv)) cid) (Conv.markdownText (Conv.postBody post))
     _ -> pure Unhandled
+
+-- | Accepting lines retires the notes written on them, old and new.
+retireNotesOn :: [Store.LineKey] -> Brick.EventM Types.Name Types.St ()
+retireNotesOn keys = do
+  st <- State.get
+  MonadIO.liftIO (WorkStore.retireNotesOn (Types.stConn st) (Types.repoText st) keys)
+  WorkModel.reloadWork
 
 anchorKeys :: Conv.Anchor -> [Store.LineKey]
 anchorKeys anchor =

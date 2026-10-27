@@ -16,7 +16,6 @@ module Remax.UI.Core.View
   , bodyWindow
   , gutterWidth
   , noteTextWidth
-  , shownNoteLines
   , shownGuideLines
   , hScrollFor
   , currentLineOf
@@ -38,7 +37,6 @@ import Data.Text qualified as T
 import Graphics.Vty qualified as V
 import Remax.DiffModel qualified as DiffModel
 import Remax.Modal qualified as Modal
-import Remax.Store qualified as Store
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
 
@@ -274,43 +272,6 @@ gutterWidth fv = length (show (max 1 (Modal.bufferLineCount (Types.fvEd fv))))
 
 noteTextWidth :: Int -> Types.FileView -> Int
 noteTextWidth paneWidth fv = max 12 (paneWidth - (gutterWidth fv + 5))
-
-shownNoteLines :: Int -> Types.St -> [DiffModel.RowR] -> [[Types.NoteLine]]
-shownNoteLines width st rows =
-  let
-    annOf r =
-      Maybe.listToMaybe (Maybe.mapMaybe (`Map.lookup` Types.stThreads st) (Verdict.rowFeedbackKeys r))
-    anns = map annOf rows
-    nexts = drop 1 anns ++ [Nothing]
-    -- A note is prose and the pane is narrow, so it is folded to fit
-    -- rather than run off the edge where nobody can read it. The
-    -- author's own line breaks are kept and each of their lines folded
-    -- in turn, so a deliberate paragraph survives while a long one still
-    -- lands on screen.
-    --
-    -- The opening row carries the glyph, and an agent's name besides;
-    -- folding to what that leaves means no row overflows, and the
-    -- continuations simply have more room than they use.
-    postLines post =
-      let
-        author = Store.postAuthor post
-        lead = if author == "reviewer" then 4 else 2 + T.length author + 3
-        room = max 12 (width - lead)
-        fold ln = case Modal.greedyWrap room (T.words ln) of
-          [] -> [""]
-          wss -> map T.unwords wss
-        flowed = concatMap fold (T.lines (Store.postBody post))
-      in
-        case flowed of
-          [] -> []
-          (first : rest) ->
-            Types.NoteLine author True first : map (Types.NoteLine author False) rest
-    pick (ma, mnext) = case ma of
-      Just posts
-        | mnext /= Just posts -> concatMap postLines posts
-      _ -> []
-  in
-    map pick (zip anns nexts)
 
 shownGuideLines :: Int -> Types.St -> [DiffModel.RowR] -> [[Types.NoteLine]]
 shownGuideLines width st rows =

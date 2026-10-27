@@ -68,7 +68,7 @@ syncComposing = do
   let
     writing = case Types.stNotePopup st of
       Just np
-        | Types.NoteFor _ _ <- Types.npPurpose np -> Just (Types.repoText st)
+        | Types.NoteOn _ <- Types.npPurpose np -> Just (Types.repoText st)
       _ -> Nothing
   Monad.unless (writing == Types.stComposing st) $ do
     -- cleared where it was set before being set anywhere else, so

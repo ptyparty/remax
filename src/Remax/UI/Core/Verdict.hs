@@ -134,15 +134,16 @@ runMark m r =
               then '?'
               else '\10003' -- ✓
 
-remarksFor :: Map.Map T.Text Store.Verdict -> Map.Map T.Text [Store.Post] -> Types.FileView -> [Types.Remark]
-remarksFor verdicts threads fv =
+remarksFor :: Map.Map T.Text Store.Verdict -> Map.Map T.Text [Store.Post] -> [Conv.Conversation] -> Types.FileView -> [Types.Remark]
+remarksFor verdicts threads convs fv =
   let
+    noted = Set.fromList (concatMap (map Store.lineKeyToText . anchorKeys . Conv.convAnchor) convs)
     pick row = do
       k <- DiffModel.rRemarkKey row
       -- a removed row keeps its remark too, but by then the hunk it
       -- belongs to is what carries it through the tray
       Monad.guard (DiffModel.rMark row == ' ')
-      Monad.guard (Map.member k verdicts || Map.member k threads)
+      Monad.guard (Map.member k verdicts || Map.member k threads || Set.member k noted)
       n <- DiffModel.rNewRow row
       pure (Types.Remark n k (DiffModel.rText row))
   in
@@ -151,7 +152,7 @@ remarksFor verdicts threads fv =
 recountFile :: Map.Map T.Text Store.Verdict -> Map.Map T.Text [Store.Post] -> [Conv.Conversation] -> Types.FileView -> Types.FileView
 recountFile verdicts threads convs fv =
   fv
-    { Types.fvRemarks = remarksFor verdicts threads fv
+    { Types.fvRemarks = remarksFor verdicts threads convs fv
     , Types.fvPending = length (filter (runPending verdicts) (Types.fvRuns fv))
     , Types.fvThreads = Anchor.anchorIn convs fv
     }
@@ -208,7 +209,7 @@ recountAll = do
     counted =
       Map.fromList
         ( map
-            (\fv -> (Types.fvPath fv, (remarksFor verdicts threads fv, length (filter (runPending verdicts) (Types.fvRuns fv)))))
+            (\fv -> (Types.fvPath fv, (remarksFor verdicts threads (Types.stConversations st) fv, length (filter (runPending verdicts) (Types.fvRuns fv)))))
             (Types.stFiles st)
         )
     epoch = Types.stEpoch st
@@ -235,6 +236,12 @@ recountAll = do
   if sum (map Types.fvRowCount (Types.stFiles st)) <= recountInlineRows
     then State.modify (\s -> s {Types.stFiles = map (recountIn s) (Types.stFiles s)})
     else Jobs.startJob "recounting" (Exception.evaluate forced >> pure counted) settle
+
+anchorKeys :: Conv.Anchor -> [Store.LineKey]
+anchorKeys anchor =
+  case anchor of
+    Conv.OnLines lineSpan -> Conv.spanKeys lineSpan
+    _ -> []
 
 -- Where a row's feedback lives. A changed row carries what was said
 -- about the change; a line nobody has changed carries a remark, keyed

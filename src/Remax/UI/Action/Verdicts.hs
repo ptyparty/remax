@@ -297,6 +297,7 @@ applyVerdictHunk v = do
       MonadIO.liftIO (Store.recordVerdicts (Types.stConn st) (Types.repoText st) (Types.stPassId st) v origin rows)
       Monad.when (v == Store.Reviewed) (Conversation.closeConversation (DiffModel.runKeys r))
       Monad.when (v == Store.Reviewed) (ThreadAction.resolveOnAccept fv (DiffModel.runKeys r))
+      Monad.when (v == Store.Reviewed) (ThreadAction.retireNotesOn (map Store.LineKey (DiffModel.runKeys r)))
       Monad.when (v == Store.Reviewed) (Jobs.settleKeys (Types.fvPath fv) (DiffModel.runKeys r))
       State.modify $ \s ->
         s
@@ -346,6 +347,8 @@ recordLineVerdicts v fv lo picks = do
   origin <- verdictOrigin
   MonadIO.liftIO (Store.recordVerdicts (Types.stConn st) (Types.repoText st) (Types.stPassId st) v origin (map storeRow picks))
   Monad.when (v == Store.Reviewed) (Conversation.closeConversation keys)
+  Monad.when (v == Store.Reviewed) (ThreadAction.resolveOnAccept fv keys)
+  Monad.when (v == Store.Reviewed) (ThreadAction.retireNotesOn (map Store.LineKey keys))
   Monad.when (v == Store.Reviewed) (Jobs.settleKeys (Types.fvPath fv) keys)
   State.modify $ \s ->
     s

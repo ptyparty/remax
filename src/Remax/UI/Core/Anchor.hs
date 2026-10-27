@@ -42,8 +42,9 @@ anchorIn convs fv =
     rowFor conv = do
       rowIx <- anchorRow path byHead byBase byKey (Conv.convAnchor conv)
       Just (rowIx, [Conv.convId conv])
+    oldestFirst = List.sortOn Conv.conversationTime convs
   in
-    Map.fromListWith (flip (++)) (Maybe.mapMaybe rowFor convs)
+    Map.fromListWith (flip (++)) (Maybe.mapMaybe rowFor oldestFirst)
 
 anchorRow ::
   T.Text ->

@@ -43,6 +43,8 @@ import Remax.Config qualified as Config
 import Remax.DiffModel qualified as DiffModel
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
+import Remax.UI.Core.Anchor qualified as Anchor
+import Remax.UI.Core.Threads qualified as Threads
 import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
@@ -216,7 +218,7 @@ scrollHunkIntoViewOf fv = do
         -- the hunk (exact when the render window covers them)
         renderStart =
           startIn
-            + sum (map length (take startIn (drop origin (View.shownNoteLines noteRoom st (Types.fvRows fv)))))
+            + sum (map (Threads.rowLineCount st noteRoom . Anchor.conversationsAt st fv) [origin .. origin + startIn - 1])
             + sum (map length (take (startIn + 1) (drop origin (View.shownGuideLines noteRoom st (Types.fvRows fv)))))
         top =
           if len + 4 >= vpH
