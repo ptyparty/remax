@@ -208,10 +208,10 @@ notePopupNormalKey st np ev =
     V.EvKey (V.KChar '?') []
       | Types.WorkFor wp <- Types.npPurpose np
       , Types.ReplyTo target _ <- Types.wpAction wp ->
-          ThreadAction.switchAction wp (Types.AskOn target)
+          ThreadAction.switchAction wp (Types.ToAgent Types.AgentAsk target)
     V.EvKey (V.KChar 'r') []
       | Types.WorkFor wp <- Types.npPurpose np
-      , Types.AskOn target <- Types.wpAction wp ->
+      , Types.ToAgent _ target <- Types.wpAction wp ->
           ThreadAction.switchAction wp (Types.ReplyTo target (repliedTo st wp))
     -- the popup's normal mode follows the session's keymap, so a
     -- vi user gets vi here too; emacs is modeless and never
@@ -337,9 +337,13 @@ notePopupVi st np ev =
       setNotePopupEd ed
 
 -- One row of the `goes to` list.
-choiceLabel :: Conv.LineSpan -> Types.NoteChoice -> T.Text
-choiceLabel lineSpan choice =
+choiceLabel :: Types.NotePlan -> Types.NoteChoice -> T.Text
+choiceLabel plan choice =
   let
+    lineSpan = Types.planSpan plan
+    verb = case Types.planVerdict plan of
+      Store.Flagged -> Types.AgentFlag
+      _ -> Types.AgentAsk
     range = Threads.anchorPlace . Conv.OnLines
     firstLine c = maybe "" (Markdown.firstLine . Conv.postBody) (Maybe.listToMaybe (Conv.convPosts c))
     place c = Threads.anchorPlace (Conv.convAnchor c)
@@ -351,5 +355,5 @@ choiceLabel lineSpan choice =
         case Conv.convAnchor c of
           Conv.OnLines old -> "join the note on " <> place c <> " \183 it grows to " <> range (Conv.spanUnion old lineSpan) <> " \183 " <> firstLine c
           _ -> "join the note on " <> place c
-      Types.ReplyThread c -> "reply on " <> place c <> " \183 " <> firstLine c
+      Types.ReplyThread c -> Types.agentVerbWord verb <> " on " <> place c <> " \183 " <> firstLine c
       Types.ReplyOutdated c -> "reply to the outdated note \183 was " <> place c <> " \183 " <> firstLine c

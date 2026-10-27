@@ -9,6 +9,7 @@ module Remax.UI.Action.Threads
   , Handled (..)
   , replyKey
   , askKey
+  , flagKey
   , commentKey
   , editKey
   , discardKey
@@ -207,7 +208,7 @@ aimAt wp conv =
     { Types.wpConv = Just (Conv.convId conv)
     , Types.wpAction = case Types.wpAction wp of
         Types.ReplyTo _ _ -> Types.ReplyTo (Conv.convTarget conv) (repliedAuthor conv Nothing)
-        Types.AskOn _ -> Types.AskOn (Conv.convTarget conv)
+        Types.ToAgent verb _ -> Types.ToAgent verb (Conv.convTarget conv)
         other -> other
     }
 
@@ -222,14 +223,21 @@ askKey :: Brick.EventM Types.Name Types.St Handled
 askKey = do
   st <- State.get
   case bandPost st of
-    Just (conv, _, _) -> openWorkPopup conv (Types.AskOn (Conv.convTarget conv)) ""
+    Just (conv, _, _) -> openWorkPopup conv (Types.ToAgent Types.AgentAsk (Conv.convTarget conv)) ""
     Nothing ->
       case lineThreads st of
         [] -> pure Unhandled
         threads@(conv : _) -> do
-          handled <- openWorkPopup conv (Types.AskOn (Conv.convTarget conv)) ""
+          handled <- openWorkPopup conv (Types.ToAgent Types.AgentAsk (Conv.convTarget conv)) ""
           offerThreads threads
           pure handled
+
+flagKey :: Brick.EventM Types.Name Types.St Handled
+flagKey = do
+  st <- State.get
+  case bandPost st of
+    Just (conv, _, _) -> openWorkPopup conv (Types.ToAgent Types.AgentFlag (Conv.convTarget conv)) ""
+    Nothing -> pure Unhandled
 
 {- | @: a new comment on the selection or the cursor's line, a selection
 pre-filling a suggestion fence with its lines.
@@ -410,10 +418,13 @@ saveWork wp text = do
         Monad.void (MonadIO.liftIO (WorkStore.addPending conn scope target Conv.Viewer body))
         reloadAndBand (Types.wpConv wp)
         Types.setMsg ("reply to " <> author <> " waits for :submit")
-      Types.AskOn target -> do
+      Types.ToAgent verb target -> do
         Monad.void (MonadIO.liftIO (WorkStore.addAside conn scope target Conv.Viewer body))
         reloadAndBand (Types.wpConv wp)
-        Types.setMsg "asked the agent"
+        Types.setMsg $
+          case verb of
+            Types.AgentAsk -> "asked the agent"
+            Types.AgentFlag -> "flagged to the agent"
       Types.CommentOn anchor -> do
         lid <- MonadIO.liftIO (WorkStore.newLocalId (Types.repoText st) (anchorKeys anchor))
         Monad.void (MonadIO.liftIO (WorkStore.addPending conn scope (Conv.NewThread lid anchor) Conv.Viewer body))
