@@ -91,10 +91,16 @@ choicesFor st lineSpan =
         keys = map Store.lineKeyToText (Conv.spanKeys lineSpan)
         spanRows = filter (\r -> any (`elem` keys) (Maybe.catMaybes [DiffModel.rKey r, DiffModel.rRemarkKey r])) (Types.fvRows fv)
         touches conv = any (\r -> Anchor.anchorCovers path r (Conv.convAnchor conv)) spanRows
-        touched = List.sortOn Conv.conversationTime (filter touches (Types.stConversations st))
-        choices conv = case Conv.convVenue conv of
-          Conv.LocalOnly _ -> [Types.ReplyNote conv, Types.JoinNote conv]
-          Conv.ReviewThread (Just _) _ -> [Types.ReplyThread conv]
+        spanRowIxs = Maybe.mapMaybe (\(i, r) -> if any (`elem` keys) (Maybe.catMaybes [DiffModel.rKey r, DiffModel.rRemarkKey r]) then Just i else Nothing) (zip [0 ..] (Types.fvRows fv))
+        drawnHere = Anchor.conversationsIn st (concatMap (\i -> Map.findWithDefault [] i (Types.fvThreads fv)) spanRowIxs)
+        outdated conv = Map.member (Conv.convId conv) (Types.stOutdated st)
+        touched =
+          List.sortOn Conv.conversationTime $
+            List.nubBy (\a b -> Conv.convId a == Conv.convId b) (filter touches (Types.stConversations st) ++ filter outdated drawnHere)
+        choices conv = case (Conv.convVenue conv, outdated conv) of
+          (Conv.LocalOnly _, True) -> [Types.ReplyOutdated conv]
+          (Conv.LocalOnly _, False) -> [Types.ReplyNote conv, Types.JoinNote conv]
+          (Conv.ReviewThread (Just _) _, _) -> [Types.ReplyThread conv]
           _ -> []
       in
         Types.NewNote : concatMap choices touched
@@ -320,6 +326,10 @@ savePlan plan text = do
         Monad.void (MonadIO.liftIO (WorkStore.addAside conn scope (Conv.convTarget conv) Conv.Viewer body))
         WorkModel.reloadWork
         Types.setMsg ("asked the agent about " <> Threads.anchorPlace (Conv.convAnchor conv))
+      Types.ReplyOutdated conv -> do
+        Monad.void (MonadIO.liftIO (WorkStore.addAside conn scope (Conv.convTarget conv) Conv.Viewer body))
+        WorkModel.reloadWork
+        Types.setMsg ("reply to the outdated note \183 was " <> Threads.anchorPlace (Conv.convAnchor conv))
 
 notePopupVi :: Types.St -> Types.NotePopup -> V.Event -> Brick.EventM Types.Name Types.St ()
 notePopupVi st np ev =
@@ -346,3 +356,4 @@ choiceLabel lineSpan choice =
           Conv.OnLines old -> "join the note on " <> place c <> " \183 it grows to " <> range (Conv.spanUnion old lineSpan) <> " \183 " <> firstLine c
           _ -> "join the note on " <> place c
       Types.ReplyThread c -> "reply on " <> place c <> " \183 " <> firstLine c
+      Types.ReplyOutdated c -> "reply to the outdated note \183 was " <> place c <> " \183 " <> firstLine c

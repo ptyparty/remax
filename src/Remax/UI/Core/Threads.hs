@@ -18,10 +18,13 @@ module Remax.UI.Core.Threads
   , isResolvedFold
   , lineHint
   , noteHint
+  , outdatedHint
   ) where
 
 import Brick qualified as Brick
 import Data.List qualified as List
+import Data.List.NonEmpty qualified as NEL
+import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -94,10 +97,42 @@ threadLines st width conv =
     header = case Conv.convVenue conv of
       Conv.ReviewThread (Just _) _ -> [ThreadLine cid Nothing Nothing (headerSegs conv)]
       _ -> []
+    outdated = case Map.lookup cid (Types.stOutdated st) of
+      Just _ -> outdatedRows cid (Conv.convAnchor conv)
+      Nothing -> []
   in
     if isResolvedFold st conv
       then [ThreadLine cid Nothing Nothing (resolvedSegs width conv)]
-      else header ++ concatMap rowsFor (zip [0 ..] posts)
+      else outdated ++ header ++ concatMap rowsFor (zip [0 ..] posts)
+
+{- | What a conversation whose lines left the file remembers of them:
+the first three, numbered as they were, then how many more.
+-}
+outdatedRows :: Conv.ConversationId -> Conv.Anchor -> [ThreadLine]
+outdatedRows cid anchor =
+  let
+    line t = ThreadLine cid Nothing Nothing [Markdown.Segment Attrs.hintAttr t Nothing]
+    quoted ls =
+      let
+        shown = take 3 ls
+        more = length ls - length shown
+      in
+        map (\(n, t) -> line ("\9474  " <> Types.tshow n <> " " <> t)) shown
+          ++ (if more > 0 then [line ("\9474      \8943 " <> Types.tshow more <> " more lines")] else [])
+    header range = line ("\9581 outdated \183 was " <> range <> ", which left the file")
+  in
+    case anchor of
+      Conv.OnLines lineSpan ->
+        header (rangeOf anchor)
+          : quoted (map (\l -> (Conv.slLineNo l, T.drop 1 (Conv.slText l))) (NEL.toList (Conv.spanLines lineSpan)))
+      Conv.OnOutdated out ->
+        let
+          lo = Maybe.fromMaybe (Conv.outLine out) (Conv.outStartLine out)
+          hunk = filter (not . T.isPrefixOf "@@") (T.lines (Conv.outDiffHunk out))
+          numbered = zip [lo ..] (reverse (take (Conv.outLine out - lo + 1) (reverse hunk)))
+        in
+          header (T.replace " (outdated)" "" (rangeOf anchor)) : quoted (map (\(n, t) -> (n, T.drop 1 t)) numbered)
+      _ -> []
 
 isResolvedFold :: Types.St -> Conv.Conversation -> Bool
 isResolvedFold st conv =
@@ -367,6 +402,16 @@ noteHint keys =
     Config.KeysEmacs -> "C-c ? reply to the agent \183 C-c \9166 accept"
     Config.KeysVi -> "\9251q reply to the agent \183 \9251\9166 accept"
     Config.KeysHelix -> "? reply to the agent \183 \9166 accept"
+
+outdatedHint :: Config.KeyMode -> Int -> Int -> T.Text
+outdatedHint keys line n =
+  let
+    reply = case keys of
+      Config.KeysEmacs -> "C-c ? reply to the agent \183 C-c \9166 accept retires it with the hunk"
+      Config.KeysVi -> "\9251q reply to the agent \183 \9251\9166 accept retires it with the hunk"
+      Config.KeysHelix -> "? reply to the agent \183 \9166 accept retires it with the hunk"
+  in
+    Types.tshow line <> " \183 " <> Types.tshow n <> " outdated note" <> (if n == 1 then "" else "s") <> "   " <> reply
 
 ageText :: Clock.UTCTime -> T.Text -> T.Text
 ageText now stamp =

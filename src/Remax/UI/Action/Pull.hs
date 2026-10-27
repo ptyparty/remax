@@ -125,6 +125,7 @@ applyPolled polled = do
       , Types.ppNow = now
       }
   State.modify (\s -> WorkModel.withConversations s {Types.stPullMeta = Just (PullPoll.snapshotMeta snap)})
+  WorkModel.placeOutdated
   case PullPoll.polledHead polled of
     GitHub.RefsFetched -> Load.refreshGit
     GitHub.RefsInPlace -> pure ()

@@ -6,7 +6,9 @@ module Remax.UI.Core.Anchor
   , anchorCovers
   , conversationsAt
   , conversationsIn
+  , survives
   , lineSpanFor
+  , Survival (..)
   ) where
 
 import Data.List qualified as List
@@ -25,8 +27,8 @@ GitHub thread under the line GitHub numbers it at, a local anchor
 under the last of its lines still in the file. Rows map to the
 conversations that end on them, oldest first.
 -}
-anchorIn :: [Conv.Conversation] -> Types.FileView -> Map.Map Int [Conv.ConversationId]
-anchorIn convs fv =
+anchorIn :: Map.Map Conv.ConversationId Types.Outdated -> [Conv.Conversation] -> Types.FileView -> Map.Map Int [Conv.ConversationId]
+anchorIn outdated convs fv =
   let
     path = T.pack (Types.fvPath fv)
     rows = Types.fvRows fv
@@ -39,9 +41,15 @@ anchorIn convs fv =
             (\(i, l) -> map (\k -> (Store.LineKey k, i)) (Maybe.catMaybes [DiffModel.rKey (locRow l), DiffModel.rRemarkKey (locRow l)]))
             located
         )
-    rowFor conv = do
-      rowIx <- anchorRow path byHead byBase byKey (Conv.convAnchor conv)
-      Just (rowIx, [Conv.convId conv])
+    rowFor conv =
+      case Map.lookup (Conv.convId conv) outdated of
+        Just place
+          | Types.outdatedPath place == path ->
+              fmap (\rowIx -> (rowIx, [Conv.convId conv])) (Map.lookup (Types.outdatedLine place) byHead)
+          | otherwise -> Nothing
+        Nothing -> do
+          rowIx <- anchorRow path byHead byBase byKey (Conv.convAnchor conv)
+          Just (rowIx, [Conv.convId conv])
     oldestFirst = List.sortOn Conv.conversationTime convs
   in
     Map.fromListWith (flip (++)) (Maybe.mapMaybe rowFor oldestFirst)
@@ -62,8 +70,26 @@ anchorRow path byHead byBase byKey anchor =
             Conv.BaseSide -> Map.lookup (Conv.posLine pos) byBase
     Conv.OnLines lineSpan
       | Conv.spanPath lineSpan == path ->
-          Maybe.listToMaybe (reverse (List.sort (Maybe.mapMaybe (`Map.lookup` byKey) (Conv.spanKeys lineSpan))))
+          case survives byKey lineSpan of
+            Survives rowIx -> Just rowIx
+            Gone -> Nothing
     _ -> Nothing
+
+data Survival = Survives Int | Gone
+
+{- | A note stays on its lines while its first and last lines survive
+in order; it then draws under the last.
+-}
+survives :: Map.Map Store.LineKey Int -> Conv.LineSpan -> Survival
+survives byKey lineSpan =
+  let
+    keys = Conv.spanKeys lineSpan
+    first = Maybe.listToMaybe keys >>= (`Map.lookup` byKey)
+    final = Maybe.listToMaybe (reverse keys) >>= (`Map.lookup` byKey)
+  in
+    case (first, final) of
+      (Just a, Just b) | a <= b -> Survives b
+      _ -> Gone
 
 -- | The display rows a local anchor still covers, for washing them.
 anchorRows :: Types.FileView -> Conv.Anchor -> [Int]

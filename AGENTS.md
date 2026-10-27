@@ -40,9 +40,9 @@ imports its internals. The order within a tree is convention.
    remark, pending and thread caches), `Ink` (image painting),
    `WordDiff`, `View` (window geometry, note lines).
 2. `Model` — `Tray`, `Nav` (parking, scrolling, selection), `Watch`
-   (filesystem watching), `Load` (loading, rebuilding, refresh, reload,
-   highlighting), `Work` (your pending work and the conversations drawn
-   from it and the poll).
+   (filesystem watching), `Work` (your pending work, the conversations
+   drawn from it and the poll, and where outdated ones draw), `Load`
+   (loading, rebuilding, refresh, reload, highlighting).
 3. `Action` — `Threads` (the band, the work popups and the GitHub
    writes), `Cite`, `Conversation`, `Verdicts`, `Rebase`, `Notes`, `Settings`,
    `Pull`, `Fuzzy`, `Repo`, `Open`, `Picker`, `Search`, `Tree`, `Files`,

@@ -13,6 +13,7 @@ module Remax.WorkStore
   , recordSubmitted
   , growNote
   , retireNotesOn
+  , retireNote
   , forgetWork
   , newLocalId
   ) where
@@ -350,6 +351,14 @@ chunksOf n xs =
   case splitAt n xs of
     ([], _) -> []
     (chunk, rest) -> chunk : chunksOf n rest
+
+retireNote :: SQLite.Connection -> T.Text -> Conv.LocalId -> IO ()
+retireNote conn repo (Conv.LocalId lid) =
+  SQLite.withTransaction conn $ do
+    SQLite.execute conn "DELETE FROM work WHERE repo = ? AND target_kind = 'note' AND target_id = ?" (repo, lid)
+    SQLite.execute conn "DELETE FROM work_target WHERE repo = ? AND local_id = ?" (repo, lid)
+    SQLite.execute conn "DELETE FROM work_target_line WHERE repo = ? AND local_id = ?" (repo, lid)
+    SQLite.execute conn "DELETE FROM note_post WHERE repo = ? AND group_id = ?" (repo, lid)
 
 forgetWork :: SQLite.Connection -> T.Text -> IO ()
 forgetWork conn repo =
