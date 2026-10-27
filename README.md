@@ -199,7 +199,7 @@ Normal mode:
 | `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `e` `$EDITOR` here, `p` walk filter (pending / unresolved / all), `w` toggle ignore-whitespace, `u` resolve or unresolve the thread, or resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
 | `.` | repeat the last insert session (the entering command plus what was typed), helix-style — `c`-fix-`Esc` then `.` applies the same change at the cursor |
 | `Enter` | **accept the selection as reviewed** — a selection is required, so what you accept is always visibly highlighted (`X Enter` for the hunk you're looking at). Completing a hunk jumps to the next pending one; a partial mark steps to the next line |
-| `!` / `?` | flag-to-return-to / question — the selection's lines, or the whole current hunk with none. The note popup opens immediately for the reason (`note-on-flag = 0` in the config turns that off); discarding it (`Ctrl-c`, or `Esc` from its normal mode) cancels the mark as well, since the verdict has not been explained yet — save an empty note to keep the mark without one. The jump to the next hunk waits until the popup closes, and never happens if the mark is cancelled |
+| `!` / `?` | flag-to-return-to / question — the selection's lines, or the whole current hunk with none. The note popup opens immediately for the reason (`note-on-flag = 0` in the config turns that off); discarding it (`Ctrl-c`, `C-c C-k` in emacs, or `Esc` from its normal mode) cancels the mark as well, since the verdict has not been explained yet — save an empty note to keep the mark without one. The jump to the next hunk waits until the popup closes, and never happens if the mark is cancelled |
 | `]` / `[` | next / previous hunk, crossing file boundaries |
 | mouse wheel | three lines at a time: moves the cursor in the body (so the view follows as it does for `j`/`k`), scrolls the tray over the tray, and steps a picker or popup one row |
 | `/`, `n` / `N` | search the file (literal, helix-shaped: the match becomes the selection); repeat forward / back, wrapping |
@@ -494,9 +494,9 @@ the lines as anywhere else. `@` comments on the selection or the cursor's line a
 a new thread; a selection pre-fills a ````suggestion```` fence with its
 lines. Each popup shows where it is, the thread's log above the editor
 (its first post and newest two in full, the rest collapsed to one line
-each, and `C-o` unfolds them all), a rule naming what the text becomes, and its keys: `⏎` in normal mode posts or saves, `C-g` opens a
+each; `za` in normal mode, or `C-c z` in emacs, unfolds them all), a rule naming what the text becomes, and its keys: `⏎` in normal mode posts or saves, `C-g` opens a
 picker of the pull request's commits and inserts the chosen sha, `C-c`
-discards, and in the reply popup `?` turns the text into a question
+(`C-c C-k` in emacs) discards, and in the reply popup `?` turns the text into a question
 for the agent while `r` in the ask popup turns it back. Replies,
 comments and taken proposals wait for `:submit`; nothing reaches
 GitHub until then.
@@ -518,7 +518,7 @@ note's lines alone and a join that adds the post and grows the note to
 cover the selection. To ask the agent about a GitHub thread, use `?` on
 its highlighted row instead. `Tab`
 and `S-Tab` in normal mode (`M-n`/`M-p` in emacs) change the target,
-and the title names it. The popup discards with `C-c`, or `Esc` in
+and the title names it. The popup discards with `C-c` (`C-c C-k` in emacs), or `Esc` in
 normal mode. Notes written by earlier versions of remax are read in
 place and take replies like any other.
 

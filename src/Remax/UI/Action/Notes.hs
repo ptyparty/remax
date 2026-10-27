@@ -166,14 +166,23 @@ handleNotePopupKey ev np0 = do
             (Types.npEd np0) {Modal.edKill = Types.stKill st0, Modal.edRowLayout = layout}
         }
     emacs = Config.cfgKeys (Types.stConfig st0) == Config.KeysEmacs
+  State.modify (\s -> s {Types.stZPending = False, Types.stEmacsPrefix = Nothing})
   case ev of
+    _
+      | emacs
+      , Types.stEmacsPrefix st0 == Just 'c' ->
+          case ev of
+            V.EvKey (V.KChar 'k') [V.MCtrl] -> discardNote np
+            V.EvKey (V.KChar 'z') []
+              | Types.WorkFor wp <- Types.npPurpose np -> toggleLog wp
+            _ -> Types.setMsg "C-c C-k discards"
     -- discard works from either popup mode; nobody should need to leave
     -- insert just to bail out
-    V.EvKey (V.KChar 'c') [V.MCtrl] -> discardNote np
+    V.EvKey (V.KChar 'c') [V.MCtrl]
+      | emacs -> State.modify (\s -> s {Types.stEmacsPrefix = Just 'c'})
+      | otherwise -> discardNote np
     V.EvKey (V.KChar 'g') [V.MCtrl]
       | Types.WorkFor _ <- Types.npPurpose np -> CiteAction.openCitePicker
-    V.EvKey (V.KChar 'o') [V.MCtrl]
-      | Types.WorkFor wp <- Types.npPurpose np -> toggleLog wp
     V.EvKey (V.KChar 'n') [V.MMeta] | emacs -> moveChoice 1 np
     V.EvKey (V.KChar 'p') [V.MMeta] | emacs -> moveChoice (-1) np
     _ ->
@@ -213,6 +222,14 @@ notePopupNormalKey st np ev =
     -- Esc from insert lands here in the popup's normal mode; Esc
     -- again cancels the dialog outright
     V.EvKey V.KEsc [] -> discardNote np
+    V.EvKey (V.KChar 'z') []
+      | Config.cfgKeys (Types.stConfig st) /= Config.KeysEmacs
+      , Types.WorkFor _ <- Types.npPurpose np ->
+          State.modify (\s -> s {Types.stZPending = True})
+    V.EvKey (V.KChar 'a') []
+      | Types.stZPending st
+      , Types.WorkFor wp <- Types.npPurpose np ->
+          toggleLog wp
     V.EvKey (V.KChar '\t') [] -> moveChoice 1 np
     V.EvKey V.KBackTab [] -> moveChoice (-1) np
     V.EvKey (V.KChar '?') []
