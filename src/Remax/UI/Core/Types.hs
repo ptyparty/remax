@@ -29,6 +29,8 @@ module Remax.UI.Core.Types
   , NoteChoice (..)
   , WorkPopup (..)
   , WorkAction (..)
+  , AgentRemark (..)
+  , remarkVerdict
   , LogView (..)
   , WorkOrigin (..)
   , Band (..)
@@ -311,11 +313,23 @@ data LogView
 
 data WorkAction
   = ReplyTo Conv.Target T.Text
-  | AskOn Conv.Target
+  | AskOn AgentRemark Conv.Target
   | CommentOn Conv.Anchor
   | EditPending Conv.WorkId WorkOrigin
   | TakeProposal Conv.WorkId Conv.Target T.Text
   | EditPosted GitHub.CommentKind Store.CommentId
+
+-- | Whether a message to the agent flags the thread's lines or questions them.
+data AgentRemark
+  = FlagRemark
+  | AskRemark
+  deriving (Eq)
+
+remarkVerdict :: AgentRemark -> Store.Verdict
+remarkVerdict r =
+  case r of
+    FlagRemark -> Store.Flagged
+    AskRemark -> Store.Questioned
 
 -- | Which popup a pending text was written in, so `e` reopens the same one.
 data WorkOrigin

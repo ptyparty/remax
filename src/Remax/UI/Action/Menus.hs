@@ -271,10 +271,17 @@ askOrQuestion = do
     ThreadAction.Handled -> pure ()
     ThreadAction.Unhandled -> NoteAction.markThenNote Store.Questioned
 
+flagOrFlagLines :: Brick.EventM Types.Name Types.St ()
+flagOrFlagLines = do
+  handled <- ThreadAction.flagKey
+  case handled of
+    ThreadAction.Handled -> pure ()
+    ThreadAction.Unhandled -> NoteAction.markThenNote Store.Flagged
+
 spaceMenuEntries :: [(T.Text, T.Text, Brick.EventM Types.Name Types.St ())]
 spaceMenuEntries =
   [ ("\9166", "accept as reviewed", VerdictAction.acceptSelection)
-  , ("!", "flag it", NoteAction.markThenNote Store.Flagged)
+  , ("!", "flag it", flagOrFlagLines)
   , ("q", "question it", askOrQuestion)
   , ("x", "select the hunk", Nav.selectCurrentHunk)
   , ("f", "find a file", TreeAction.openFileFinder)

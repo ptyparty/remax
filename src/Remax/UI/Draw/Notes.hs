@@ -145,7 +145,7 @@ workTitle :: Types.WorkPopup -> T.Text
 workTitle wp =
   case Types.wpAction wp of
     Types.ReplyTo _ author -> "reply \183 to " <> author
-    Types.AskOn _ -> "ask \183 the agent"
+    Types.AskOn r _ -> remarkWord r <> " \183 the agent"
     Types.CommentOn anchor -> "comment \183 " <> Threads.anchorPlace anchor
     Types.EditPending _ origin -> case origin of
       Types.ReplyOrigin author -> "reply \183 to " <> author
@@ -163,8 +163,8 @@ foldKey keys =
 workHint :: Config.KeyMode -> Types.WorkPopup -> T.Text
 workHint keys wp =
   case Types.wpAction wp of
-    Types.ReplyTo _ _ -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 ? asks the agent instead"
-    Types.AskOn _ -> "\9166 save (nor) \183 " <> Types.cancelKeyText keys <> " discard \183 r replies on GitHub instead"
+    Types.ReplyTo _ _ -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 ? or ! goes to the agent instead"
+    Types.AskOn _ _ -> "\9166 save (nor) \183 " <> Types.cancelKeyText keys <> " discard \183 ? ask \183 ! flag \183 r replies on GitHub instead"
     Types.CommentOn _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 a selection pre-fills a suggestion"
     Types.EditPending _ _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard changes"
     Types.TakeProposal {} -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 the proposal goes once you post"
@@ -244,7 +244,7 @@ ruleText :: Types.WorkPopup -> T.Text
 ruleText wp =
   case Types.wpAction wp of
     Types.ReplyTo _ author -> "reply to " <> author <> " \183 waits for :submit"
-    Types.AskOn _ -> "ask the agent"
+    Types.AskOn r _ -> remarkWord r <> " the agent"
     Types.CommentOn _ -> "comment \183 waits for :submit"
     Types.EditPending _ origin -> case origin of
       Types.ReplyOrigin author -> "your reply to " <> author <> " \183 waits for :submit"
@@ -342,3 +342,9 @@ selectedLine l start mEnd =
     Brick.txt pre <+> Brick.withDefAttr Attrs.selAttr midW <+> Brick.txt post
 
 -- Switching repositories --------------------------------------------------------
+
+remarkWord :: Types.AgentRemark -> T.Text
+remarkWord r =
+  case r of
+    Types.AskRemark -> "ask"
+    Types.FlagRemark -> "flag for"

@@ -475,16 +475,18 @@ proposal), skipping local ones; past the last post the cursor moves on
 down the file, and `k` from the first returns to the line. The
 selected post wears a strip of its keys and the status line names it.
 On another reviewer's post: `r` replies, `?` asks the agent about the
-thread, `+` opens a picker of GitHub's eight reactions (one of yours
+thread and `!` flags it for the agent, marking the thread's lines `?` or `!`
+when you save, `+` opens a picker of GitHub's eight reactions (one of yours
 again removes it), `y` copies the post's link and `Space u` resolves the
 thread on GitHub at once, or unresolves a resolved one. Accepting its
-lines leaves the thread as it is. On your own
+lines leaves the thread open on GitHub and clears your talk with the agent
+on it. On your own
 posted comment `e` reopens it and saving edits it on GitHub at once. On your pending text: `e` reopens
 it in the popup it was written in and `dd` discards it, asking first
 when text was typed. On an agent's proposal: `⏎` takes it as your own
 reply, opening it in the reply popup, and `dd` drops it. Local posts
 never take the band. In the emacs keymap the same verbs sit under
-`C-c`: `C-c r`, `C-c ?`, `C-c g`, `C-c e`, `C-c d`, `C-c +`, `C-c y`,
+`C-c`: `C-c r`, `C-c ?`, `C-c !`, `C-c g`, `C-c e`, `C-c d`, `C-c +`, `C-c y`,
 `C-c u`, `C-c C-c` takes a proposal, `C-c z` folds, and `C-n` enters
 the thread.
 
@@ -498,8 +500,8 @@ lines. Each popup shows where it is, the thread's log above the editor
 (its first post and newest two in full, the rest collapsed to one line
 each; `za` in normal mode, or `C-c z` in emacs, unfolds them all), a rule naming what the text becomes, and its keys: `⏎` in normal mode posts or saves, `C-g` opens a
 picker of the pull request's commits and inserts the chosen sha, `C-c`
-(`C-c C-k` in emacs) discards, and in the reply popup `?` turns the text into a question
-for the agent while `r` in the ask popup turns it back. Replies,
+(`C-c C-k` in emacs) discards, and in the reply popup `?` or `!` turns the text into a question
+or a flag for the agent while `r` turns it back. Replies,
 comments and taken proposals wait for `:submit`; nothing reaches
 GitHub until then.
 
