@@ -78,8 +78,8 @@ markedSpan st = do
   fv <- Types.currentFileMay st
   Anchor.lineSpanFor st fv (map (\(key, _, _, _) -> key) (Types.stLastRows st))
 
--- The conversations the span touches, oldest first: a note offers a
--- reply and a join, a GitHub thread a reply only.
+-- The notes the span touches, oldest first, each offering a reply and
+-- a join.
 choicesFor :: Types.St -> Conv.LineSpan -> [Types.NoteChoice]
 choicesFor st lineSpan =
   case Types.currentFileMay st of
@@ -99,7 +99,6 @@ choicesFor st lineSpan =
         choices conv = case (Conv.convVenue conv, outdated conv) of
           (Conv.LocalOnly _, True) -> [Types.ReplyOutdated conv]
           (Conv.LocalOnly _, False) -> [Types.ReplyNote conv, Types.JoinNote conv]
-          (Conv.ReviewThread (Just _) _, _) -> [Types.ReplyThread conv]
           _ -> []
       in
         Types.NewNote : concatMap choices touched
@@ -285,7 +284,7 @@ saveNote np = do
     Types.WorkFor wp -> ThreadAction.saveWork wp text
 
 -- Where the note's text goes: a new note on its lines, a reply on a
--- note or thread already there, or a join that grows that note.
+-- note already there, or a join that grows that note.
 savePlan :: Types.NotePlan -> T.Text -> Brick.EventM Types.Name Types.St ()
 savePlan plan text = do
   st <- State.get
@@ -318,10 +317,6 @@ savePlan plan text = do
             WorkModel.reloadWork
             Types.setMsg ("on " <> rangeText lineSpan <> " \183 the note under " <> rangeText old <> " now covers " <> rangeText grown)
           _ -> Types.setMsg "that conversation cannot grow"
-      Types.ReplyThread conv -> do
-        Monad.void (MonadIO.liftIO (WorkStore.addAside conn scope (Conv.convTarget conv) Conv.Viewer body))
-        WorkModel.reloadWork
-        Types.setMsg ("asked the agent about " <> Threads.anchorPlace (Conv.convAnchor conv))
       Types.ReplyOutdated conv -> do
         Monad.void (MonadIO.liftIO (WorkStore.addAside conn scope (Conv.convTarget conv) Conv.Viewer body))
         WorkModel.reloadWork
@@ -351,5 +346,4 @@ choiceLabel lineSpan choice =
         case Conv.convAnchor c of
           Conv.OnLines old -> "join the note on " <> place c <> " \183 it grows to " <> range (Conv.spanUnion old lineSpan) <> " \183 " <> firstLine c
           _ -> "join the note on " <> place c
-      Types.ReplyThread c -> "reply on " <> place c <> " \183 " <> firstLine c
       Types.ReplyOutdated c -> "reply to the outdated note \183 was " <> place c <> " \183 " <> firstLine c
