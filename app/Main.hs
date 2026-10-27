@@ -6,7 +6,6 @@ import Control.Concurrent qualified as Concurrent
 import Control.Exception qualified as Exception
 import Control.Monad qualified as Monad
 import Data.Char qualified as Char
-import Data.Foldable qualified as Foldable
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
@@ -25,10 +24,13 @@ import System.IO qualified as SysIO
 import Database.SQLite.Simple qualified as SQLite
 import Paths_remax qualified as Paths
 import Remax.Config qualified as Config
+import Remax.Conversation qualified as Conv
+import Remax.Feedback qualified as Feedback
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.Hunks qualified as Hunks
-import Remax.Punch qualified as Punch
+import Remax.Json qualified as Json
+import Remax.RemoteCache qualified as RemoteCache
 import Remax.Store qualified as Store
 import Remax.UI qualified as UI
 import Remax.WorkStore qualified as WorkStore
@@ -51,6 +53,7 @@ data Cmd
     Forget (Maybe FilePath)
   | List ListOptions
   | Reply T.Text T.Text
+  | Comment CommentArgs
   | Attend
   | Hunks [String]
   | TourBegin [String]
@@ -69,11 +72,15 @@ data ListFormat = ListText | ListJson
 data ListWhen = ListNow | ListOnChange
   deriving (Eq)
 
+data CommentArgs
+  = Draft T.Text T.Text
+  | Revise T.Text T.Text
+
 data ListOptions = ListOptions
   { listFormat :: ListFormat
   , listWhen :: ListWhen
   , listStateFile :: Maybe FilePath
-  , listAwaiting :: Maybe Store.Awaiting
+  , listAwaiting :: Maybe Feedback.Party
   }
 
 -- A file remax keeps the last listing's fingerprint in. With one, a wait
@@ -105,6 +112,7 @@ main = do
         Forget mPath -> forget mPath
         List options -> list options
         Reply target text -> reply target text
+        Comment commentArgs -> comment commentArgs
         Attend -> attend
         Hunks rest -> hunks rest
         TourBegin rest -> tourBegin rest
@@ -130,7 +138,7 @@ listArgs =
               go options {listStateFile = Just path} rest
         ("--awaiting" : who : rest)
           | listAwaiting options == Nothing
-          , Just a <- Store.parseAwaiting (T.pack who) ->
+          , Just a <- Feedback.parseParty (T.pack who) ->
               go options {listAwaiting = Just a} rest
         _ -> Nothing
   in
@@ -163,7 +171,14 @@ usage =
   \                                     shows only conversations waiting on\n\
   \                                     that party, and a wait wakes only\n\
   \                                     when one is new or changed\n\
-  \       remax [-C DIR] reply ID TEXT   answer a note; shows in the review session\n\
+  \       remax [-C DIR] reply ID TEXT   answer a conversation; shows in the review\n\
+  \                                     session, and never reaches GitHub\n\
+  \       remax [-C DIR] comment HUNK TEXT\n\
+  \                                     draft a GitHub comment on a hunk for the\n\
+  \                                     reviewer, pending until they submit it\n\
+  \       remax [-C DIR] comment --revise ID TEXT\n\
+  \                                     propose text for a conversation; the\n\
+  \                                     reviewer takes it with Enter\n\
   \       remax [-C DIR] watching       say an agent is on this review, until\n\
   \                                     stopped; the session shows it in its\n\
   \                                     header, working or waiting\n\
@@ -212,6 +227,12 @@ parseArgs args0 =
         ("reply" : target : rest)
           | not (null rest) ->
               Right (mDir, Reply (T.pack target) (T.pack (unwords rest)))
+        ("comment" : "--revise" : target : rest)
+          | not (null rest) ->
+              Right (mDir, Comment (Revise (T.pack target) (T.pack (unwords rest))))
+        ("comment" : hunkId : rest)
+          | not (null rest) ->
+              Right (mDir, Comment (Draft (T.pack hunkId) (T.pack (unwords rest))))
         _
           | Just marg <- reviewArgs args -> Right (mDir, Review marg)
           | otherwise -> Left usage
@@ -617,23 +638,24 @@ list options = do
     fmt = listFormat options
     while = listWhen options
     stateFile = listStateFile options
+    party = listAwaiting options
   roots <- targetRepos
   conn <- Store.openStore
   let
     digest = do
-      rows <- mapM (Store.punchRows conn . T.pack) roots
+      listed <- mapM (Feedback.listFor conn) roots
       asked <- mapM (\r -> fmap (map ((,) r)) (Store.tourRequests conn (T.pack r))) roots
-      pure (Set.union (reviewerDigest (listAwaiting options) (concat rows)) (requestDigest (listAwaiting options) (concat asked)))
+      pure (Set.union (Set.fromList (concatMap (Feedback.digestOf party) listed)) (requestDigest party (concat asked)))
     news before now =
-      case listAwaiting options of
+      case party of
         Nothing -> now /= before
         Just _ -> not (now `Set.isSubsetOf` before)
     -- which review the fingerprint below is of
     watching =
       T.intercalate
         "\t"
-        ( "digest/2"
-            : maybe "all" Store.awaitingText (listAwaiting options)
+        ( "digest/3"
+            : maybe "all" Feedback.partyText party
             : map T.pack roots
         )
     remembered = case stateFile of
@@ -682,33 +704,19 @@ list options = do
           IO (Either Exception.IOException ())
       )
   here <- Directory.getCurrentDirectory
-  found <- mapM (\r -> fmap ((,) r) (Store.punchRows conn (T.pack r))) roots
-  listed <-
-    mapM
-      ( \(repo, rows) -> do
-          groups <- Store.loadNoteGroups conn (T.pack repo)
-          let
-            wanted conversation =
-              maybe True (== Punch.conversationAwaiting conversation) (listAwaiting options)
-            shown = filter wanted (Punch.conversations repo groups rows)
-            sources = List.nub (map (\c -> (Punch.conversationRef c, Punch.conversationFile c)) shown)
-          contents <- mapM (sourceLines repo) sources
-          let
-            fileLines = Map.fromList (zip sources contents)
-          pure (repo, map (describe fileLines) shown)
-      )
-      found
+  listed <- mapM (\r -> fmap ((,) r) (Feedback.listFor conn r)) roots
   asked <- mapM (\r -> fmap (map ((,) r)) (Store.tourRequests conn (T.pack r))) roots
   let
     asJson = fmt == ListJson
-    subjects = Punch.commitSubjects (concatMap snd found)
-    nonEmpty = filter (not . null . snd) listed
-    requests = filter (requestWanted (listAwaiting options) . snd) (concat asked)
+    wanted l = maybe True (== Feedback.listedParty l) party
+    shown = map (\(r, ls) -> (r, filter wanted ls)) listed
+    nonEmpty = filter (not . null . snd) shown
+    requests = filter (requestWanted party . snd) (concat asked)
     scope = case roots of
       [only] -> only
       _ -> here
   if asJson
-    then TIO.putStrLn (punchJson (T.pack scope) subjects listed requests)
+    then TIO.putStrLn (listJson (T.pack scope) shown requests)
     else do
       Monad.forM_ requests $ \(repo, request) ->
         TIO.putStrLn
@@ -722,26 +730,26 @@ list options = do
           )
       if null nonEmpty
         then Monad.when (null requests) . putStrLn $
-          case listAwaiting options of
-            Nothing -> "No flagged or questioned lines recorded for this repository."
-            Just party -> "No conversations awaiting " ++ T.unpack (Store.awaitingText party) ++ "."
+          case party of
+            Nothing -> "No conversations recorded for this repository."
+            Just who -> "No conversations awaiting " ++ T.unpack (Feedback.partyText who) ++ "."
         else Monad.forM_ nonEmpty $ \(repo, described) -> do
           -- name the repository only when there is more than one in
           -- play, so a single-repo listing reads exactly as before
           Monad.when (length roots > 1) $
-            putStrLn ("── " ++ FilePath.takeFileName repo ++ " ──")
-          printConversations subjects described
+            putStrLn ("\9472\9472 " ++ FilePath.takeFileName repo ++ " \9472\9472")
+          printListed described
 
 -- A tour request is the reviewer asking the agent for something, so it
 -- is news for an agent and for anyone listing everything.
-requestWanted :: Maybe Store.Awaiting -> Store.TourRequest -> Bool
+requestWanted :: Maybe Feedback.Party -> Store.TourRequest -> Bool
 requestWanted party _ =
   case party of
     Nothing -> True
-    Just Store.AwaitingAgent -> True
+    Just Feedback.AwaitingAgent -> True
     Just _ -> False
 
-requestDigest :: Maybe Store.Awaiting -> [(FilePath, Store.TourRequest)] -> Set.Set T.Text
+requestDigest :: Maybe Feedback.Party -> [(FilePath, Store.TourRequest)] -> Set.Set T.Text
 requestDigest party asked =
   Set.fromList (map (uncurry requestJson) (filter (requestWanted party . snd) asked))
 
@@ -770,90 +778,20 @@ requestJson repo request =
       , ("asked_at", jsonString (Store.requestAskedAt request))
       ]
 
-data Described = Described
-  { describedConversation :: Punch.Conversation
-  , describedLinesInFile :: Maybe Punch.LinesInFile
-  }
-
-describe :: Map.Map (Maybe T.Text, T.Text) [T.Text] -> Punch.Conversation -> Described
-describe fileLines conversation =
-  Described
-    { describedConversation = conversation
-    , describedLinesInFile =
-        Punch.linesInFile
-          ( Map.findWithDefault
-              []
-              (Punch.conversationRef conversation, Punch.conversationFile conversation)
-              fileLines
-          )
-          (Punch.conversationLines conversation)
-    }
-
-sourceLines :: FilePath -> (Maybe T.Text, T.Text) -> IO [T.Text]
-sourceLines repo (mRef, file) =
-  case mRef of
-    Nothing -> fmap T.lines (Git.readFileOr "" (repo </> T.unpack file))
-    Just ref -> do
-      got <- Git.refContent repo ref (T.unpack file)
-      pure $ case got of
-        Just (Git.RefText ls) -> ls
-        _ -> []
-
-printConversations :: Map.Map T.Text T.Text -> [Described] -> IO ()
-printConversations subjects described =
-  Monad.forM_ described $ \(Described conversation inFile) -> do
-    TIO.putStrLn
-      ( Punch.conversationFile conversation
-          <> "  ("
-          <> Punch.conversationUpdatedAt conversation
-          <> ", awaiting "
-          <> Store.awaitingText (Punch.conversationAwaiting conversation)
-          <> maybe "" (\l -> ", lines in file: " <> Punch.linesInFileText l) inFile
-          <> ")"
-      )
-    Monad.forM_ (Punch.conversationLines conversation) $ \line -> do
-      let
-        position = case Punch.punchLineNumber line of
-          Just n -> " :" <> T.pack (show n)
-          Nothing -> ""
-      TIO.putStrLn
-        ( "    "
-            <> Store.verdictText (Punch.punchLineVerdict line)
-            <> position
-            <> "  "
-            <> Punch.punchLineText line
-        )
-    Monad.forM_ (Punch.conversationThread conversation) $ \post ->
-      case T.lines (Store.postBody post) of
-        [] -> pure ()
-        (firstLine : more) -> do
-          let
-            label = Store.postAuthor post <> ": "
-            indent = T.replicate (T.length label) " "
-          TIO.putStrLn ("    " <> label <> firstLine)
-          Monad.forM_ more (\l -> TIO.putStrLn ("    " <> indent <> l))
-    Monad.forM_ (Punch.conversationCommitSha conversation) $ \sha ->
-      TIO.putStrLn
-        ( "    commit: "
-            <> sha
-            <> maybe "" (" " <>) (Map.lookup sha subjects)
-        )
-    Monad.forM_ (Punch.conversationRef conversation) $ \ref ->
-      TIO.putStrLn ("    ref: " <> ref)
-
--- An agent's post in a note conversation: ID is a conversation's id from
--- `list --json`; the post appends to the whole thread's group and
--- renders in order, with its author, in a running session.
--- An id belongs to exactly one repository — it hashes the repo path
--- along with the lines — so from a directory of checkouts we can simply
--- offer the id to each and let the one that owns it answer.
+-- An agent's post on a conversation: ID is a conversation's id from
+-- `list --json`, a GitHub thread's or a note's own. From a directory
+-- of checkouts the id is offered to each, and the one that holds it
+-- answers.
 reply :: T.Text -> T.Text -> IO ()
 reply target text = do
   roots <- targetRepos
   conn <- Store.openStore
-  attached <-
-    mapM (\r -> fmap ((,) r) (Store.appendAgentPost conn (T.pack r) "agent" target text)) roots
-  case filter ((> 0) . snd) attached of
+  attached <- mapM (\r -> fmap ((,) r) (Feedback.replyTo conn r target text)) roots
+  let
+    replied (repo, outcome) = case outcome of
+      Feedback.Replied n -> Just (repo, n)
+      Feedback.NoSuchConversation -> Nothing
+  case Maybe.mapMaybe replied attached of
     [] -> Exit.die "No such conversation recorded for this repository."
     hits ->
       Monad.forM_ hits $ \(repo, n) ->
@@ -864,85 +802,87 @@ reply target text = do
               ++ (if length roots > 1 then " in " ++ FilePath.takeFileName repo else "")
           )
 
+-- A comment the agent drafts for the reviewer on a hunk, or new text it
+-- proposes for a conversation; neither reaches GitHub until the
+-- reviewer takes it and submits.
+comment :: CommentArgs -> IO ()
+comment args = do
+  roots <- targetRepos
+  conn <- Store.openStore
+  case args of
+    Revise target text -> do
+      outcomes <- mapM (\r -> fmap ((,) r) (Feedback.proposeOn conn r target text)) roots
+      let
+        proposed (repo, outcome) = case outcome of
+          Feedback.Replied _ -> Just repo
+          Feedback.NoSuchConversation -> Nothing
+      case Maybe.mapMaybe proposed outcomes of
+        [] -> Exit.die "No such conversation recorded for this repository."
+        _ -> putStrLn "proposal recorded; the reviewer takes it with Enter"
+    Draft hunkId text -> do
+      cfg <- Config.loadConfig
+      found <- Monad.forM roots $ \root -> do
+        mode <- agentMode conn root Map.empty
+        hs <- Hunks.changeSetHunks cfg mode root
+        pure (root, List.find ((== hunkId) . Hunks.hunkId) hs)
+      case Maybe.mapMaybe (\(root, h) -> fmap ((,) root) h) found of
+        [] -> Exit.die "No such hunk in the view; remax hunks lists them."
+        ((root, h) : _) -> do
+          cached <- RemoteCache.readRemote (T.pack root)
+          Monad.void (Feedback.commentOnHunk conn root (fmap RemoteCache.cachedPull cached) h text)
+          putStrLn ("comment drafted on " ++ Hunks.hunkFile h ++ ":" ++ show (Hunks.hunkLine h) ++ "; it posts when the reviewer submits")
+
 -- JSON output ------------------------------------------------------------------
 
--- The punch list for machines (agents acting on review feedback). The
--- line text carries its +/- marker; line numbers are advisory positions
--- from when the verdict was recorded.
--- Conversations have their own repo, because a listing can now span
--- several: an agent aggregating a story's feedback needs to know which
--- checkout each conversation lives in before it can act on any of it.
-punchJson :: T.Text -> Map.Map T.Text T.Text -> [(FilePath, [Described])] -> [(FilePath, Store.TourRequest)] -> T.Text
-punchJson scope subjects listed requests =
-  let
-    lineJson line =
-      jsonObject
-        [ ("line_no", maybe "null" (T.pack . show) (Punch.punchLineNumber line))
-        , ("line", jsonString (Punch.punchLineText line))
-        , ("verdict", jsonString (Store.verdictText (Punch.punchLineVerdict line)))
-        ]
-    conversationJson (Described conversation inFile) =
-      jsonObject
-        [ ("id", jsonString (Store.groupIdToText (Punch.conversationId conversation)))
-        , ("repo", jsonString (T.pack (Punch.conversationRepo conversation)))
-        , ("file", jsonString (Punch.conversationFile conversation))
-        , ("commit_sha", maybe "null" jsonString (Punch.conversationCommitSha conversation))
-        , ("ref", maybe "null" jsonString (Punch.conversationRef conversation))
-        , ("lines", jsonArray (map lineJson (Foldable.toList (Punch.conversationLines conversation))))
-        , ("thread", threadJson (Punch.conversationThread conversation))
-        , ("awaiting", jsonString (Store.awaitingText (Punch.conversationAwaiting conversation)))
-        , ("lines_in_file", maybe "null" (jsonString . Punch.linesInFileText) inFile)
-        , ("updated_at", jsonString (Punch.conversationUpdatedAt conversation))
-        ]
-    shown = concatMap snd listed
-    listedShas =
-      Set.fromList
-        (Maybe.mapMaybe (Punch.conversationCommitSha . describedConversation) shown)
-    commits =
-      jsonObject
-        ( map
-            (\(sha, subject) -> (sha, jsonString subject))
-            (Map.toList (Map.restrictKeys subjects listedShas))
-        )
-  in
-    jsonObject
-      [ ("repo", jsonString scope)
-      , ("tour_requests", jsonArray (map (uncurry requestJson) requests))
-      , ("commits", commits)
-      ,
-        ( "conversations"
-        , jsonArray
-            (map conversationJson shown)
-        )
-      ]
+listJson :: T.Text -> [(FilePath, [Feedback.Listed])] -> [(FilePath, Store.TourRequest)] -> T.Text
+listJson scope listed requests =
+  jsonObject
+    [ ("repo", jsonString scope)
+    , ("tour_requests", jsonArray (map (uncurry requestJson) requests))
+    , ("conversations", jsonArray (map (Json.encode . Feedback.listedJson) (concatMap snd listed)))
+    ]
 
-reviewerDigest :: Maybe Store.Awaiting -> [Store.PunchRow] -> Set.Set T.Text
-reviewerDigest party rows =
-  let
-    wanted row = maybe True (== Store.awaiting (Store.punchThread row)) party
-    rowJson row =
-      jsonObject
-        [ ("key", jsonString (Store.lineKeyToText (Store.punchKey row)))
-        , ("file", jsonString (Store.punchFile row))
-        , ("commit_sha", maybe "null" jsonString (Store.punchCommitSha row))
-        , ("line", jsonString (Store.punchLine row))
-        , ("verdict", jsonString (Store.verdictText (Store.punchVerdict row)))
-        , ("thread", threadJson (filter Store.isReviewerPost (Store.punchThread row)))
-        ]
-  in
-    Set.fromList (map rowJson (filter wanted rows))
-
-threadJson :: [Store.Post] -> T.Text
-threadJson posts =
-  let
-    one post =
-      jsonObject
-        [ ("author", jsonString (Store.postAuthor post))
-        , ("body", jsonString (Store.postBody post))
-        ]
-  in
-    jsonArray (map one posts)
-
+printListed :: [Feedback.Listed] -> IO ()
+printListed described =
+  Monad.forM_ described $ \l -> do
+    TIO.putStrLn
+      ( Maybe.fromMaybe "PR-level" (Feedback.listedFile l)
+          <> "  ("
+          <> Feedback.listedKind l
+          <> ", "
+          <> Feedback.listedUpdatedAt l
+          <> ", awaiting "
+          <> Feedback.partyText (Feedback.listedParty l)
+          <> ")"
+      )
+    Monad.forM_ (Feedback.listedLines l) $ \line ->
+      Monad.unless (T.null (Feedback.listedLineText line)) $
+        TIO.putStrLn
+          ( "    "
+              <> maybe "" Store.verdictText (Feedback.listedLineVerdict line)
+              <> maybe "" (\n -> " :" <> T.pack (show n)) (Feedback.listedLineNo line)
+              <> "  "
+              <> Feedback.listedLineText line
+          )
+    Monad.forM_ (Feedback.listedPosts l) $ \post ->
+      case T.lines (Conv.markdownText (Conv.postBody post)) of
+        [] -> pure ()
+        (firstLine : more) -> do
+          let
+            who = case Conv.postAuthor post of
+              Conv.Viewer -> "reviewer"
+              Conv.Person (Conv.Login login) -> login
+              Conv.Agent (Conv.AgentName n) -> n
+            tag = case Conv.postState post of
+              Conv.Draft -> " [pending]"
+              Conv.Proposal _ -> " [proposal]"
+              _ -> ""
+            label = who <> tag <> ": "
+            indent = T.replicate (T.length label) " "
+          TIO.putStrLn ("    " <> label <> firstLine)
+          Monad.forM_ more (\ln -> TIO.putStrLn ("    " <> indent <> ln))
+    Monad.forM_ (Feedback.listedCommit l) $ \sha ->
+      TIO.putStrLn ("    commit: " <> sha)
 jsonArray :: [T.Text] -> T.Text
 jsonArray values = "[" <> T.intercalate ", " values <> "]"
 

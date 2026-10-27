@@ -68,6 +68,7 @@ Placement rules:
 - Imports follow the rules under Imports below; sibling `Remax.UI.*`
   modules are no exception.
 - `Remax.Git`, `Remax.Store`, `Remax.Conversation`, `Remax.WorkStore`,
+  `Remax.Submit`, `Remax.RemoteCache`, `Remax.Feedback`, `Remax.Json`,
   `Remax.DiffModel`, `Remax.Modal` and the
   other `Remax.*` modules are below all of `Remax.UI.*` and know nothing
   about the session state.

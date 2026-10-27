@@ -26,6 +26,7 @@ import GHC.Clock qualified as GHCClock
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.PullPoll qualified as PullPoll
+import Remax.RemoteCache qualified as RemoteCache
 import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Core.Jobs qualified as Jobs
 import Remax.UI.Core.Types qualified as Types
@@ -126,6 +127,9 @@ applyPolled polled = do
       }
   State.modify (\s -> WorkModel.withConversations s {Types.stPullMeta = Just (PullPoll.snapshotMeta snap)})
   WorkModel.placeOutdated
+  st <- State.get
+  Monad.when (PullPoll.polledFreshness polled == PullPoll.Changed) $
+    MonadIO.liftIO (RemoteCache.writeRemote (Types.repoText st) (PullPoll.snapshotPull snap) (PullPoll.snapshotRemote snap))
   case PullPoll.polledHead polled of
     GitHub.RefsFetched -> Load.refreshGit
     GitHub.RefsInPlace -> pure ()

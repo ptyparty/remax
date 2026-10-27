@@ -2,10 +2,12 @@
 
 module Remax.Hunks
   ( Hunk (..)
+  , Numbered (..)
   , changeSetHunks
   ) where
 
 import Control.Exception qualified as Exception
+import Data.List qualified as List
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -22,6 +24,7 @@ data Hunk = Hunk
   , hunkLine :: Int
   , hunkLines :: [T.Text]
   , hunkKeys :: [T.Text]
+  , hunkNumbers :: [Numbered]
   }
   deriving (Eq, Show)
 
@@ -45,11 +48,32 @@ fileHunks cfg mode root path = do
         rows = DiffModel.diffRows ws base new
         (_, runs) =
           DiffModel.assemble (Config.cfgSplit cfg) (T.pack root) (T.pack path) rows (Highlight.plainLines new)
+        number numbers r =
+          let
+            (mine, rest) = List.splitAt (length (DiffModel.runKeys r)) numbers
+          in
+            (rest, toHunk path mine r)
       in
-        Maybe.mapMaybe (toHunk path) runs
+        Maybe.catMaybes (snd (List.mapAccumL number (changedNumbers rows) runs))
 
-toHunk :: FilePath -> DiffModel.Run -> Maybe Hunk
-toHunk path r =
+data Numbered = OnBase Int | OnHead Int
+  deriving (Eq, Show)
+
+changedNumbers :: [(Char, Maybe Int, T.Text)] -> [Numbered]
+changedNumbers =
+  let
+    go base rows =
+      case rows of
+        [] -> []
+        ((mark, headNo, _) : rest) -> case mark of
+          '+' -> OnHead (maybe 1 (+ 1) headNo) : go base rest
+          '-' -> OnBase base : go (base + 1) rest
+          _ -> go (base + 1) rest
+  in
+    go 1
+
+toHunk :: FilePath -> [Numbered] -> DiffModel.Run -> Maybe Hunk
+toHunk path numbers r =
   case DiffModel.runKeys r of
     [] -> Nothing
     (first : _) ->
@@ -60,6 +84,7 @@ toHunk path r =
           , hunkLine = DiffModel.runAnchor r + 1
           , hunkLines = DiffModel.runLines r
           , hunkKeys = DiffModel.runKeys r
+          , hunkNumbers = numbers
           }
 
 fileSides :: Git.ReviewMode -> FilePath -> FilePath -> IO (Maybe ([T.Text], [T.Text]))
