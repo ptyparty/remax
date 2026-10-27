@@ -155,7 +155,7 @@ popupWord :: Types.WorkPopup -> T.Text
 popupWord wp =
   case Types.wpAction wp of
     Types.ReplyTo _ _ -> "reply"
-    Types.AskOn _ -> "ask"
+    Types.ToAgent verb _ -> Types.agentVerbWord verb
     Types.CommentOn _ -> "comment"
     Types.EditPending _ origin -> case origin of
       Types.ReplyOrigin _ -> "reply"
@@ -168,7 +168,7 @@ popupStatus :: Types.WorkPopup -> T.Text
 popupStatus wp =
   case Types.wpAction wp of
     Types.ReplyTo _ author -> "reply to " <> author
-    Types.AskOn _ -> "ask the agent about " <> T.takeWhile (/= ' ') (Types.wpPlace wp)
+    Types.ToAgent verb _ -> Types.agentVerbWord verb <> " the agent about " <> T.takeWhile (/= ' ') (Types.wpPlace wp)
     Types.CommentOn anchor -> "new comment on " <> Threads.anchorPlace anchor
     Types.EditPending _ _ -> "editing your pending text"
     Types.TakeProposal _ _ _ -> "editing the proposal as your reply"

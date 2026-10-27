@@ -351,7 +351,7 @@ postKeys keys venue post =
     T.intercalate " \183 " $
       case Conv.postState post of
         Conv.Posted {} ->
-          [key ("r " <> replyWord) ("C-c r " <> replyWord), key "? ask" "C-c ? ask"]
+          [key ("r " <> replyWord) ("C-c r " <> replyWord), key "? ask" "C-c ? ask", key "! flag" "C-c ! flag"]
             ++ (if Conv.postAuthor post == Conv.Viewer && not summary then [key "e edit" "C-c e edit"] else [])
             ++ (if summary then [] else [key "+ react" "C-c + react"])
             ++ [key "y copy link" "C-c y copy link"]
