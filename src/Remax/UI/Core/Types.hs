@@ -39,7 +39,6 @@ module Remax.UI.Core.Types
   , PullView (..)
   , SubmitFocus (..)
   , AmendTarget (..)
-  , NoteOrigin (..)
   , MarkUndo (..)
   , FileView (..)
   , St (..)
@@ -276,7 +275,7 @@ conversations already on them it could join instead.
 data NotePlan = NotePlan
   { planVerdict :: Store.Verdict
   , planSpan :: Conv.LineSpan
-  , planOrigin :: NoteOrigin
+  , planUndo :: MarkUndo
   , planChoices :: [NoteChoice]
   , planChosen :: Int
   }
@@ -382,16 +381,6 @@ data AmendTarget
     AmendHead [FilePath]
   | -- | a conflict stop, whose commit :continue has yet to make
     AmendStoppedCommit
-
--- Why a note popup is open, which decides what escaping out of it means.
---
--- Asked for by :note, the mark was already there and stays. Opened by !
--- or ?, the mark was made a moment ago by the same keystroke and has not
--- been thought about yet — backing out of the sentence backs out of the
--- verdict it was going to explain.
-data NoteOrigin
-  = NoteAsked
-  | NoteFromMark MarkUndo
 
 -- What a mark changed, kept so that escaping out of the note it opened
 -- can put it back exactly.

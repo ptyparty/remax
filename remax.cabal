@@ -130,7 +130,6 @@ executable remax
       Remax.Key
       Remax.Modal
       Remax.PullPoll
-      Remax.Punch
       Remax.RemoteCache
       Remax.SoftWrap
       Remax.Store
