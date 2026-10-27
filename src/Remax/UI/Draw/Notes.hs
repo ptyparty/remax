@@ -72,7 +72,7 @@ popupTitle np =
           Just Types.NewNote -> "new note"
           Just (Types.ReplyNote _) -> "reply"
           Just (Types.JoinNote _) -> "join"
-          Just (Types.ReplyThread _) -> "the thread"
+          Just (Types.ReplyThread _) -> "reply"
           Just (Types.ReplyOutdated _) -> "reply"
           Nothing -> "new note"
       in
@@ -128,7 +128,7 @@ choiceList np =
   in
     case Types.npPurpose np of
       Types.NoteOn plan ->
-        listed (Types.planChosen plan) (map (NoteAction.choiceLabel plan) (Types.planChoices plan))
+        listed (Types.planChosen plan) (map (NoteAction.choiceLabel (Types.planSpan plan)) (Types.planChoices plan))
       Types.WorkFor wp ->
         listed (Types.wpChosen wp) (map threadLabel (Types.wpChoices wp))
       Types.AmendMessage _ -> []
@@ -145,7 +145,7 @@ workTitle :: Types.WorkPopup -> T.Text
 workTitle wp =
   case Types.wpAction wp of
     Types.ReplyTo _ author -> "reply \183 to " <> author
-    Types.ToAgent verb _ -> Types.agentVerbWord verb <> " \183 the agent"
+    Types.AskOn _ -> "ask \183 the agent"
     Types.CommentOn anchor -> "comment \183 " <> Threads.anchorPlace anchor
     Types.EditPending _ origin -> case origin of
       Types.ReplyOrigin author -> "reply \183 to " <> author
@@ -158,7 +158,7 @@ workHint :: Types.WorkPopup -> T.Text
 workHint wp =
   case Types.wpAction wp of
     Types.ReplyTo _ _ -> "\9166 post (nor) \183 C-g inserts a sha \183 C-c discard \183 ? asks the agent instead"
-    Types.ToAgent _ _ -> "\9166 save (nor) \183 C-c discard \183 r replies on GitHub instead"
+    Types.AskOn _ -> "\9166 save (nor) \183 C-c discard \183 r replies on GitHub instead"
     Types.CommentOn _ -> "\9166 save (nor) \183 C-g inserts a sha \183 C-c discard \183 a selection pre-fills a suggestion"
     Types.EditPending _ _ -> "\9166 save (nor) \183 C-g inserts a sha \183 C-c discard changes"
     Types.TakeProposal {} -> "\9166 post (nor) \183 C-g inserts a sha \183 C-c discard \183 the proposal goes once you post"
@@ -227,7 +227,7 @@ ruleText :: Types.WorkPopup -> T.Text
 ruleText wp =
   case Types.wpAction wp of
     Types.ReplyTo _ author -> "reply to " <> author <> " \183 waits for :submit"
-    Types.ToAgent verb _ -> Types.agentVerbWord verb <> " the agent"
+    Types.AskOn _ -> "ask the agent"
     Types.CommentOn _ -> "comment \183 waits for :submit"
     Types.EditPending _ origin -> case origin of
       Types.ReplyOrigin author -> "your reply to " <> author <> " \183 waits for :submit"
