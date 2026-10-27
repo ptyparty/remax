@@ -493,8 +493,8 @@ first, and `Tab`/`S-Tab` in normal mode (`M-n`/`M-p` in emacs) pick one.
 the lines as anywhere else. `@` comments on the selection or the cursor's line as
 a new thread; a selection pre-fills a ````suggestion```` fence with its
 lines. Each popup shows where it is, the thread's log above the editor
-(older posts collapsed to one line each), a rule naming what the text
-becomes, and its keys: `⏎` in normal mode posts or saves, `C-g` opens a
+(its first post and newest two in full, the rest collapsed to one line
+each, and `C-o` unfolds them all), a rule naming what the text becomes, and its keys: `⏎` in normal mode posts or saves, `C-g` opens a
 picker of the pull request's commits and inserts the chosen sha, `C-c`
 discards, and in the reply popup `?` turns the text into a question
 for the agent while `r` in the ask popup turns it back. Replies,

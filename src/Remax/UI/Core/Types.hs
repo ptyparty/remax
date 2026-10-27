@@ -29,6 +29,7 @@ module Remax.UI.Core.Types
   , NoteChoice (..)
   , WorkPopup (..)
   , WorkAction (..)
+  , LogView (..)
   , WorkOrigin (..)
   , Band (..)
   , Outdated (..)
@@ -297,7 +298,13 @@ data WorkPopup = WorkPopup
   , wpChoices :: [Conv.Conversation]
   , wpChosen :: Int
   , wpReturnToSubmit :: Bool
+  , wpLog :: LogView
   }
+
+data LogView
+  = FoldedLog
+  | UnfoldedLog
+  deriving (Eq)
 
 data WorkAction
   = ReplyTo Conv.Target T.Text
