@@ -42,6 +42,7 @@ import Remax.UI.Core.View qualified as View
 import Remax.UI.Model.Load qualified as Load
 import Remax.UI.Model.Nav qualified as Nav
 import Remax.UI.Model.Tray qualified as TrayModel
+import Remax.UI.Model.Work qualified as WorkModel
 import Remax.Vi qualified as Vi
 import System.FilePath ((</>))
 import System.FilePath qualified as FilePath
@@ -199,6 +200,7 @@ handleEvent brickEvent =
       groups <- MonadIO.liftIO (Store.loadNoteGroups (Types.stConn st) (Types.repoText st))
       steps <- MonadIO.liftIO (Tour.loadTourFor (Types.stConn st) (Types.stRoot st) (Types.effectiveMode st))
       State.modify (\s -> Tour.installTour steps s {Types.stThreads = threads, Types.stNoteGroups = groups})
+      WorkModel.reloadWork
       Monad.when (null (Types.stTour st) && not (null steps)) startTour
     Brick.AppEvent (Types.Attending seen) -> do
       State.modify (\s -> s {Types.stAttending = seen, Types.stThrob = Types.stThrob s + 1})

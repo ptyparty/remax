@@ -31,6 +31,7 @@ import Remax.UI.Core.Jobs qualified as Jobs
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Model.Load qualified as Load
 import Remax.UI.Model.Nav qualified as Nav
+import Remax.UI.Model.Work qualified as WorkModel
 
 openPull :: Int -> Brick.EventM Types.Name Types.St ()
 openPull n = do
@@ -123,7 +124,7 @@ applyPolled polled = do
       , Types.ppFailure = Nothing
       , Types.ppNow = now
       }
-  State.modify (\s -> s {Types.stPullMeta = Just (PullPoll.snapshotMeta snap)})
+  State.modify (\s -> WorkModel.withConversations s {Types.stPullMeta = Just (PullPoll.snapshotMeta snap)})
   case PullPoll.polledHead polled of
     GitHub.RefsFetched -> Load.refreshGit
     GitHub.RefsInPlace -> pure ()

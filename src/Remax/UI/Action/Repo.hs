@@ -17,6 +17,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Remax.Config qualified as Config
+import Remax.Conversation qualified as Conv
 import Remax.Git qualified as Git
 import Remax.Store qualified as Store
 import Remax.UI.Action.Pull qualified as PullAction
@@ -28,6 +29,7 @@ import Remax.UI.Core.Verdict qualified as Verdict
 import Remax.UI.Model.Load qualified as Load
 import Remax.UI.Model.Nav qualified as Nav
 import Remax.UI.Model.Watch qualified as Watch
+import Remax.UI.Model.Work qualified as WorkModel
 import System.FilePath qualified as FilePath
 
 -- Remember where we are before stepping away.
@@ -71,6 +73,7 @@ switchRepo target = do
             work = do
               verdicts <- Store.loadVerdicts conn (T.pack target)
               threads <- Store.loadThreads conn (T.pack target)
+              own <- WorkModel.loadFor conn target mode
               groups <- Store.loadNoteGroups conn (T.pack target)
               rebase <- Git.rebaseStatus target
               (branch, headAt) <- Git.subjectPlace (Types.rebaseEffMode rebase mode) target
@@ -88,7 +91,7 @@ switchRepo target = do
               -- and the rest of it in the background, so the first change in a
               -- directory nothing is changed in yet is noticed here too
               Watch.watchTracked (Types.stWatch st) target
-              pure (verdicts, threads, groups, rebase, branch, headAt, files, tour)
+              pure (verdicts, threads, own, groups, rebase, branch, headAt, files, tour)
           Jobs.startJob ("opening " <> T.pack (FilePath.takeFileName target)) work $ \outcome ->
             case outcome of
               Left err -> Jobs.jobFailed "opening" err
@@ -106,6 +109,7 @@ arriveAt ::
   DataInt.Int64 ->
   ( Map.Map T.Text Store.Verdict
   , Map.Map T.Text [Store.Post]
+  , Conv.OwnWork
   , Map.Map T.Text T.Text
   , Maybe Git.RebaseStatus
   , Maybe T.Text
@@ -116,10 +120,9 @@ arriveAt ::
   Brick.EventM Types.Name Types.St ()
 arriveAt target remembered saved mode passId loaded = do
   let
-    (verdicts, threads, groups, rebase, branch, headAt, files, tour) = loaded
+    (verdicts, threads, own, groups, rebase, branch, headAt, files, tour) = loaded
   State.modify $ \s ->
-    Tour.installTour
-      tour
+    WorkModel.withConversations . Tour.installTour tour $
       s
         { Types.stRoot = target
         , Types.stEpoch = Types.stEpoch s + 1
@@ -130,6 +133,7 @@ arriveAt target remembered saved mode passId loaded = do
         , Types.stFiles = files
         , Types.stVerdicts = verdicts
         , Types.stThreads = threads
+        , Types.stWork = own
         , Types.stCountedVerdicts = verdicts
         , Types.stCountedThreads = threads
         , Types.stNoteGroups = groups

@@ -235,6 +235,53 @@ openStore = do
     \  origin_url TEXT PRIMARY KEY,\
     \  name_with_owner TEXT NOT NULL,\
     \  resolved_at TEXT NOT NULL DEFAULT (datetime('now')))"
+  SQLite.execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS work (\
+    \  id INTEGER PRIMARY KEY AUTOINCREMENT,\
+    \  repo TEXT NOT NULL,\
+    \  pull INTEGER,\
+    \  target_kind TEXT NOT NULL CHECK (target_kind IN ('thread','comment','new','note')),\
+    \  target_id TEXT NOT NULL,\
+    \  kind TEXT NOT NULL CHECK (kind IN ('proposed','pending','aside','edit')),\
+    \  author TEXT NOT NULL,\
+    \  body TEXT NOT NULL,\
+    \  comment_id INTEGER,\
+    \  created_at TEXT NOT NULL DEFAULT (datetime('now')))"
+  SQLite.execute_
+    conn
+    "CREATE INDEX IF NOT EXISTS work_repo ON work(repo, target_kind, target_id)"
+  SQLite.execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS work_target (\
+    \  repo TEXT NOT NULL,\
+    \  local_id TEXT PRIMARY KEY,\
+    \  kind TEXT NOT NULL CHECK (kind IN ('new','note')),\
+    \  anchor TEXT NOT NULL CHECK (anchor IN ('lines','pull')),\
+    \  path TEXT NOT NULL,\
+    \  side TEXT NOT NULL,\
+    \  commit_sha TEXT,\
+    \  verdict TEXT,\
+    \  created_at TEXT NOT NULL DEFAULT (datetime('now')))"
+  SQLite.execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS work_target_line (\
+    \  repo TEXT NOT NULL,\
+    \  local_id TEXT NOT NULL,\
+    \  seq INTEGER NOT NULL,\
+    \  key TEXT NOT NULL,\
+    \  line_no INTEGER NOT NULL,\
+    \  line TEXT NOT NULL,\
+    \  PRIMARY KEY (local_id, seq))"
+  SQLite.execute_
+    conn
+    "CREATE INDEX IF NOT EXISTS work_target_line_key ON work_target_line(repo, key)"
+  SQLite.execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS work_submitted (\
+    \  repo TEXT NOT NULL,\
+    \  local_id TEXT PRIMARY KEY,\
+    \  thread_id TEXT NOT NULL)"
   -- several instances (sessions, agent CLI calls) share this file; WAL
   -- lets readers proceed under a writer instead of stacking on the lock
   Monad.void (SQLite.query_ conn "PRAGMA journal_mode = WAL" :: IO [SQLite.Only T.Text])

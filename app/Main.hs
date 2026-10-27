@@ -31,6 +31,7 @@ import Remax.Hunks qualified as Hunks
 import Remax.Punch qualified as Punch
 import Remax.Store qualified as Store
 import Remax.UI qualified as UI
+import Remax.WorkStore qualified as WorkStore
 import System.Posix.Process qualified as Posix
 
 data ModeArg
@@ -566,8 +567,9 @@ forget mPath = do
       answer <- getLine
       if answer == "y"
         then do
-          Monad.forM_ hits $ \(root, _, rows) ->
+          Monad.forM_ hits $ \(root, _, rows) -> do
             Store.deleteFiles conn (T.pack root) (List.nub (map snd rows))
+            WorkStore.forgetWork conn (T.pack root)
           putStrLn ("  \10003 forgot " ++ show doomedCount ++ " line verdict(s)")
         else putStrLn "  left alone"
 
