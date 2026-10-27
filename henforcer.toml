@@ -721,6 +721,12 @@ qualified = { qualifiedPost = true }
 alias = "Events"
 
 [[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Core.Markdown"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Markdown"
+
+[[forAnyModule.allowedQualifications]]
 module = "Remax.UI.Model.Work"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }

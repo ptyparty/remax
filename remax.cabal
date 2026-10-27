@@ -155,6 +155,7 @@ executable remax
       Remax.UI.Core.Attrs
       Remax.UI.Core.Ink
       Remax.UI.Core.Jobs
+      Remax.UI.Core.Markdown
       Remax.UI.Core.Tour
       Remax.UI.Core.Types
       Remax.UI.Core.Verdict

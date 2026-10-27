@@ -52,6 +52,11 @@ module Remax.UI.Core.Attrs
   , meterOnAttr
   , meterOffAttr
   , hairAttr
+  , mdHeadingAttr
+  , mdBoldAttr
+  , mdCodeAttr
+  , mdLinkAttr
+  , mdTableHeaderAttr
   , fgOnly
   , mkAttrMap
   ) where
@@ -113,7 +118,12 @@ headerAttr
   , matchCharAttr
   , meterOnAttr
   , meterOffAttr
-  , hairAttr ::
+  , hairAttr
+  , mdHeadingAttr
+  , mdBoldAttr
+  , mdCodeAttr
+  , mdLinkAttr
+  , mdTableHeaderAttr ::
     Brick.AttrName
 headerAttr = Brick.attrName "header"
 headerFileAttr = headerAttr <> Brick.attrName "file"
@@ -137,6 +147,11 @@ matchCharAttr = Brick.attrName "matchChar"
 meterOnAttr = Brick.attrName "meterOn"
 meterOffAttr = Brick.attrName "meterOff"
 hairAttr = Brick.attrName "hairline"
+mdHeadingAttr = Brick.attrName "mdHeading"
+mdBoldAttr = Brick.attrName "mdBold"
+mdCodeAttr = Brick.attrName "mdCode"
+mdLinkAttr = Brick.attrName "mdLink"
+mdTableHeaderAttr = Brick.attrName "mdTableHeader"
 cursorMarkAttr = Brick.attrName "cursorMark"
 addedMarkAttr = Brick.attrName "addedMark"
 removedMarkAttr = Brick.attrName "removedMark"
@@ -354,6 +369,11 @@ mkAttrMap mth =
       , (meterOnAttr, BrickUtil.fg inkGreen)
       , (meterOffAttr, BrickUtil.fg meterRail)
       , (hairAttr, BrickUtil.fg hairInk)
+      , (mdHeadingAttr, BrickUtil.fg inkText `V.withStyle` V.bold `V.withStyle` V.underline)
+      , (mdBoldAttr, BrickUtil.fg inkText `V.withStyle` V.bold)
+      , (mdCodeAttr, BrickUtil.fg inkText `V.withBackColor` codeWash)
+      , (mdLinkAttr, BrickUtil.fg inkBlue `V.withStyle` V.underline)
+      , (mdTableHeaderAttr, BrickUtil.fg inkText `V.withStyle` V.underline)
       ]
     settlePairs =
       map (\n -> (settleAttr n, V.defAttr `V.withBackColor` settleShade n)) [1 .. settleFrames]
@@ -393,5 +413,7 @@ pendingWash = V.linearColor (0x0e :: Int) 0x10 0x15
 flaggedWash = V.linearColor (0x24 :: Int) 0x17 0x1b
 questionedWash = V.linearColor (0x22 :: Int) 0x1f 0x14
 hairInk = V.linearColor (0x2c :: Int) 0x2c 0x2c
+codeWash :: V.Color
+codeWash = V.linearColor (0x1e :: Int) 0x1e 0x24
 meterRail = V.linearColor (0x3a :: Int) 0x3f 0x3a
 matchGold = V.linearColor (0xfa :: Int) 0xd0 0x7a
