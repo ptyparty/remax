@@ -42,8 +42,7 @@ import Remax.WorkStore qualified as WorkStore
 
 -- A flag or question wants its reason on record: the note popup opens
 -- right away (config: note-on-flag = 0 turns this off), targeting the
--- lines just marked. Discarding keeps the mark, only the note is
--- skipped.
+-- lines just marked. Discarding the note cancels the mark too.
 markThenNote :: Store.Verdict -> Brick.EventM Types.Name Types.St ()
 markThenNote v = do
   preSt <- State.get
@@ -65,7 +64,7 @@ markThenNote v = do
             , Types.muCounts = Types.stCounts preSt
             , Types.muPunch = Types.stPunch preSt
             }
-      openNotePopup v (Types.NoteFromMark undoing)
+      openNotePopup v undoing
       opened <- State.get
       case Types.stNotePopup opened of
         Nothing -> VerdictAction.runDeferredAdvance
@@ -105,8 +104,8 @@ choicesFor st lineSpan =
       in
         Types.NewNote : concatMap choices touched
 
-openNotePopup :: Store.Verdict -> Types.NoteOrigin -> Brick.EventM Types.Name Types.St ()
-openNotePopup v origin = do
+openNotePopup :: Store.Verdict -> Types.MarkUndo -> Brick.EventM Types.Name Types.St ()
+openNotePopup v undoing = do
   st <- State.get
   case markedSpan st of
     Nothing -> Types.setMsg "nothing to note — mark lines with ! or ? first"
@@ -118,7 +117,7 @@ openNotePopup v origin = do
           Types.NotePlan
             { Types.planVerdict = v
             , Types.planSpan = lineSpan
-            , Types.planOrigin = origin
+            , Types.planUndo = undoing
             , Types.planChoices = choicesFor st lineSpan
             , Types.planChosen = 0
             }
@@ -263,17 +262,14 @@ discardNote :: Types.NotePopup -> Brick.EventM Types.Name Types.St ()
 discardNote np = do
   let
     discardMsg = case Types.npPurpose np of
-      Types.NoteOn plan -> case Types.planOrigin plan of
-        Types.NoteAsked -> "note discarded"
-        Types.NoteFromMark _ -> "mark cancelled"
+      Types.NoteOn _ -> "mark cancelled"
       Types.AmendMessage _ -> "amend cancelled"
       Types.WorkFor _ -> "discarded"
   State.modify (\s -> s {Types.stNotePopup = Nothing, Types.stMsg = discardMsg, Types.stVi = Vi.viIdle})
   case Types.npPurpose np of
-    Types.NoteOn plan
-      | Types.NoteFromMark undoing <- Types.planOrigin plan -> do
-          VerdictAction.cancelMark undoing
-          State.modify (\s -> s {Types.stDeferAdvance = False})
+    Types.NoteOn plan -> do
+      VerdictAction.cancelMark (Types.planUndo plan)
+      State.modify (\s -> s {Types.stDeferAdvance = False})
     _ -> VerdictAction.runDeferredAdvance
 
 saveNote :: Types.NotePopup -> Brick.EventM Types.Name Types.St ()

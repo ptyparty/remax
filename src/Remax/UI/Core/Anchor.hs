@@ -2,7 +2,6 @@
 
 module Remax.UI.Core.Anchor
   ( anchorIn
-  , anchorRows
   , anchorCovers
   , conversationsAt
   , conversationsIn
@@ -90,28 +89,6 @@ survives byKey lineSpan =
     case (first, final) of
       (Just a, Just b) | a <= b -> Survives b
       _ -> Gone
-
--- | The display rows a local anchor still covers, for washing them.
-anchorRows :: Types.FileView -> Conv.Anchor -> [Int]
-anchorRows fv anchor =
-  let
-    path = T.pack (Types.fvPath fv)
-    rows = zip [0 ..] (locate (Types.fvRows fv))
-    keyed keys = Maybe.mapMaybe (\(i, l) -> if any (`elem` keys) (rowKeys (locRow l)) then Just i else Nothing) rows
-  in
-    case anchor of
-      Conv.OnLines lineSpan | Conv.spanPath lineSpan == path -> keyed (map Store.lineKeyToText (Conv.spanKeys lineSpan))
-      Conv.OnPosition pos
-        | Conv.posPath pos == path ->
-            let
-              lo = Maybe.fromMaybe (Conv.posLine pos) (Conv.posStartLine pos)
-              hi = Conv.posLine pos
-              lineOf l = case Conv.posSide pos of
-                Conv.HeadSide -> locHead l
-                Conv.BaseSide -> locBase l
-            in
-              Maybe.mapMaybe (\(i, l) -> if maybe False (\n -> n >= lo && n <= hi) (lineOf l) then Just i else Nothing) rows
-      _ -> []
 
 {- | Whether a row sits inside an anchor's range, by its keys for a local
 span or by its head line for a GitHub position. A base-side position
