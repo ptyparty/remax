@@ -19,7 +19,6 @@ module Remax.UI.Action.Threads
   , copyKey
   , resolveKey
   , editPostedKey
-  , resolveOnAccept
   , githubJob
   , pollSoon
   , aimAt
@@ -533,7 +532,7 @@ copyKey = do
           pure Handled
     _ -> pure Unhandled
 
--- | Resolve the selected post's thread, or the thread under the line.
+-- | Resolve or unresolve the selected post's thread, or the thread under the line.
 resolveKey :: Brick.EventM Types.Name Types.St Handled
 resolveKey = do
   st <- State.get
@@ -552,28 +551,13 @@ resolveConversation conv = do
   case Conv.convVenue conv of
     Conv.ReviewThread (Just tid) Store.Unresolved -> do
       leaveBand
-      githubJob "resolving the thread" (GitHub.resolveThread (Types.stRoot st) tid) "resolved on GitHub"
+      githubJob "resolving the thread" (GitHub.setThreadResolution (Types.stRoot st) Store.Resolved tid) "resolved on GitHub"
       pure Handled
-    Conv.ReviewThread (Just _) Store.Resolved -> do
-      Types.setMsg "already resolved"
+    Conv.ReviewThread (Just tid) Store.Resolved -> do
+      leaveBand
+      githubJob "unresolving the thread" (GitHub.setThreadResolution (Types.stRoot st) Store.Unresolved tid) "unresolved on GitHub"
       pure Handled
     _ -> pure Unhandled
-
--- | Accepting lines resolves the open GitHub threads that sit on them.
-resolveOnAccept :: Types.FileView -> [T.Text] -> Brick.EventM Types.Name Types.St ()
-resolveOnAccept fv keys = do
-  st <- State.get
-  let
-    path = T.pack (Types.fvPath fv)
-    acceptedRows = filter (\r -> maybe False (`elem` keys) (DiffModel.rKey r)) (Types.fvRows fv)
-    onAccepted conv = any (\r -> Anchor.anchorCovers path r (Conv.convAnchor conv)) acceptedRows
-    open conv = case Conv.convVenue conv of
-      Conv.ReviewThread (Just tid) Store.Unresolved -> Just tid
-      _ -> Nothing
-    here = Anchor.conversationsIn st (concat (Map.elems (Types.fvThreads fv)))
-    tids = Maybe.mapMaybe open (filter onAccepted here)
-  Monad.forM_ tids $ \tid ->
-    githubJob "resolving the thread" (GitHub.resolveThread (Types.stRoot st) tid) "resolved on GitHub"
 
 editPostedKey :: Brick.EventM Types.Name Types.St Handled
 editPostedKey = do

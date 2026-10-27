@@ -196,7 +196,7 @@ Normal mode:
 | `u` | undo |
 | `y` | yank the selection (or cursor cell) — line-wise for `x` selections; the yank slot is session-wide, so paste works across files (and the note popup), and it goes to the **system clipboard** too |
 | `p` / `P` | paste after / before: whole lines below/above for a line-wise yank, after/at the cursor otherwise; the paste is selected. Pastes the **system clipboard** when it holds something copied outside the session, the yank slot otherwise |
-| `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `e` `$EDITOR` here, `p` walk filter (pending / unresolved / all), `w` toggle ignore-whitespace, `u` resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
+| `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `e` `$EDITOR` here, `p` walk filter (pending / unresolved / all), `w` toggle ignore-whitespace, `u` resolve or unresolve the thread, or resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
 | `.` | repeat the last insert session (the entering command plus what was typed), helix-style — `c`-fix-`Esc` then `.` applies the same change at the cursor |
 | `Enter` | **accept the selection as reviewed** — a selection is required, so what you accept is always visibly highlighted (`X Enter` for the hunk you're looking at). Completing a hunk jumps to the next pending one; a partial mark steps to the next line |
 | `!` / `?` | flag-to-return-to / question — the selection's lines, or the whole current hunk with none. The note popup opens immediately for the reason (`note-on-flag = 0` in the config turns that off); discarding it (`Ctrl-c`, or `Esc` from its normal mode) cancels the mark as well, since the verdict has not been explained yet — save an empty note to keep the mark without one. The jump to the next hunk waits until the popup closes, and never happens if the mark is cancelled |
@@ -475,7 +475,8 @@ selected post wears a strip of its keys and the status line names it.
 On another reviewer's post: `r` replies, `?` asks the agent about the
 thread, `+` opens a picker of GitHub's eight reactions (one of yours
 again removes it), `y` copies the post's link and `Space u` resolves the
-thread on GitHub at once, as accepting its lines does. On your own
+thread on GitHub at once, or unresolves a resolved one. Accepting its
+lines leaves the thread as it is. On your own
 posted comment `e` reopens it and saving edits it on GitHub at once. On your pending text: `e` reopens
 it in the popup it was written in and `dd` discards it, asking first
 when text was typed. On an agent's proposal: `⏎` takes it as your own
@@ -553,7 +554,7 @@ counts `drafts · N to send · :submit sends`.
 post wears its key strip: `r` replies (on a PR-level comment or a
 review summary, a quote-reply as a new PR-level comment), `?` asks, `+`
 reacts (not on a review summary, which GitHub gives no reactions), `y`
-copies the link, `Space u` resolves a thread, `e` and `dd` act on your pending text, and
+copies the link, `Space u` resolves or unresolves a thread, `e` and `dd` act on your pending text, and
 `⏎` takes a proposal or, on a thread's posted comment, opens its lines
 in the diff. `@` drafts a PR-level comment.
 

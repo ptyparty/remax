@@ -285,7 +285,7 @@ spaceMenuEntries =
   , ("e", "$EDITOR here", Editor.editCurrent)
   , ("p", "walk filter: pending / unresolved / all", VerdictAction.cycleWalkFilter)
   , ("w", "toggle ignore whitespace", Settings.toggleIgnoreWs)
-  , ("u", "resolve the thread or note here", resolveOrUnnote)
+  , ("u", "resolve or unresolve the thread, or resolve the note here", resolveOrUnnote)
   , ("h", "make this hunk current", Nav.setCurrentHunkHere)
   , ("r", "revert hunk to base", VerdictAction.revertTarget)
   , ("a", "alternate file", Open.gotoAltFile)
