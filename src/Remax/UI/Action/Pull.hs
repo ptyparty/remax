@@ -279,25 +279,24 @@ editAtRebaseStop pr rb = do
         <> (if T.null (Git.rebaseSha rb) then "the stopped commit" else Git.rebaseSha rb)
     )
 
-data CheckoutOutcome = TreeDirty | CheckoutRefused GitHub.GhFailure | CheckedOut
+data CheckoutOutcome = CheckoutRefused GitHub.GhFailure | CheckedOut
 
-checkoutUnlessDirty :: FilePath -> Git.PullRequest -> IO CheckoutOutcome
-checkoutUnlessDirty root pr = do
-  dirty <- Git.trackedChanges root
-  if dirty
-    then pure TreeDirty
+checkoutUnlessOnHead :: FilePath -> Git.PullRequest -> IO CheckoutOutcome
+checkoutUnlessOnHead root pr = do
+  branch <- Git.currentBranch root
+  if branch == Just (Git.prHeadBranch pr)
+    then pure CheckedOut
     else fmap (either CheckoutRefused (const CheckedOut)) (GitHub.checkoutPull root (Git.prRepo pr) (Git.prNumber pr))
 
 checkoutPull :: Types.St -> Git.PullRequest -> Brick.EventM Types.Name Types.St ()
 checkoutPull st pr = do
   let
     label = "checking out " <> Git.pullLabel pr
-  Jobs.startJob label (checkoutUnlessDirty (Types.stRoot st) pr) $ \outcome -> do
+  Jobs.startJob label (checkoutUnlessOnHead (Types.stRoot st) pr) $ \outcome -> do
     latest <- State.get
     Monad.when (Types.stEpoch latest == Types.stEpoch st && onPull latest (Git.prNumber pr)) $
       case outcome of
         Left err -> Jobs.jobFailed label err
-        Right TreeDirty -> Types.setMsg "tracked changes in the tree \8212 commit or stash before :pr edit"
         Right (CheckoutRefused failure) -> Types.setMsg ("! " <> GitHub.failureText failure)
         Right CheckedOut -> do
           Settings.setMode (Git.AtPull (Git.pullAtHead pr) Git.Checkout)
