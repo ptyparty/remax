@@ -123,6 +123,7 @@ snapshotMeta snap =
       , GitHub.metaState = pullStateText (pullHeadState h)
       , GitHub.metaHeadBranch = pullHeadBranch h
       , GitHub.metaBaseBranch = pullHeadBaseBranch h
+      , GitHub.metaAuthor = pullHeadAuthor h
       , GitHub.metaChecks = snapshotChecks snap
       }
 

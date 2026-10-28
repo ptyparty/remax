@@ -24,13 +24,12 @@ import Remax.UI.Core.PullView qualified as PullView
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.View qualified as View
 import Remax.UI.Model.Nav qualified as Nav
-import Remax.Vi qualified as Vi
 
 openPullView :: Brick.EventM Types.Name Types.St ()
 openPullView = do
   st <- State.get
   case Git.subjectOf (Types.stMode st) of
-    Git.Pull _ _ -> State.modify (\s -> s {Types.stPullView = Just Types.PullView, Types.stBand = Nothing, Types.stVi = Vi.viIdle})
+    Git.Pull _ _ -> State.modify Types.showPullView
     _ -> Types.setMsg "no pull request open \8212 :pr opens one"
 
 togglePullView :: Brick.EventM Types.Name Types.St ()

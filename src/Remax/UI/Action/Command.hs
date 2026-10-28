@@ -25,7 +25,6 @@ import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Picker qualified as PickerAction
 import Remax.UI.Action.Pull qualified as PullAction
-import Remax.UI.Action.PullView qualified as PullViewAction
 import Remax.UI.Action.Rebase qualified as Rebase
 import Remax.UI.Action.Repo qualified as Repo
 import Remax.UI.Action.Settings qualified as Settings
@@ -73,7 +72,7 @@ commandTable =
   , ("edit", ArgPath, "$EDITOR at the cursor (or on PATH)")
   , ("set", ArgSet, "change a setting (live + persisted)")
   , ("checkout", NoArg, "switch branches (picker)")
-  , ("pr", ArgPull, "open pull request N read-only; bare :pr or :pr list picks one; :pr commits walks its commits; :pr edit checks it out, :pr review returns")
+  , ("pr", ArgPull, "open pull request N on its page, in edit mode if it is yours and checked out; bare :pr picks one; :pr commits walks its commits; :pr edit checks it out, :pr review returns")
   , ("submit", NoArg, "send every pending comment and reply to GitHub as one review")
   , ("q", NoArg, "quit")
   ]
@@ -112,7 +111,7 @@ cmdCandidates st input =
       ["set", "keys"] -> prefixed Config.keyModeNames
       ["set", "note-on-flag"] -> prefixed ["0", "1"]
       ["resolve"] -> prefixed ["all"]
-      ["pr"] -> prefixed ["list", "commits", "edit", "review"]
+      ["pr"] -> prefixed ["commits", "edit", "review"]
       [cmd] -> case argKindOf cmd of
         Just ArgRef -> prefixed ("branch" : Types.stCmdRefs st)
         Just ArgMode -> prefixed modeNames
@@ -195,8 +194,7 @@ runCommand input =
     ["base"] -> PickerAction.openBasePicker
     ["checkout"] -> PickerAction.openBranchPicker
     ["checkout", branch] -> PickerAction.applyCheckout branch
-    ["pr"] -> barePullCommand
-    ["pr", "list"] -> PickerAction.openPullPicker
+    ["pr"] -> PickerAction.openPullPicker
     ["pr", "commits"] -> PullAction.startCommitWalk
     ["pr", "edit"] -> PullAction.editPull
     ["submit"] -> SubmitAction.openSubmit
@@ -243,13 +241,6 @@ runCommand input =
     ["edit", path] -> editPath path
     [tok] | Just n <- lineAddress tok -> Nav.gotoLine n
     _ -> Types.setMsg ("unknown command: " <> input)
-
-barePullCommand :: Brick.EventM Types.Name Types.St ()
-barePullCommand = do
-  st <- State.get
-  case Git.subjectOf (Types.stMode st) of
-    Git.Pull _ _ -> PullViewAction.openPullView
-    _ -> PickerAction.openPullPicker
 
 setWalkNamed :: T.Text -> Brick.EventM Types.Name Types.St ()
 setWalkNamed which =

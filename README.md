@@ -356,7 +356,7 @@ stays a prefix there too.
 | `:N` | jump to line N of the current file, clamped to its ends — the cursor moves, the hunk under review and the `'` anchor don't |
 | `:edit [PATH]` | suspend into `$EDITOR` at the cursor (or on PATH) |
 | `:checkout` | switch branches — a picker over local branches in the same columns (branch, how long ago, the tip you'd land on, subject), most recently committed first with `← current` marked; `⏎` checks out. `:checkout NAME` skips the picker. Refused mid-rebase |
-| `:pr` | open a pull request of the repository this checkout belongs to, read-only — a picker over its open pull requests (number, author, title, age, CI, your review state, a `draft` mark, and `← open` on the one under review); `⏎` opens the row. `:pr N` skips the picker; `:pr list` opens it while a pull request is already open, `:pr commits` walks its commits, `:pr edit` checks it out to address its feedback and `:pr review` returns to the read-only head. See [Reviewing a pull request](#reviewing-a-pull-request) |
+| `:pr` | open a pull request of the repository this checkout belongs to — a picker over its open pull requests (number, author, title, age, CI, your review state, a `draft` mark, and `← open` on the one under review); `⏎` opens the row on its [PR view](#the-pr-view). `:pr N` skips the picker; `:pr commits` walks its commits, `:pr edit` checks it out to address its feedback and `:pr review` returns to the read-only head. See [Reviewing a pull request](#reviewing-a-pull-request) |
 | `:q` | quit |
 
 The command line completes itself: a bare `:` lists every command with
@@ -400,7 +400,7 @@ from your shell and the open session tracks every stop.
 ## Reviewing a pull request
 
 `remax --pr N`, `:pr N` or a row of the `:pr` picker opens pull request N
-of the GitHub repository this checkout belongs to. remax asks `gh` for
+of the GitHub repository this checkout belongs to, on its [PR view](#the-pr-view); `Esc` goes on to the diff. Your own pull request opens in feedback mode when its branch is checked out. Every other pull request opens read-only, and on your own the status line says `:pr edit checks it out`. remax asks `gh` for
 everything and keeps no token of its own: `gh repo view` names the
 repository, cached per `origin` URL and asked again when the remote
 changes or GitHub no longer knows the pull request there. The session
@@ -411,8 +411,7 @@ merge-base, so the diff is the one GitHub shows.
 The review is read-only, like `--ref`. The header reads `PR #N review`,
 and the git bar becomes `#N branch→base · head…base · review · checks`.
 `!` is refused with `read-only: @ drafts a comment`; `?` asks the agent
-as anywhere else. Bare `:pr` while a pull request is open names `:pr
-list`, the way to pick another. `:mode tree` returns to the working tree.
+as anywhere else. Bare `:pr` picks another. `:mode tree` returns to the working tree.
 
 While a pull request is open the session polls GitHub about every ten
 seconds. It asks for the pull request, its review comments, conversation,
@@ -544,9 +543,7 @@ are gone they do not draw.
 
 ### The PR view
 
-`Space c` (`C-c c` in emacs), or bare `:pr` while a pull request is
-open, shows the pull request's own page in place of the body; `Esc`
-returns. It opens with the title, a line of facts (author, commits,
+Opening a pull request lands on its own page, in place of the body. `Esc` goes to the diff and `Space c` (`C-c c` in emacs) returns. It opens with the title, a line of facts (author, commits,
 force-pushes, reviewers, labels, `draft`), the description rendered as
 Markdown, `checks  ✓ N passed · mergeable` (`c`, or `C-c k`, lists the
 checks), then the conversation on one gutter: each PR-level comment and

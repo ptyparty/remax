@@ -289,9 +289,10 @@ review marg = do
     ArgPull n -> do
       conn <- Store.openStore
       opened <- openPullArg conn root n
+      start <- GitHub.pullStart root opened
       pure
         Opening
-          { openingMode = GitHub.openedMode opened
+          { openingMode = GitHub.startedMode start opened
           , openingPullMeta = Just (GitHub.openedMeta opened)
           }
   UI.runReview (openingMode opening) (openingPullMeta opening) root roots story
