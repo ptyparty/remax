@@ -95,7 +95,10 @@ draws, from the store and the last poll's cache, then the lines with a
 verdict that no conversation covers.
 -}
 listFor :: SQLite.Connection -> FilePath -> IO [Listed]
-listFor conn root = do
+listFor conn root = fmap snd (listScoped conn root)
+
+listScoped :: SQLite.Connection -> FilePath -> IO (Maybe Int, [Listed])
+listScoped conn root = do
   let
     repo = T.pack root
   cached <- RemoteCache.readRemote repo
@@ -116,7 +119,7 @@ listFor conn root = do
     covered = Map.fromList (map (\k -> (k, ())) (concatMap listedVerdictKeys listedConvs))
     bare = filter (\r -> Map.notMember (Store.punchKey r) covered) rows
     bareGroups = Map.fromListWith (flip (++)) (map (\r -> ((Store.punchFile r, Store.punchCommitSha r), [r])) bare)
-  pure (listedConvs ++ map (bareListed root) (Map.elems bareGroups))
+  pure (pull, listedConvs ++ map (bareListed root) (Map.elems bareGroups))
 
 positionTexts :: FilePath -> Maybe Int -> [Conv.Conversation] -> IO (Map.Map (Conv.Side, T.Text) [T.Text])
 positionTexts root pull convs =
@@ -223,10 +226,10 @@ with no note yet takes a fresh note on its lines.
 -}
 replyTo :: SQLite.Connection -> FilePath -> T.Text -> T.Text -> IO Reply
 replyTo conn root target text = do
-  listed <- listFor conn root
+  (pull, listed) <- listScoped conn root
   let
     repo = T.pack root
-    scope = WorkStore.Scope {WorkStore.scopeRepo = repo, WorkStore.scopePull = Nothing}
+    scope = WorkStore.Scope {WorkStore.scopeRepo = repo, WorkStore.scopePull = pull}
     body = Conv.Markdown text
   case List.find ((== target) . listedId) listed of
     Nothing -> pure NoSuchConversation
@@ -279,9 +282,9 @@ commentOnHunk conn root pull hunk text = do
 -- | The agent's proposed text on a conversation; the next replaces it.
 proposeOn :: SQLite.Connection -> FilePath -> T.Text -> T.Text -> IO Reply
 proposeOn conn root target text = do
-  listed <- listFor conn root
+  (pull, listed) <- listScoped conn root
   let
-    scope = WorkStore.Scope {WorkStore.scopeRepo = T.pack root, WorkStore.scopePull = Nothing}
+    scope = WorkStore.Scope {WorkStore.scopeRepo = T.pack root, WorkStore.scopePull = pull}
   case List.find ((== target) . listedId) listed >>= listedTarget of
     Nothing -> pure NoSuchConversation
     Just t -> do
