@@ -20,18 +20,16 @@ module Remax.WorkStore
   ) where
 
 import Control.Monad qualified as Monad
-import Data.Digest.Pure.SHA qualified as SHA
 import Data.Int qualified as DataInt
 import Data.List qualified as List
 import Data.List.NonEmpty qualified as NEL
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as TL
-import Data.Text.Lazy.Encoding qualified as TLE
 import Data.Time.Clock qualified as Clock
 import Database.SQLite.Simple qualified as SQLite
 import Remax.Conversation qualified as Conv
+import Remax.Key qualified as Key
 import Remax.Store qualified as Store
 
 -- | Which repository's work, and which pull request's when one is open.
@@ -384,4 +382,4 @@ newLocalId repo keys = do
   now <- Clock.getCurrentTime
   let
     seed = T.intercalate "\NUL" ("remax/work/1" : repo : T.pack (show now) : map Store.lineKeyToText keys)
-  pure (Conv.LocalId (T.take 16 (T.pack (SHA.showDigest (SHA.sha256 (TLE.encodeUtf8 (TL.fromStrict seed)))))))
+  pure (Conv.LocalId (T.take 16 (Key.sha256Hex seed)))

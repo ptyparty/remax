@@ -8,15 +8,13 @@ module Remax.RemoteCache
   ) where
 
 import Control.Exception qualified as Exception
-import Data.Digest.Pure.SHA qualified as SHA
 import Data.List.NonEmpty qualified as NEL
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import Data.Text.Lazy qualified as TL
-import Data.Text.Lazy.Encoding qualified as TLE
 import Remax.Conversation qualified as Conv
 import Remax.Json qualified as Json
+import Remax.Key qualified as Key
 import Remax.Store qualified as Store
 import System.Directory qualified as Directory
 import System.FilePath ((</>))
@@ -34,7 +32,7 @@ cachePath :: T.Text -> IO FilePath
 cachePath repo = do
   dir <- Directory.getXdgDirectory Directory.XdgCache "remax"
   let
-    name = T.unpack (T.take 16 (T.pack (SHA.showDigest (SHA.sha256 (TLE.encodeUtf8 (TL.fromStrict repo))))))
+    name = T.unpack (T.take 16 (Key.sha256Hex repo))
   pure (dir </> "pull" </> name <> ".json")
 
 writeRemote :: T.Text -> Int -> Conv.Remote -> IO ()
