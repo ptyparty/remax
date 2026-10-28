@@ -108,7 +108,6 @@ pullBar st pr editing =
         , Brick.txt "0@ 0\8801"
         , dot
         , checksSeg
-        , Brick.withAttr Attrs.hintAttr (Brick.txt (if Maybe.isJust (Types.stPullView st) then "   esc body" else "   \9251c PR"))
         ]
 
 -- The commit under review gets its own full-width bar during a rebase:
