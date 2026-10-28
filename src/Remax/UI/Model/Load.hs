@@ -532,6 +532,7 @@ data Refresh = Refresh
   , rfBranch :: Maybe T.Text
   , rfHead :: Maybe (T.Text, T.Text)
   , rfBaseAt :: Maybe T.Text
+  , rfLocal :: Maybe Git.PullLocal
   , rfResults :: [Refreshed]
   }
 
@@ -567,6 +568,9 @@ refreshWork st = do
   baseAt <- case Git.subjectOf mode of
     Git.Pull pr _ -> fmap (fmap fst) (Git.commitAt root (Git.prBase pr))
     _ -> pure Nothing
+  local <- case Git.subjectOf mode of
+    Git.Pull pr Git.Checkout -> fmap Just (Git.pullLocal root pr)
+    _ -> pure Nothing
   let
     tipSettled = case Git.sourceOf mode of
       Git.FromRef _ -> headNow == Types.stHead st && baseAt == Types.stBaseAt st && mode == Types.stMode st
@@ -586,7 +590,7 @@ refreshWork st = do
       (Git.reviewFiles mode (Config.cfgUntracked (Types.stConfig st)) root)
   refreshed <- Jobs.forBounded 8 guarded names
   extras <- Monad.forM (filter (`notElem` names) (Set.toList (Types.stOpened st))) (refreshOpened st mode existing)
-  pure (Refresh rebaseNow branchNow headNow baseAt (refreshed ++ extras))
+  pure (Refresh rebaseNow branchNow headNow baseAt local (refreshed ++ extras))
 
 refreshOne :: Types.St -> Git.ReviewMode -> Map.Map FilePath Types.FileView -> FilePath -> IO Refreshed
 refreshOne st mode existing name =
@@ -678,6 +682,7 @@ installRefresh before refresh = do
       , Types.stBranch = rfBranch refresh
       , Types.stHead = rfHead refresh
       , Types.stBaseAt = rfBaseAt refresh
+      , Types.stPullLocal = rfLocal refresh
       }
   latest <- State.get
   let

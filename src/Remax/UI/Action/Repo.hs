@@ -172,6 +172,7 @@ arriveAt target remembered saved mode passId loaded = do
         , Types.stSubmit = Nothing
         , Types.stPullView = Nothing
         , Types.stBaseAt = Nothing
+        , Types.stPullLocal = Nothing
         }
   case remembered of
     Just place -> restorePlace place

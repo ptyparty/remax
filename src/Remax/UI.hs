@@ -242,6 +242,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stPullMeta = pullMeta
     , Types.stPullPoll = Types.noPullPoll
     , Types.stBaseAt = Nothing
+    , Types.stPullLocal = Nothing
     , Types.stAltFile = Nothing
     , Types.stAnchor = Nothing
     , Types.stGrepNav = Nothing

@@ -43,11 +43,32 @@ submitLayer st dialog =
           , Brick.txt " "
           ]
             ++ failure
+            ++ localWarning width (Types.stPullLocal st)
             ++ [going]
             ++ (if null items then [Brick.withAttr Attrs.hintAttr (Brick.txt "  nothing pending")] else itemRows)
         )
   in
     Widgets.floatFrame title (hint (Config.cfgKeys (Types.stConfig st)) dialog) (Brick.hLimit width (Brick.padRight Brick.Max (Brick.padLeftRight 1 body)))
+
+localWarning :: Int -> Maybe Git.PullLocal -> [BrickTypes.Widget Types.Name]
+localWarning width local =
+  let
+    unpushed n = case n of
+      0 -> []
+      1 -> ["1 unpushed commit"]
+      _ -> [Types.tshow n <> " unpushed commits"]
+    parts = case local of
+      Just l ->
+        (if Git.localTree l == Git.DirtyTree then ["uncommitted changes"] else [])
+          ++ unpushed (Git.localUnpushed l)
+      Nothing -> []
+  in
+    case parts of
+      [] -> []
+      _ ->
+        [ Brick.withAttr Attrs.questionMarkAttr (Brick.txt (Widgets.clipT (width - 4) ("\9888 " <> T.intercalate " and " parts <> " \183 the review sees only what is pushed")))
+        , Brick.txt " "
+        ]
 
 hint :: Config.KeyMode -> Types.SubmitDialog -> T.Text
 hint keys dialog =

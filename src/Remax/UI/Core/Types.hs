@@ -549,6 +549,7 @@ data St = St
   , stPullMeta :: Maybe GitHub.PullMeta
   , stPullPoll :: PullPoll
   , stBaseAt :: Maybe T.Text -- short sha of a pull request's diff base
+  , stPullLocal :: Maybe Git.PullLocal
   }
 
 data PollFlight = PollIdle | PollRunning
