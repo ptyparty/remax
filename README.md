@@ -560,8 +560,9 @@ Markdown, `checks  ✓ N passed · mergeable` (`c`, or `C-c k`, lists the
 checks), then the conversation on one gutter: each PR-level comment and
 review as a `●` entry with its author, age and event, each review
 thread nested under the review that started it with `path:range ·
-state`, the range's diff lines as a highlighted code block with their
-signs and the head side's line numbers, and its log as the body draws
+state`, its diff lines as a highlighted code block with their signs and
+line numbers, taken from GitHub so they read the same whatever is
+checked out, and its log as the body draws
 it. A resolved thread folds to one line and `za` opens it. Your drafts
 on the pull request follow the posted entries as `◌ you · draft · sends
 with :submit`, then `◌ you · pending review` holds your line comments

@@ -248,13 +248,13 @@ threadRows :: Types.St -> Int -> Conv.Conversation -> [Row]
 threadRows st width conv =
   let
     cid = Conv.convId conv
-    header = Row Branch [Markdown.Segment Attrs.hintAttr " \8618 " Nothing, Markdown.Segment Attrs.trayFileAttr (Threads.anchorPlace (Conv.convAnchor conv)) Nothing, Markdown.Segment Attrs.hintAttr (" \183 " <> Threads.threadState st conv) Nothing] Nothing Nothing
+    header = Row Branch [Markdown.Segment Attrs.hintAttr " \8618 " Nothing, Markdown.Segment Attrs.trayFileAttr (placeOf st conv) Nothing, Markdown.Segment Attrs.hintAttr (" \183 " <> Threads.threadState st conv) Nothing] Nothing Nothing
     folded = Threads.isResolvedFold st conv
     resolvedLine =
       Row
         Branch
         [ Markdown.Segment Attrs.doneMarkAttr " \10003 " Nothing
-        , Markdown.Segment Attrs.hintAttr (Threads.anchorPlace (Conv.convAnchor conv) <> " \183 resolved \183 " <> Types.tshow (length (Conv.convPosts conv)) <> " comments \183 za opens") Nothing
+        , Markdown.Segment Attrs.hintAttr (placeOf st conv <> " \183 resolved \183 " <> Types.tshow (length (Conv.convPosts conv)) <> " comments \183 za opens") Nothing
         ]
         (Just (cid, 0))
         Nothing
@@ -282,24 +282,39 @@ data ExcerptLine = ExcerptLine
   , exToks :: Maybe [Highlight.Seg]
   }
 
-{- | The diff lines a range thread sits on, from the hunk GitHub keeps
-with the comment. The hunk ends at the comment's line as it was when
-written, so the excerpt counts back from there and renumbers to where
-the thread sits now.
+{- | The diff lines a thread sits on. A posted thread's come from the hunk
+GitHub keeps with its first comment, which ends at the comment's line as
+it was when written, so the excerpt counts back from there and renumbers
+to where the thread sits now; an outdated thread keeps the numbers it
+had.
 -}
 rangeOf :: Types.St -> Conv.Conversation -> [ExcerptLine]
 rangeOf st conv =
-  case (Conv.convId conv, Conv.convAnchor conv) of
-    (Conv.ThreadConversation tid, Conv.OnPosition pos)
-      | Just start <- Conv.posStartLine pos ->
-          Maybe.fromMaybe [] $ do
-            snap <- Types.ppSnapshot (Types.stPullPoll st)
-            thread <- List.find ((== tid) . Conv.remoteThreadId) (Conv.remoteThreads (PullPoll.snapshotRemote snap))
-            excerpt (Conv.posSide pos) start (Conv.posLine pos) (Map.lookup tid (Types.ppExcerptToks (Types.stPullPoll st))) (Conv.remoteCommentDiffHunk (NEL.head (Conv.remoteThreadComments thread)))
-    (_, Conv.OnLines lineSpan)
-      | length (Conv.spanLines lineSpan) > 1 ->
-          map (spanExcerpt st lineSpan) (NEL.toList (Conv.spanLines lineSpan))
-    _ -> []
+  case Conv.convId conv of
+    Conv.ThreadConversation tid -> Maybe.fromMaybe [] $ do
+      thread <- remoteThread st tid
+      let
+        (side, start, end) = case Conv.remoteThreadWhere thread of
+          Right pos -> (Conv.posSide pos, Maybe.fromMaybe (Conv.posLine pos) (Conv.posStartLine pos), Conv.posLine pos)
+          Left out -> (Conv.outSide out, Maybe.fromMaybe (Conv.outLine out) (Conv.outStartLine out), Conv.outLine out)
+      excerpt side start end (Map.lookup tid (Types.ppExcerptToks (Types.stPullPoll st))) (Conv.remoteCommentDiffHunk (NEL.head (Conv.remoteThreadComments thread)))
+    _ -> case Conv.convAnchor conv of
+      Conv.OnLines lineSpan -> map (spanExcerpt st lineSpan) (NEL.toList (Conv.spanLines lineSpan))
+      _ -> []
+
+remoteThread :: Types.St -> Store.RemoteThreadId -> Maybe Conv.RemoteThread
+remoteThread st tid = do
+  snap <- Types.ppSnapshot (Types.stPullPoll st)
+  List.find ((== tid) . Conv.remoteThreadId) (Conv.remoteThreads (PullPoll.snapshotRemote snap))
+
+{- | Where a thread sits on GitHub, which the PR view names the same way
+whatever the checkout holds.
+-}
+placeOf :: Types.St -> Conv.Conversation -> T.Text
+placeOf st conv =
+  Threads.anchorPlace $ case Conv.convId conv of
+    Conv.ThreadConversation tid -> maybe (Conv.convAnchor conv) Conv.threadAnchor (remoteThread st tid)
+    _ -> Conv.convAnchor conv
 
 spanExcerpt :: Types.St -> Conv.LineSpan -> Conv.SpanLine -> ExcerptLine
 spanExcerpt st lineSpan line =

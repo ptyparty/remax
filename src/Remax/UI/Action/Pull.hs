@@ -165,18 +165,19 @@ applyPolled polled = do
 excerptTokens :: TS.HighlighterTable -> Map.Map Store.RemoteThreadId [[Highlight.Seg]] -> PullPoll.Snapshot -> IO (Map.Map Store.RemoteThreadId [[Highlight.Seg]])
 excerptTokens table known snap =
   let
-    ranged thread = case Conv.remoteThreadWhere thread of
-      Right pos | Maybe.isJust (Conv.posStartLine pos) && Map.notMember (Conv.remoteThreadId thread) known -> Just (thread, pos)
-      _ -> Nothing
-    highlight (thread, pos) =
-      case TS.highlighterFor table (T.unpack (Conv.posPath pos)) Nothing of
+    unseen thread =
+      if Map.notMember (Conv.remoteThreadId thread) known
+        then Just (thread, either Conv.outPath Conv.posPath (Conv.remoteThreadWhere thread))
+        else Nothing
+    highlight (thread, path) =
+      case TS.highlighterFor table (T.unpack path) Nothing of
         Nothing -> pure Nothing
         Just hl -> do
           got <- TS.tsHighlight hl (map (T.drop 1) (PullView.hunkBody (Conv.remoteCommentDiffHunk (NEL.head (Conv.remoteThreadComments thread)))))
           pure (fmap (\scoped -> (Conv.remoteThreadId thread, map (map (\(scope, t) -> (Highlight.scopeSeg scope, t))) scoped)) got)
   in
     do
-      fresh <- traverse highlight (Maybe.mapMaybe ranged (Conv.remoteThreads (PullPoll.snapshotRemote snap)))
+      fresh <- traverse highlight (Maybe.mapMaybe unseen (Conv.remoteThreads (PullPoll.snapshotRemote snap)))
       pure (Map.union known (Map.fromList (Maybe.catMaybes fresh)))
 
 onPull :: Types.St -> Int -> Bool
