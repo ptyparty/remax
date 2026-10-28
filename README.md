@@ -478,8 +478,11 @@ draft's line `@`.
 `j` from a line with a thread enters it, and `j`/`k` then move by post
 through the posts bound for GitHub (posted, draft, pending reply,
 proposal), skipping local ones; past the last post the cursor moves on
-down the file, and `k` from the first returns to the line. `k` from
-the line below a thread climbs into its last post. The
+down the file, and `k` from the first returns to the line. `j` and `k`
+visit posts in the order they are drawn, so `k` from the line below a
+thread climbs into its last post, and a thread on removed lines, drawn
+above the line they rest before, comes between that line and the one
+above it. The
 selected post wears a strip of its keys and the status line names it.
 On another reviewer's post: `r` replies, `?` asks the agent about the
 thread and `!` flags it for the agent (outside read-only review), marking
