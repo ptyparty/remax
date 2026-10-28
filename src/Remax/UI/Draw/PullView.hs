@@ -22,14 +22,23 @@ pullViewBody st =
         rows = PullView.timeline st width
         selected = fmap (\b -> (Types.bandConv b, Types.bandPost b)) (Types.stBand st)
         bandedAt i r = selected /= Nothing && PullView.rowPost r == selected && i >= (0 :: Int)
-        firstBanded = case filter (uncurry bandedAt) (zip [0 ..] rows) of
-          ((i, _) : _) -> Just i
-          [] -> Nothing
-        drawn = zipWith (\i r -> rowWidget (Just i == firstBanded) (bandedAt i r) r) [0 ..] rows
-      BrickTypes.render (Brick.vBox (drawn ++ [Brick.txt " "]))
+        drawn = zipWith (\i r -> rowWidget (bandedAt i r) r) [0 ..] rows ++ [Brick.txt " "]
+        bandedRows = map fst (filter (uncurry bandedAt) (zip [0 ..] rows))
+        shown = case bandedRows of
+          (first : more) ->
+            let
+              (before, rest) = splitAt first drawn
+              (focus, after) = splitAt (foldr max first more - first + 1 + rowsBelowSelection) rest
+            in
+              before ++ [Brick.visible (Brick.vBox focus)] ++ after
+          [] -> drawn
+      BrickTypes.render (Brick.vBox shown)
 
-rowWidget :: Bool -> Bool -> PullView.Row -> BrickTypes.Widget Types.Name
-rowWidget visible banded row =
+rowsBelowSelection :: Int
+rowsBelowSelection = 2
+
+rowWidget :: Bool -> PullView.Row -> BrickTypes.Widget Types.Name
+rowWidget banded row =
   let
     gutter = case PullView.rowGutter row of
       PullView.Dot -> Brick.withAttr Attrs.replyInlineAttr (Brick.txt " \9679 ")
@@ -50,6 +59,5 @@ rowWidget visible banded row =
     tinted = case PullView.rowFill row >>= Markdown.rowFill of
       Just fill -> Brick.withDefAttr fill line
       Nothing -> line
-    washed = if banded then Brick.withDefAttr Attrs.selAttr tinted else tinted
   in
-    if visible then Brick.visible washed else washed
+    if banded then Brick.withDefAttr Attrs.selAttr tinted else tinted
