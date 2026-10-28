@@ -44,7 +44,7 @@ notePopupLayer st np =
         editorRows = max 3 (min 10 (length rows + 1))
         budget = bodyRows - editorRows - length targetRows - length choiceRows - 1
         transcript = case Types.npPurpose np of
-          Types.WorkFor wp -> workRows st (boxWidth - 2) budget wp
+          Types.WorkFor wp -> workRows st (Modal.edMode ed) (boxWidth - 2) budget wp
           _ -> []
       BrickTypes.render $
         Widgets.floatFrame title (popupHint (Config.cfgKeys (Types.stConfig st)) (Types.flagRule st) np) $
@@ -190,8 +190,8 @@ workHint keys rule mode wp =
 -- The thread's log above the editor: the newest two posts in full,
 -- older ones collapsed to one line each, then the rule naming what
 -- the text becomes.
-workRows :: Types.St -> Int -> Int -> Types.WorkPopup -> [BrickTypes.Widget Types.Name]
-workRows st width budget wp =
+workRows :: Types.St -> Modal.Mode -> Int -> Int -> Types.WorkPopup -> [BrickTypes.Widget Types.Name]
+workRows st mode width budget wp =
   let
     conv = Types.wpConv wp >>= \cid -> Conv.conversationFor cid (Types.stConversations st)
     posts = maybe [] (filter shownInLog . Conv.convPosts) conv
@@ -245,7 +245,10 @@ workRows st width budget wp =
         (concatMap full opening ++ map collapsed older ++ concatMap full newest, if null older then "" else " \183 " <> foldKey (Config.cfgKeys (Types.stConfig st)) <> " unfolds")
       Types.UnfoldedLog ->
         (concatMap full posts, " \183 " <> foldKey (Config.cfgKeys (Types.stConfig st)) <> " folds")
-    scrollHint = if length logRows > room then " \183 \8593 scrolls" else ""
+    scrollKeys = case mode of
+      Modal.Normal -> "j/k"
+      Modal.Insert -> "\8593/\8595"
+    scrollHint = if length logRows > room then " \183 " <> scrollKeys <> " scrolls" else ""
     logView =
       Brick.vLimit (max 1 (min room (length logRows))) $
         Brick.viewport Types.PopupLogVP Brick.Vertical (Brick.vBox logRows)
