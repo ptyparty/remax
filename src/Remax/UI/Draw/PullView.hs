@@ -44,6 +44,7 @@ rowWidget banded row =
       PullView.Dot -> Brick.withAttr Attrs.replyInlineAttr (Brick.txt " \9679 ")
       PullView.Pending -> Brick.withAttr Attrs.questionMarkAttr (Brick.txt " \9676 ")
       PullView.Rail -> Brick.withAttr Attrs.hintAttr (Brick.txt " \9474 ")
+      PullView.Branch -> Brick.withAttr Attrs.hintAttr (Brick.txt " \9500 ")
       PullView.Blank -> Brick.txt "   "
     seg s =
       let
