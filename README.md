@@ -554,7 +554,7 @@ are gone they do not draw.
 
 ### The PR view
 
-Opening a pull request lands on its own page, in place of the body. `Esc` goes to the diff and `Space c` (`C-c c` in emacs) returns. It opens with the title, a line of facts (author, commits,
+Opening a pull request lands on its own page, in place of the body. `Esc` goes to the diff and `Space o` (`C-c o` in emacs) returns. It opens with the title, a line of facts (author, commits,
 force-pushes, reviewers, labels, `draft`), the description rendered as
 Markdown, `checks  ✓ N passed · mergeable` (`c`, or `C-c k`, lists the
 checks), then the conversation on one gutter: each PR-level comment and

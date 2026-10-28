@@ -22,7 +22,6 @@ import Graphics.Vty qualified as V
 import Remax.Clipboard qualified as Clipboard
 import Remax.Config qualified as Config
 import Remax.Emacs qualified as Emacs
-import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
 import Remax.UI.Action.Cite qualified as CiteAction
@@ -398,13 +397,6 @@ returnToSubmit np =
       Monad.when (Maybe.isNothing (Types.stNotePopup st)) SubmitAction.reopenSubmit
     _ -> pure ()
 
-pullViewOrCommit :: Brick.EventM Types.Name Types.St ()
-pullViewOrCommit = do
-  st <- State.get
-  case Git.subjectOf (Types.stMode st) of
-    Git.Pull _ _ -> PullViewAction.togglePullView
-    _ -> VerdictAction.showCommitPopup
-
 handleConfirmKey :: V.Event -> Types.Confirm -> Brick.EventM Types.Name Types.St ()
 handleConfirmKey ev confirm = do
   State.modify (\s -> s {Types.stConfirm = Nothing})
@@ -589,7 +581,8 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'v') [] -> VerdictAction.revertTarget
         V.EvKey (V.KChar 'a') [] -> Open.gotoAltFile
         V.EvKey (V.KChar '/') [] -> PickerAction.openGrepPicker ""
-        V.EvKey (V.KChar 'c') [] -> pullViewOrCommit
+        V.EvKey (V.KChar 'c') [] -> VerdictAction.showCommitPopup
+        V.EvKey (V.KChar 'o') [] -> Menus.pullView
         V.EvKey (V.KChar '\'') [] -> Nav.jumpToAnchor
         V.EvKey (V.KChar '*') [] -> Search.searchWordUnderCursor
         V.EvKey (V.KChar 'n') [] -> Search.searchRepeat 1
