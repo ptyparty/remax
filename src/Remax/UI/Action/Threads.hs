@@ -6,6 +6,7 @@ module Remax.UI.Action.Threads
   , bandPost
   , enterThread
   , climbInto
+  , descendInto
   , moveBand
   , leaveBand
   , Handled (..)
@@ -102,58 +103,92 @@ bandPost st = do
   post <- Types.safeIdx (Conv.convPosts conv) (Types.bandPost band)
   Just (conv, Types.bandPost band, post)
 
-{- | Every post the band can visit under the cursor's line, in drawing
-order.
--}
-bandStops :: Types.St -> [Types.Band]
-bandStops st =
+data LineStops = LineStops
+  { aboveLine :: [Types.Band]
+  , belowLine :: [Types.Band]
+  }
+
+lineStops :: Types.St -> LineStops
+lineStops st =
   case Types.currentFileMay st of
-    Nothing -> []
+    Nothing -> LineStops [] []
     Just fv ->
-      concatMap
-        (\c -> map (\i -> Types.Band (Conv.convId c) i False) (Threads.bandIndexes st c))
-        (List.nubBy (\a b -> Conv.convId a == Conv.convId b) (concatMap (Anchor.conversationsAt st fv) (cursorRows fv)))
+      let
+        here = cursorRow fv
+        removed i = maybe False (Maybe.isNothing . DiffModel.rNewRow) (Types.safeIdx (Types.fvRows fv) i)
+        stopsAt rows =
+          concatMap
+            (\c -> map (\i -> Types.Band (Conv.convId c) i False) (Threads.bandIndexes st c))
+            (List.nubBy (\a b -> Conv.convId a == Conv.convId b) (concatMap (Anchor.conversationsAt st fv) rows))
+      in
+        LineStops
+          { aboveLine = stopsAt (reverse (takeWhile removed [here - 1, here - 2 .. 0]))
+          , belowLine = stopsAt [here]
+          }
 
 enterThread :: Brick.EventM Types.Name Types.St Handled
 enterThread = do
   st <- State.get
-  case bandStops st of
+  case belowLine (lineStops st) of
     (first : _) -> do
       State.modify (\s -> s {Types.stBand = Just first})
       pure Handled
     [] -> pure Unhandled
 
+descendInto :: Brick.EventM Types.Name Types.St () -> Brick.EventM Types.Name Types.St ()
+descendInto = arriveBy Down
+
 climbInto :: Brick.EventM Types.Name Types.St () -> Brick.EventM Types.Name Types.St ()
 climbInto move = do
+  st <- State.get
+  case reverse (aboveLine (lineStops st)) of
+    (nearest : _) -> State.modify (\s -> s {Types.stBand = Just nearest})
+    [] -> arriveBy Up move
+
+data Heading = Up | Down
+  deriving (Eq)
+
+arriveBy :: Heading -> Brick.EventM Types.Name Types.St () -> Brick.EventM Types.Name Types.St ()
+arriveBy heading move = do
   before <- State.gets (fmap cursorRow . Types.currentFileMay)
   move
   st <- State.get
   let
     after = cursorRow <$> Types.currentFileMay st
-    climbed = Maybe.fromMaybe False ((<) <$> after <*> before)
-  Monad.when climbed $
-    State.modify (\s -> s {Types.stBand = Maybe.listToMaybe (reverse (bandStops st))})
+    arrived = case heading of
+      Up -> (<) <$> after <*> before
+      Down -> (>) <$> after <*> before
+    stops = lineStops st
+    facing = case heading of
+      Up -> reverse (belowLine stops)
+      Down -> aboveLine stops
+  Monad.when (arrived == Just True) $
+    State.modify (\s -> s {Types.stBand = Maybe.listToMaybe facing})
 
-{- | Step the band by one post; past either end the keys return to the
-line, and past the last post the cursor moves on down.
+{- | Step the band by one post in drawing order, through the posts above
+the line, the line itself, and the posts below it; past either end the
+cursor moves on to the next line in that direction.
 -}
 moveBand :: Int -> Brick.EventM Types.Name Types.St ()
 moveBand d = do
   st <- State.get
   let
-    stops = bandStops st
-    here = Types.stBand st >>= \b -> List.elemIndex b {Types.bandDeleting = False} stops
+    stops = lineStops st
+    walk = map Just (aboveLine stops) ++ [Nothing] ++ map Just (belowLine stops)
+    here = Types.stBand st >>= \b -> List.elemIndex (Just b {Types.bandDeleting = False}) walk
   case here of
     Nothing -> leaveBand
     Just i ->
-      case Types.safeIdx stops (i + d) of
-        Just next | i + d >= 0 -> State.modify (\s -> s {Types.stBand = Just next})
+      case Types.safeIdx walk (i + d) of
+        Just next | i + d >= 0 -> State.modify (\s -> s {Types.stBand = next})
         _ -> do
           leaveBand
-          Monad.when (d > 0) $
-            case Types.currentFileMay st of
-              Just fv -> Nav.setEd (Types.stCurF st) (Modal.plainMove Z.moveDown (Types.fvEd fv))
-              Nothing -> pure ()
+          case Types.currentFileMay st of
+            Just fv ->
+              if d > 0
+                then descendInto (Nav.setEd (Types.stCurF st) (Modal.plainMove Z.moveDown (Types.fvEd fv)))
+                else arriveBy Up (Nav.setEd (Types.stCurF st) (Modal.plainMove Z.moveUp (Types.fvEd fv)))
+            Nothing -> pure ()
 
 leaveBand :: Brick.EventM Types.Name Types.St ()
 leaveBand = State.modify (\s -> s {Types.stBand = Nothing})

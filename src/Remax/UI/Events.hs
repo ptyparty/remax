@@ -510,8 +510,8 @@ emacsEdit i ed ev =
       Nothing -> pure ()
   in
     case ev of
-      V.EvKey V.KDown [] -> actOr ThreadAction.enterThread move
-      V.EvKey (V.KChar 'n') [V.MCtrl] -> actOr ThreadAction.enterThread move
+      V.EvKey V.KDown [] -> actOr ThreadAction.enterThread (ThreadAction.descendInto move)
+      V.EvKey (V.KChar 'n') [V.MCtrl] -> actOr ThreadAction.enterThread (ThreadAction.descendInto move)
       V.EvKey V.KUp [] -> ThreadAction.climbInto move
       V.EvKey (V.KChar 'p') [V.MCtrl] -> ThreadAction.climbInto move
       _ -> move
@@ -680,8 +680,8 @@ helixNormalKey i fv ed ev = do
     V.EvKey (V.KChar '?') [] -> actOr ThreadAction.askKey (NoteAction.markThenNote Store.Questioned)
     V.EvKey (V.KChar '@') [] -> actOr ThreadAction.commentKey (pure ())
     V.EvKey (V.KChar 'r') [] -> actOr ThreadAction.replyKey (deferToModal i ed ev)
-    V.EvKey (V.KChar 'j') [] -> actOr ThreadAction.enterThread (deferToModal i ed ev)
-    V.EvKey V.KDown [] -> actOr ThreadAction.enterThread (deferToModal i ed ev)
+    V.EvKey (V.KChar 'j') [] -> actOr ThreadAction.enterThread (ThreadAction.descendInto (deferToModal i ed ev))
+    V.EvKey V.KDown [] -> actOr ThreadAction.enterThread (ThreadAction.descendInto (deferToModal i ed ev))
     V.EvKey (V.KChar 'k') [] -> ThreadAction.climbInto (deferToModal i ed ev)
     V.EvKey V.KUp [] -> ThreadAction.climbInto (deferToModal i ed ev)
     V.EvKey (V.KChar 'z') [] -> State.modify (\s -> s {Types.stZPending = True})
@@ -751,8 +751,8 @@ handleViKey i ed ev = do
         V.EvKey (V.KChar 'P') [] -> pasteKey deferToVi i ev
         V.EvKey (V.KChar '@') [] -> actOr ThreadAction.commentKey (pure ())
         V.EvKey (V.KChar 'r') [] -> actOr ThreadAction.replyKey (deferToVi i ed ev)
-        V.EvKey (V.KChar 'j') [] -> actOr ThreadAction.enterThread (deferToVi i ed ev)
-        V.EvKey V.KDown [] -> actOr ThreadAction.enterThread (deferToVi i ed ev)
+        V.EvKey (V.KChar 'j') [] -> actOr ThreadAction.enterThread (ThreadAction.descendInto (deferToVi i ed ev))
+        V.EvKey V.KDown [] -> actOr ThreadAction.enterThread (ThreadAction.descendInto (deferToVi i ed ev))
         V.EvKey (V.KChar 'k') [] -> ThreadAction.climbInto (deferToVi i ed ev)
         V.EvKey V.KUp [] -> ThreadAction.climbInto (deferToVi i ed ev)
         V.EvKey (V.KChar 'z') [] -> State.modify (\s -> s {Types.stZPending = True})
