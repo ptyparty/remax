@@ -21,6 +21,7 @@ import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.UI.Action.Conversation qualified as Conversation
 import Remax.UI.Action.Editor qualified as Editor
+import Remax.UI.Action.Inbox qualified as InboxAction
 import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Picker qualified as PickerAction
@@ -75,6 +76,7 @@ commandTable =
   , ("checkout", NoArg, "switch branches (picker)")
   , ("pr", ArgPull, "open pull request N on its page, in edit mode if it is yours and checked out; bare :pr picks one; :pr commits walks its commits; :pr edit checks it out, :pr review returns")
   , ("submit", NoArg, "send every pending comment and reply to GitHub as one review")
+  , ("feedback", NoArg, "recent conversations, newest first; \9166 goes to one (also Space i)")
   , ("ready", NoArg, "mark the pull request ready for review")
   , ("draft", NoArg, "convert the pull request to a draft")
   , ("q", NoArg, "quit")
@@ -201,6 +203,7 @@ runCommand input =
     ["pr", "commits"] -> PullAction.startCommitWalk
     ["pr", "edit"] -> PullAction.editPull
     ["submit"] -> SubmitAction.openSubmit
+    ["feedback"] -> InboxAction.openInbox
     ["ready"] -> PullViewAction.markReady
     ["draft"] -> PullViewAction.markDraft
     ["pr", "review"] -> PullAction.reviewPull

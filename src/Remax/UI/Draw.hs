@@ -16,6 +16,7 @@ import Remax.UI.Draw.Body qualified as DrawBody
 import Remax.UI.Draw.Cite qualified as DrawCite
 import Remax.UI.Draw.Header qualified as DrawHeader
 import Remax.UI.Draw.Help qualified as DrawHelp
+import Remax.UI.Draw.Inbox qualified as DrawInbox
 import Remax.UI.Draw.Notes qualified as DrawNotes
 import Remax.UI.Draw.Picker qualified as DrawPicker
 import Remax.UI.Draw.Prompt qualified as DrawPrompt
@@ -47,6 +48,7 @@ draw st =
         , fmap (DrawSubmit.submitLayer st) (Types.stSubmit st)
         , fmap DrawCite.citeLayer (Types.stCiting st)
         , fmap (DrawNotes.notePopupLayer st) (Types.stNotePopup st)
+        , fmap (DrawInbox.inboxLayer st) (Types.stInbox st)
         , DrawTree.fileMenuLayer =<< Types.stTree st
         , fmap (DrawTree.treeLayer st) (Types.stTree st)
         , fmap DrawPicker.pickerLayer (Types.stPicker st)

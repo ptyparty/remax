@@ -196,7 +196,7 @@ Normal mode:
 | `u` | undo |
 | `y` | yank the selection (or cursor cell) — line-wise for `x` selections; the yank slot is session-wide, so paste works across files (and the note popup), and it goes to the **system clipboard** too |
 | `p` / `P` | paste after / before: whole lines below/above for a line-wise yank, after/at the cursor otherwise; the paste is selected. Pastes the **system clipboard** when it holds something copied outside the session, the yank slot otherwise |
-| `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `e` `$EDITOR` here, `p` walk filter (pending / unresolved / all), `w` toggle ignore-whitespace, `u` resolve or unresolve the thread, or resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review |
+| `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `e` `$EDITOR` here, `p` walk filter (pending / unresolved / all), `w` toggle ignore-whitespace, `u` resolve or unresolve the thread, or resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review, `i` [recent feedback](#recent-feedback) |
 | `.` | repeat the last insert session (the entering command plus what was typed), helix-style — `c`-fix-`Esc` then `.` applies the same change at the cursor |
 | `Enter` | **accept the selection as reviewed** — a selection is required, so what you accept is always visibly highlighted (`X Enter` for the hunk you're looking at). Completing a hunk jumps to the next pending one; a partial mark steps to the next line |
 | `!` / `?` | flag-to-return-to / question — the selection's lines, or the whole current hunk with none. The note popup opens immediately for the reason (`note-on-flag = 0` in the config turns that off); discarding it (`Ctrl-c`, `C-c C-k` in emacs, or `Esc` from its normal mode) cancels the mark as well, since the verdict has not been explained yet — save an empty note to keep the mark without one. The jump to the next hunk waits until the popup closes, and never happens if the mark is cancelled |
@@ -320,7 +320,8 @@ do not), `C-k` kills to end of line, `C-y` yanks,
 command line, `C-s` the search prompt. Review verbs live behind the
 `C-c` prefix with the same letters as the helix keys — `C-c Enter`
 accept, `C-c !` / `C-c ?` flag/question, `C-c x` select hunk,
-`C-c ]`/`C-c [` hunks, `C-c p` walk filter, `C-c f` files — and
+`C-c ]`/`C-c [` hunks, `C-c p` walk filter, `C-c f` files, `C-c i`
+recent feedback — and
 `C-x C-c` quits, `C-x C-s` saves (edits already write through). The
 note popup keeps its modal keys in either keymap. Popups and dialogs
 that other keymaps cancel with `C-c` cancel with `C-c C-k`, since `C-c`
@@ -359,6 +360,7 @@ stays a prefix there too.
 | `:pr` | open a pull request of the repository this checkout belongs to — a picker over its open pull requests (number, author, title, age, CI, your review state, a `draft` mark, and `← open` on the one under review); `⏎` opens the row on its [PR view](#the-pr-view). `:pr N` skips the picker; `:pr commits` walks its commits, `:pr edit` checks it out to address its feedback and `:pr review` returns to the read-only head. See [Reviewing a pull request](#reviewing-a-pull-request) |
 | `:ready` | mark the open pull request ready for review |
 | `:draft` | convert the open pull request to a draft |
+| `:feedback` | the [recent feedback](#recent-feedback) popup, as `Space i` opens it |
 | `:q` | quit |
 
 The command line completes itself: a bare `:` lists every command with
@@ -578,7 +580,30 @@ review summary, a quote-reply as a new PR-level comment), `?` asks, `+`
 reacts (not on a review summary, which GitHub gives no reactions), `y`
 copies the link, `Space u` resolves or unresolves a thread, `e` and `dd` act on your pending text, and
 `⏎` takes a proposal or, on a thread's posted comment, opens its lines
-in the diff. `]` and `[` jump to the newest post of the next or previous thread awaiting you, wrapping around the timeline (`C-c ]` and `C-c [` in Emacs keys), and a proposed comment counts as awaiting you. Your pending comments and the agent's proposed ones follow the timeline. `@` drafts a PR-level comment.
+in the diff, or the nearest line when they have left the file. `]` and `[` jump to the newest post of the next or previous thread awaiting you, wrapping around the timeline (`C-c ]` and `C-c [` in Emacs keys), and a proposed comment counts as awaiting you. Your pending comments and the agent's proposed ones follow the timeline. `@` drafts a PR-level comment.
+
+### Recent feedback
+
+`Space i` (`C-c i` in emacs, or `:feedback`) opens every conversation
+in one popup, newest activity first: GitHub review threads, PR-level
+comments, reviews that say something, and your `!` and `?` notes to the
+agent, in a pull request or any other review. Each row reads `glyph ·
+place · author · age · first line` of its newest post; a thread awaiting
+you stands out, a resolved one is dimmed, and one holding your draft or
+an agent's proposal sorts to the top. The right side shows the lines the
+conversation was made on, from GitHub's hunk for a thread or the noted
+lines for a note, and its log below them.
+
+`j`/`k` move (`C-n`/`C-p` in emacs), `g`/`G` go to the ends, `C-d`/`C-u`
+scroll the right side, and `/` filters on place, author and text, `⏎`
+keeping the filter and `Esc` clearing it. `⏎` on a row goes to the
+conversation: the file opens on its line with the thread's newest post
+selected, and the hunk holding it becomes the current one. When its
+lines have left the file it lands on the nearest line and says `that
+hunk is gone · nearest line N`. A PR-level comment or review opens the
+PR view on it. `r` replies to the newest posted comment in the reply
+popup, queued for `:submit` like any reply, and the popup stays open
+behind it. `Esc` closes it (`C-c C-k` in emacs).
 
 ### Submitting
 

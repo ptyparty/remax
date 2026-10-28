@@ -41,6 +41,8 @@ module Remax.UI.Core.Types
   , SubmitDialog (..)
   , PullView (..)
   , SubmitFocus (..)
+  , Inbox (..)
+  , InboxFocus (..)
   , EventChoice (..)
   , AmendTarget (..)
   , MarkUndo (..)
@@ -365,6 +367,16 @@ data EventChoice = CommentOnly | AnyEvent
 data SubmitFocus = SummaryFocus | ListFocus
   deriving (Eq)
 
+data Inbox = Inbox
+  { ibSel :: Maybe Conv.ConversationId
+  , ibFilter :: T.Text
+  , ibFocus :: InboxFocus
+  , ibScroll :: Int
+  }
+
+data InboxFocus = InboxList | InboxFiltering
+  deriving (Eq)
+
 -- | The PR view is up; the band says which post is selected.
 data PullView = PullView
   deriving (Eq)
@@ -498,6 +510,7 @@ data St = St
   , stReacting :: Maybe ReactionPicker
   , stSubmit :: Maybe SubmitDialog
   , stSending :: Maybe SubmitDialog
+  , stInbox :: Maybe Inbox
   , stPullView :: Maybe PullView -- the pull request's own page, over the body
   , stNow :: Clock.UTCTime -- wall clock, for ages; moved on the attending beat
   , stTour :: [Store.TourStep]

@@ -27,6 +27,7 @@ import Remax.Store qualified as Store
 import Remax.UI.Action.Cite qualified as CiteAction
 import Remax.UI.Action.Command qualified as Command
 import Remax.UI.Action.Editor qualified as Editor
+import Remax.UI.Action.Inbox qualified as InboxAction
 import Remax.UI.Action.Menus qualified as Menus
 import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
@@ -251,6 +252,8 @@ handleEvent brickEvent =
           NoteAction.handleNotePopupKey ev np
           returnToSubmit np
         _
+          | Just inbox <- Types.stInbox st -> InboxAction.handleInboxKey ev inbox
+        _
           | Just dialog <- Types.stSubmit st -> SubmitAction.handleSubmitKey ev dialog
         _
           | Just _ <- Types.stPullView st
@@ -328,6 +331,7 @@ handleIdlePrefixed :: Char -> V.Event -> Brick.EventM Types.Name Types.St ()
 handleIdlePrefixed pfx ev =
   case (pfx, ev) of
     ('x', V.EvKey (V.KChar 'c') [V.MCtrl]) -> Brick.halt
+    ('c', V.EvKey (V.KChar 'i') []) -> InboxAction.openInbox
     _ -> pure ()
 
 handlePromptKey :: V.Event -> Types.Prompt -> Brick.EventM Types.Name Types.St ()
@@ -583,6 +587,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar '/') [] -> PickerAction.openGrepPicker ""
         V.EvKey (V.KChar 'c') [] -> VerdictAction.showCommitPopup
         V.EvKey (V.KChar 'o') [] -> Menus.pullView
+        V.EvKey (V.KChar 'i') [] -> InboxAction.openInbox
         V.EvKey (V.KChar '\'') [] -> Nav.jumpToAnchor
         V.EvKey (V.KChar '*') [] -> Search.searchWordUnderCursor
         V.EvKey (V.KChar 'n') [] -> Search.searchRepeat 1
