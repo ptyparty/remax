@@ -505,15 +505,16 @@ handleEmacsKey i ed ev = do
 emacsEdit :: Int -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()
 emacsEdit i ed ev =
   let
-    down = case ev of
-      V.EvKey V.KDown [] -> True
-      V.EvKey (V.KChar 'n') [V.MCtrl] -> True
-      _ -> False
     move = case Emacs.handleEmacs ev ed of
       Just edNext -> applyEdit i ed edNext
       Nothing -> pure ()
   in
-    if down then actOr ThreadAction.enterThread move else move
+    case ev of
+      V.EvKey V.KDown [] -> actOr ThreadAction.enterThread move
+      V.EvKey (V.KChar 'n') [V.MCtrl] -> actOr ThreadAction.enterThread move
+      V.EvKey V.KUp [] -> ThreadAction.climbInto move
+      V.EvKey (V.KChar 'p') [V.MCtrl] -> ThreadAction.climbInto move
+      _ -> move
 
 -- Try a thread key; when the cursor's line has nothing for it, do what
 -- the key used to do.
@@ -681,6 +682,8 @@ helixNormalKey i fv ed ev = do
     V.EvKey (V.KChar 'r') [] -> actOr ThreadAction.replyKey (deferToModal i ed ev)
     V.EvKey (V.KChar 'j') [] -> actOr ThreadAction.enterThread (deferToModal i ed ev)
     V.EvKey V.KDown [] -> actOr ThreadAction.enterThread (deferToModal i ed ev)
+    V.EvKey (V.KChar 'k') [] -> ThreadAction.climbInto (deferToModal i ed ev)
+    V.EvKey V.KUp [] -> ThreadAction.climbInto (deferToModal i ed ev)
     V.EvKey (V.KChar 'z') [] -> State.modify (\s -> s {Types.stZPending = True})
     V.EvKey (V.KChar 'R') [] -> VerdictAction.clearVerdictBySelection
     V.EvKey (V.KChar ']') [] -> PullAction.walkRun 1
@@ -750,6 +753,8 @@ handleViKey i ed ev = do
         V.EvKey (V.KChar 'r') [] -> actOr ThreadAction.replyKey (deferToVi i ed ev)
         V.EvKey (V.KChar 'j') [] -> actOr ThreadAction.enterThread (deferToVi i ed ev)
         V.EvKey V.KDown [] -> actOr ThreadAction.enterThread (deferToVi i ed ev)
+        V.EvKey (V.KChar 'k') [] -> ThreadAction.climbInto (deferToVi i ed ev)
+        V.EvKey V.KUp [] -> ThreadAction.climbInto (deferToVi i ed ev)
         V.EvKey (V.KChar 'z') [] -> State.modify (\s -> s {Types.stZPending = True})
         _ -> deferToVi i ed ev
 
