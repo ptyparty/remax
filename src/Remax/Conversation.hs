@@ -370,6 +370,7 @@ conversations remote own =
     rootIds = Map.fromList (map (\t -> (remoteCommentId (NEL.head (remoteThreadComments t)), ())) (remoteThreads remote))
     unsubmitted (target, items) =
       case target of
+        NewThread _ OnPull -> Nothing
         NewThread lid anchor
           | maybe True (`Map.notMember` rootIds) (Map.lookup lid (workSubmitted own)) ->
               Just (newThreadConversation lid anchor items)
