@@ -220,6 +220,12 @@ openStore = do
     "CREATE INDEX IF NOT EXISTS work_repo ON work(repo, target_kind, target_id)"
   SQLite.execute_
     conn
+    "UPDATE work SET pull =\
+    \  (SELECT w.pull FROM work w WHERE w.repo = work.repo AND w.target_kind = work.target_kind\
+    \   AND w.target_id = work.target_id AND w.pull IS NOT NULL LIMIT 1)\
+    \ WHERE pull IS NULL AND target_kind IN ('thread', 'comment')"
+  SQLite.execute_
+    conn
     "CREATE TABLE IF NOT EXISTS work_target (\
     \  repo TEXT NOT NULL,\
     \  local_id TEXT PRIMARY KEY,\
