@@ -246,12 +246,12 @@ threadRows :: Types.St -> Int -> Conv.Conversation -> [Row]
 threadRows st width conv =
   let
     cid = Conv.convId conv
-    header = Row Branch [Markdown.Segment Attrs.hintAttr "  \8618 " Nothing, Markdown.Segment Attrs.trayFileAttr (Threads.anchorPlace (Conv.convAnchor conv)) Nothing, Markdown.Segment Attrs.hintAttr (" \183 " <> Threads.threadState conv) Nothing] Nothing Nothing
+    header = Row Branch [Markdown.Segment Attrs.hintAttr " \8618 " Nothing, Markdown.Segment Attrs.trayFileAttr (Threads.anchorPlace (Conv.convAnchor conv)) Nothing, Markdown.Segment Attrs.hintAttr (" \183 " <> Threads.threadState conv) Nothing] Nothing Nothing
     folded = Threads.isResolvedFold st conv
     resolvedLine =
       Row
         Branch
-        [ Markdown.Segment Attrs.doneMarkAttr "  \10003 " Nothing
+        [ Markdown.Segment Attrs.doneMarkAttr " \10003 " Nothing
         , Markdown.Segment Attrs.hintAttr (Threads.anchorPlace (Conv.convAnchor conv) <> " \183 resolved \183 " <> Types.tshow (length (Conv.convPosts conv)) <> " comments \183 za opens") Nothing
         ]
         (Just (cid, 0))
