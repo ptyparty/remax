@@ -712,6 +712,7 @@ keys = helix          # helix | vi | emacs
 scrolloff = 5         # rows kept visible around the cursor
 note-on-flag = 1      # ! and ? open the note popup immediately
 settle = 1            # accepted lines glow green for a moment as they clear
+tray = 1              # the tray starts open; Tab still toggles it
 split-threshold = 20  # hunks at or under this never split
 piece-min = 6         # smaller pieces merge forward (within a function)
 piece-max = 32        # bigger pieces keep splitting

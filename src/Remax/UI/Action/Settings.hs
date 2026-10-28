@@ -42,6 +42,7 @@ settingNames =
   , "word-diff"
   , "untracked"
   , "settle"
+  , "tray"
   , "split-threshold"
   , "piece-min"
   , "piece-max"
@@ -57,6 +58,7 @@ settingValue cfg key =
     "word-diff" -> if Config.cfgWordDiff cfg then "1" else "0"
     "untracked" -> if Config.cfgUntracked cfg then "1" else "0"
     "settle" -> if Config.cfgSettle cfg then "1" else "0"
+    "tray" -> if Config.cfgTray cfg == Config.TrayOpen then "1" else "0"
     "split-threshold" -> Types.tshow (DiffModel.splitThreshold (Config.cfgSplit cfg))
     "piece-min" -> Types.tshow (DiffModel.pieceMin (Config.cfgSplit cfg))
     "piece-max" -> Types.tshow (DiffModel.pieceMax (Config.cfgSplit cfg))
@@ -110,6 +112,10 @@ applySet key val = do
       withInt (\n -> cfg {Config.cfgWordDiff = n /= 0}) (pure ())
     "settle" ->
       withInt (\n -> cfg {Config.cfgSettle = n /= 0}) (pure ())
+    "tray" ->
+      withInt
+        (\n -> cfg {Config.cfgTray = if n /= 0 then Config.TrayOpen else Config.TrayClosed})
+        (State.modify (\s -> s {Types.stTray = Config.cfgTray (Types.stConfig s) == Config.TrayOpen}))
     -- this one changes which files are in the review at all, so the
     -- change set is asked for again rather than merely redecorated
     "untracked" ->
