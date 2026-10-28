@@ -342,17 +342,17 @@ markAnchorLines :: Store.Verdict -> Conv.Anchor -> Brick.EventM Types.Name Types
 markAnchorLines v anchor = do
   st <- State.get
   let
-    covered fv =
-      Maybe.mapMaybe
-        (\r -> if Anchor.anchorCovers (T.pack (Types.fvPath fv)) r anchor then DiffModel.rNewRow r else Nothing)
-        (Types.fvRows fv)
+    coveredIxs fv = Set.toList (Anchor.coveredRows (T.pack (Types.fvPath fv)) (Types.fvRows fv) anchor)
     marking = do
-      fv <- List.find (not . null . covered) (Types.stFiles st)
+      fv <- List.find (not . null . coveredIxs) (Types.stFiles st)
       let
-        newRows = covered fv
-        lo = minimum newRows
-        hi = maximum newRows
-      pure (fv, lo, Nav.selectedChanges True fv lo hi)
+        rows = Maybe.mapMaybe (Types.safeIdx (Types.fvRows fv)) (coveredIxs fv)
+        points = View.restingPoints fv
+        bufferRows = Maybe.mapMaybe (\i -> maybe (Types.safeIdx points i) Just (DiffModel.rNewRow =<< Types.safeIdx (Types.fvRows fv) i)) (coveredIxs fv)
+        keys = Set.fromList (concatMap (\r -> Maybe.catMaybes [DiffModel.rKey r, DiffModel.rRemarkKey r]) rows)
+        lo = minimum bufferRows
+        hi = maximum bufferRows
+      pure (fv, lo, filter (\(k, _, _) -> Set.member k keys) (Nav.selectedChanges True fv lo hi))
   case marking of
     Just (fv, lo, picks@(_ : _)) -> recordLineVerdicts v fv lo picks
     _ -> pure ()

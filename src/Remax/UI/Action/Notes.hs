@@ -17,6 +17,7 @@ import Control.Monad.State qualified as State
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Graphics.Vty qualified as V
 import Remax.Config qualified as Config
@@ -88,8 +89,8 @@ choicesFor st lineSpan =
       let
         path = T.pack (Types.fvPath fv)
         keys = map Store.lineKeyToText (Conv.spanKeys lineSpan)
-        spanRows = filter (\r -> any (`elem` keys) (Maybe.catMaybes [DiffModel.rKey r, DiffModel.rRemarkKey r])) (Types.fvRows fv)
-        touches conv = any (\r -> Anchor.anchorCovers path r (Conv.convAnchor conv)) spanRows
+        covered = Anchor.coveredRows path (Types.fvRows fv)
+        touches conv = any (`Set.member` covered (Conv.convAnchor conv)) spanRowIxs
         spanRowIxs = Maybe.mapMaybe (\(i, r) -> if any (`elem` keys) (Maybe.catMaybes [DiffModel.rKey r, DiffModel.rRemarkKey r]) then Just i else Nothing) (zip [0 ..] (Types.fvRows fv))
         drawnHere = Anchor.conversationsIn st (concatMap (\i -> Map.findWithDefault [] i (Types.fvThreads fv)) spanRowIxs)
         outdated conv = Map.member (Conv.convId conv) (Types.stOutdated st)
