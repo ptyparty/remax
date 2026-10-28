@@ -439,9 +439,10 @@ the pull request: a range that drops its stops walks pending hunks and
 says so.
 
 `:pr edit` switches to feedback mode, for addressing the comments on your
-own pull request. It runs `gh pr checkout N`, so it is refused while
-tracked files have changes, and then reviews the working tree against the
-pull request's base. Mid-rebase it checks nothing out: it reviews the
+own pull request. On the pull request's branch it checks nothing out, so
+your changes stay as they are; elsewhere it runs `gh pr checkout N`, which
+brings uncommitted changes along unless git refuses them. It then reviews
+the working tree against the pull request's base. Mid-rebase it checks nothing out: it reviews the
 working tree at the current stop against the pull request's base, the git
 bar shows the stop, and `:continue` folds the edits into the stopped
 commit as it does in any rebase. Open each pull request of a stack in
