@@ -31,5 +31,5 @@ reactionLayer picker =
   in
     Widgets.floatFrame
       ("react \183 " <> Types.rkOwner picker <> " comment")
-      "1-8 post at once \183 one of yours again removes it \183 esc"
+      "1-8 posts at once \183 one of yours again removes it \183 Esc closes"
       (Brick.vBox (preview : Brick.txt " " : map Brick.hBox rows))

@@ -28,7 +28,7 @@ notePopupLayer :: Types.St -> Types.NotePopup -> BrickTypes.Widget Types.Name
 notePopupLayer st np =
   let
     ed = Types.npEd np
-    title = popupTitle np <> " \183 " <> modeTag (Modal.edMode ed)
+    title = popupTitle np
     targetRows = popupTargetRows st np
     choiceRows = choiceList np
   in
@@ -53,12 +53,6 @@ notePopupLayer st np =
               Brick.vLimit bodyRows $
                 Brick.vBox (targetRows ++ transcript ++ [Brick.vLimit editorRows (noteBodyWidget ed rows)] ++ choiceRows)
 
-modeTag :: Modal.Mode -> T.Text
-modeTag mode =
-  case mode of
-    Modal.Insert -> "ins"
-    Modal.Normal -> "nor"
-
 popupTitle :: Types.NotePopup -> T.Text
 popupTitle np =
   case Types.npPurpose np of
@@ -80,16 +74,28 @@ popupTitle np =
 
 popupHint :: Config.KeyMode -> Types.FlagRule -> Types.NotePopup -> T.Text
 popupHint keys rule np =
-  case Types.npPurpose np of
-    Types.AmendMessage _ -> "\9166 amend (nor) \183 " <> Types.cancelKeyText keys <> " cancel"
-    Types.WorkFor wp -> workHint keys rule wp
-    Types.NoteOn plan ->
-      let
-        several = length (Types.planChoices plan) > 1
-      in
-        case Modal.edMode (Types.npEd np) of
-          Modal.Insert -> "INS  Esc \9166 saves" <> (if several then " \183 Esc Tab changes the target" else "") <> " \183 " <> Types.cancelKeyText keys <> " cancels the mark"
-          Modal.Normal -> "NOR  \9166 saves" <> (if several then " \183 Tab S-Tab target" else "") <> " \183 i edits \183 Esc discards"
+  let
+    mode = Modal.edMode (Types.npEd np)
+  in
+    case Types.npPurpose np of
+      Types.AmendMessage _ -> editorHint keys mode "amends" [] []
+      Types.WorkFor wp -> workHint keys rule mode wp
+      Types.NoteOn plan ->
+        let
+          targets =
+            case (length (Types.planChoices plan) > 1, keys) of
+              (False, _) -> ([], [])
+              (True, Config.KeysEmacs) -> (["M-n M-p changes the target"], ["M-n M-p changes the target"])
+              (True, _) -> (["Esc Tab changes the target"], ["Tab S-Tab changes the target"])
+        in
+          editorHint keys mode "saves" (fst targets) (snd targets)
+
+editorHint :: Config.KeyMode -> Modal.Mode -> T.Text -> [T.Text] -> [T.Text] -> T.Text
+editorHint keys mode verb typing normal =
+  T.intercalate " \183 " $
+    case mode of
+      Modal.Insert -> ["Esc \9166 " <> verb] ++ typing ++ [Types.cancelKeyText keys <> " discards"]
+      Modal.Normal -> ["\9166 " <> verb] ++ normal ++ ["i edits", "Esc discards"]
 
 -- which line the conversation is about; the popup never used to say
 popupTargetRows :: Types.St -> Types.NotePopup -> [BrickTypes.Widget Types.Name]
@@ -160,23 +166,26 @@ foldKey keys =
     Config.KeysEmacs -> "C-c z"
     _ -> "za"
 
-workHint :: Config.KeyMode -> Types.FlagRule -> Types.WorkPopup -> T.Text
-workHint keys rule wp =
+workHint :: Config.KeyMode -> Types.FlagRule -> Modal.Mode -> Types.WorkPopup -> T.Text
+workHint keys rule mode wp =
   let
     remarks = case rule of
-      Types.FlagsAllowed -> "? asks or ! flags for"
-      Types.FlagsRefused -> "? asks"
+      Types.FlagsAllowed -> "? asks or ! flags for the agent instead"
+      Types.FlagsRefused -> "? asks the agent instead"
     flag = case rule of
-      Types.FlagsAllowed -> " \183 ! flag"
-      Types.FlagsRefused -> ""
+      Types.FlagsAllowed -> ["! flags for the agent instead"]
+      Types.FlagsRefused -> []
+    sha = ["C-g inserts a sha"]
+    (verb, typing, normal) = case Types.wpAction wp of
+      Types.ReplyTo _ _ -> ("posts", sha, [remarks])
+      Types.AskOn Types.AskRemark _ -> ("saves", sha, flag ++ ["r replies on GitHub instead"])
+      Types.AskOn Types.FlagRemark _ -> ("saves", sha, ["? asks the agent instead", "r replies on GitHub instead"])
+      Types.CommentOn _ -> ("saves", sha, ["a selection pre-fills a suggestion"])
+      Types.EditPending _ _ -> ("saves", sha, [])
+      Types.TakeProposal {} -> ("posts", sha, ["the proposal goes once you post"])
+      Types.EditPosted _ _ -> ("edits on GitHub at once", sha, [])
   in
-    case Types.wpAction wp of
-      Types.ReplyTo _ _ -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 " <> remarks <> " the agent instead"
-      Types.AskOn _ _ -> "\9166 save (nor) \183 " <> Types.cancelKeyText keys <> " discard \183 ? ask" <> flag <> " \183 r replies on GitHub instead"
-      Types.CommentOn _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 a selection pre-fills a suggestion"
-      Types.EditPending _ _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard changes"
-      Types.TakeProposal {} -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 the proposal goes once you post"
-      Types.EditPosted _ _ -> "\9166 edits on GitHub at once (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard changes"
+    editorHint keys mode verb typing normal
 
 -- The thread's log above the editor: the newest two posts in full,
 -- older ones collapsed to one line each, then the rule naming what

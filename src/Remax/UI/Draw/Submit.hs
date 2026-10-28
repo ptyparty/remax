@@ -54,9 +54,9 @@ hint keys dialog =
   case Types.sdFocus dialog of
     Types.SummaryFocus ->
       case Modal.edMode (Types.sdSummary dialog) of
-        Modal.Insert -> "INS  Esc first \183 then h/l event \183 \9166 post \183 Tab list \183 " <> Types.cancelKeyText keys <> " cancel"
-        Modal.Normal -> "h/l event \183 \9166 post \183 Tab list \183 i edits the summary \183 Esc cancel"
-    Types.ListFocus -> "j/k pick \183 e edit \183 dd drop \183 \9166 jumps to its line \183 Tab summary \183 Esc back"
+        Modal.Insert -> "Esc \9166 posts \183 " <> Types.cancelKeyText keys <> " closes"
+        Modal.Normal -> "\9166 posts \183 h/l picks the event \183 Tab goes to the list \183 i edits \183 Esc closes"
+    Types.ListFocus -> "\8593\8595 moves \183 e edits \183 dd drops \183 \9166 jumps to its line \183 Tab or Esc goes to the summary"
 
 eventRow :: Types.SubmitDialog -> BrickTypes.Widget Types.Name
 eventRow dialog =
