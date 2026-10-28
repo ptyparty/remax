@@ -485,12 +485,22 @@ workPosts items =
         Pending author b -> Just (Post author b Draft [] (Just wid) Nothing Nothing)
         Aside author b at -> Just (Post author b (Local at) [] (Just wid) Nothing Nothing)
         Edit _ _ -> Nothing
-    isProposal (_, w) = case w of
-      Proposed _ _ -> True
-      _ -> False
-    (proposals, rest) = List.partition isProposal items
   in
-    Maybe.mapMaybe post (rest ++ proposals)
+    inSections (Maybe.mapMaybe post items)
+
+inSections :: [Post] -> [Post]
+inSections = List.sortOn (postSection . postState)
+
+data PostSection = BoundForGitHub | LocalTalk | AgentProposal
+  deriving (Eq, Ord)
+
+postSection :: PostState -> PostSection
+postSection s =
+  case s of
+    Posted {} -> BoundForGitHub
+    Draft -> BoundForGitHub
+    Local _ -> LocalTalk
+    Proposal _ -> AgentProposal
 
 newThreadConversation :: LocalId -> Anchor -> [(WorkId, Work)] -> Conversation
 newThreadConversation lid anchor items =
@@ -548,7 +558,7 @@ pullConversation own remote =
       , convAnchor = OnPull
       , convVenue = PullComments
       , convTarget = NewThread lid OnPull
-      , convPosts = map posted (remoteComments remote) ++ concatMap answering (Map.toList (workItems own))
+      , convPosts = inSections (map posted (remoteComments remote) ++ concatMap answering (Map.toList (workItems own)))
       }
 
 reviewConversation :: Maybe Login -> RemoteReview -> Conversation
