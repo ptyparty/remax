@@ -164,14 +164,14 @@ workHint :: Config.KeyMode -> Types.FlagRule -> Types.WorkPopup -> T.Text
 workHint keys rule wp =
   let
     remarks = case rule of
-      Types.FlagsAllowed -> "? or !"
-      Types.FlagsRefused -> "?"
+      Types.FlagsAllowed -> "? asks or ! flags for"
+      Types.FlagsRefused -> "? asks"
     flag = case rule of
       Types.FlagsAllowed -> " \183 ! flag"
       Types.FlagsRefused -> ""
   in
     case Types.wpAction wp of
-      Types.ReplyTo _ _ -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 " <> remarks <> " goes to the agent instead"
+      Types.ReplyTo _ _ -> "\9166 post (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 " <> remarks <> " the agent instead"
       Types.AskOn _ _ -> "\9166 save (nor) \183 " <> Types.cancelKeyText keys <> " discard \183 ? ask" <> flag <> " \183 r replies on GitHub instead"
       Types.CommentOn _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard \183 a selection pre-fills a suggestion"
       Types.EditPending _ _ -> "\9166 save (nor) \183 C-g inserts a sha \183 " <> Types.cancelKeyText keys <> " discard changes"
