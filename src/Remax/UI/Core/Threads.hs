@@ -93,7 +93,7 @@ threadLines st width conv =
       let
         strip =
           if selected == Just i
-            then [ThreadLine cid (Just i) Nothing (stripSegs column (postKeys keys (Types.flagRule st) (Conv.convVenue conv) post))]
+            then [ThreadLine cid (Just i) Nothing (stripSegs column (lookRailAttr (lookOf st bare post)) (postKeys keys (Types.flagRule st) (Conv.convVenue conv) post))]
             else []
         body = postRows st width column cid bare (length strip) i post
       in
@@ -335,9 +335,10 @@ reactionSegs counts =
   in
     List.intersperse (Markdown.Segment Attrs.hintAttr " \183 " Nothing) (map one (filter ((> 0) . Conv.rcCount) counts))
 
-stripSegs :: Int -> T.Text -> [Markdown.Segment]
-stripSegs column keys =
-  [ Markdown.Segment Attrs.hintAttr (T.replicate (column + 1) " " <> "\9584 " <> keys) Nothing
+stripSegs :: Int -> Brick.AttrName -> T.Text -> [Markdown.Segment]
+stripSegs column railAttr keys =
+  [ Markdown.Segment railAttr (T.replicate (column + 1) " " <> "\9584") Nothing
+  , Markdown.Segment Attrs.hintAttr (" " <> keys) Nothing
   ]
 
 {- | The posts the band may land on: everything bound for GitHub, in
