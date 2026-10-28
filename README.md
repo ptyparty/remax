@@ -478,7 +478,8 @@ draft's line `@`.
 `j` from a line with a thread enters it, and `j`/`k` then move by post
 through the posts bound for GitHub (posted, draft, pending reply,
 proposal), skipping local ones; past the last post the cursor moves on
-down the file, and `k` from the first returns to the line. The
+down the file, and `k` from the first returns to the line. `k` from
+the line below a thread climbs into its last post. The
 selected post wears a strip of its keys and the status line names it.
 On another reviewer's post: `r` replies, `?` asks the agent about the
 thread and `!` flags it for the agent (outside read-only review), marking

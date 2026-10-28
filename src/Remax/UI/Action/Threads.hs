@@ -5,6 +5,7 @@ module Remax.UI.Action.Threads
   , suggestionFence
   , bandPost
   , enterThread
+  , climbInto
   , moveBand
   , leaveBand
   , Handled (..)
@@ -121,6 +122,17 @@ enterThread = do
       State.modify (\s -> s {Types.stBand = Just first})
       pure Handled
     [] -> pure Unhandled
+
+climbInto :: Brick.EventM Types.Name Types.St () -> Brick.EventM Types.Name Types.St ()
+climbInto move = do
+  before <- State.gets (fmap cursorRow . Types.currentFileMay)
+  move
+  st <- State.get
+  let
+    after = cursorRow <$> Types.currentFileMay st
+    climbed = Maybe.fromMaybe False ((<) <$> after <*> before)
+  Monad.when climbed $
+    State.modify (\s -> s {Types.stBand = Maybe.listToMaybe (reverse (bandStops st))})
 
 {- | Step the band by one post; past either end the keys return to the
 line, and past the last post the cursor moves on down.
