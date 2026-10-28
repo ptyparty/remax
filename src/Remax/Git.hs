@@ -5,6 +5,9 @@ module Remax.Git
   , RefReview (..)
   , PullRequest (..)
   , Editing (..)
+  , PullLocal (..)
+  , TreeState (..)
+  , pullLocal
   , pullHeadRef
   , pullBaseRef
   , pullAtHead
@@ -736,6 +739,31 @@ branchRootOf root tip = do
 
 -- Whether any tracked file differs from HEAD or the index — the guard
 -- before starting a rebase.
+data TreeState = CleanTree | DirtyTree
+  deriving (Eq, Show)
+
+data PullLocal = PullLocal
+  { localTree :: TreeState
+  , localUnpushed :: Int
+  }
+  deriving (Eq, Show)
+
+pullLocal :: FilePath -> PullRequest -> IO PullLocal
+pullLocal root pr = do
+  dirty <- trackedChanges root
+  (code, out, _) <-
+    Process.readProcessWithExitCode
+      "git"
+      ["-C", root, "rev-list", "--count", T.unpack (pullHeadRef (prNumber pr)) ++ "..HEAD"]
+      ""
+  pure
+    PullLocal
+      { localTree = if dirty then DirtyTree else CleanTree
+      , localUnpushed = case code of
+          Exit.ExitSuccess -> either (const 0) fst (TR.decimal (T.pack out))
+          Exit.ExitFailure _ -> 0
+      }
+
 trackedChanges :: FilePath -> IO Bool
 trackedChanges root = do
   (code, out, _) <-
