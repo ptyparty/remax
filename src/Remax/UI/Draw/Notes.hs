@@ -227,11 +227,12 @@ workRows st width budget wp =
         bodyWidth = max 12 (width - column - 3 - 9)
         rendered = Markdown.render Markdown.Folded bodyWidth (Conv.postBody p)
         rows = if null rendered then [Markdown.plainRow ""] else rendered
-        authorAttr = if Conv.postAuthor p == Conv.Viewer then Attrs.noteInlineAttr else Attrs.replyInlineAttr
+        height = length rows
+        authorAttr = Threads.authorInk (Conv.postAuthor p)
         row (j, r) =
           Brick.hBox
             ( [ Brick.withAttr authorAttr (Brick.txt (T.justifyRight column ' ' (if j == (0 :: Int) then Threads.authorName (Conv.postAuthor p) else "")))
-              , Brick.withAttr Attrs.hintAttr (Brick.txt " \9474 ")
+              , Brick.withAttr authorAttr (Brick.txt (" " <> Threads.railGlyph "\9474" height j <> " "))
               ]
                 ++ map (\seg -> Brick.withAttr (Markdown.segAttr seg) (Brick.txt (Markdown.segText seg))) (Markdown.rowSegments r)
                 ++ (if j == 0 then [Brick.withAttr Attrs.hintAttr (Brick.txt ("  " <> ageOf p))] else [])
