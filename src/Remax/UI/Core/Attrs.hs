@@ -313,7 +313,7 @@ mkAttrMap mth =
       _ -> V.SetTo surfFloat
     onFloat a = a {V.attrBackColor = floatBack}
     selection =
-      Theme.scopeAttr mth "ui.selection.primary" (V.defAttr `V.withStyle` V.reverseVideo)
+      Theme.scopeAttr mth "ui.selection.primary" (V.defAttr `V.withBackColor` surfSel)
     uiPairs =
       [ (headerAttr, BrickUtil.fg inkDim)
       , (headerRebaseAttr, BrickUtil.fg inkText)
