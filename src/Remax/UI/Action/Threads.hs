@@ -2,6 +2,7 @@
 
 module Remax.UI.Action.Threads
   ( cursorConversations
+  , suggestionFence
   , bandPost
   , enterThread
   , moveBand
@@ -251,9 +252,7 @@ remarkKey remark = do
           offerThreads threads
           pure handled
 
-{- | @: a new comment on the selection or the cursor's line, a selection
-pre-filling a suggestion fence with its lines.
--}
+-- | @: a new comment on the selection or the cursor's line.
 commentKey :: Brick.EventM Types.Name Types.St Handled
 commentKey = do
   st <- State.get
@@ -264,27 +263,26 @@ commentKey = do
         Nothing -> do
           Types.setMsg "nothing to comment on here"
           pure Handled
-        Just (lineSpan, selected) -> do
-          let
-            fence =
-              if selected
-                then "```suggestion\n" <> T.unlines (map (T.drop 1 . Conv.slText) (NEL.toList (Conv.spanLines lineSpan))) <> "```\n"
-                else ""
-          openWorkPopupAt st (Threads.anchorPlace (Conv.OnLines lineSpan) <> declOf fv) Nothing (Types.CommentOn (Conv.OnLines lineSpan)) fence
+        Just lineSpan ->
+          openWorkPopupAt st (Threads.anchorPlace (Conv.OnLines lineSpan) <> declOf fv) Nothing (Types.CommentOn (Conv.OnLines lineSpan)) ""
+
+suggestionFence :: Conv.LineSpan -> T.Text
+suggestionFence lineSpan =
+  "```suggestion\n" <> T.unlines (map (T.drop 1) (filter (not . T.isPrefixOf "-") (map Conv.slText (NEL.toList (Conv.spanLines lineSpan))))) <> "```\n"
 
 {- | The lines a comment covers: the selection, else the cursor's line,
 as content keys with the text and number they have now.
 -}
-selectionSpan :: Types.St -> Types.FileView -> Maybe (Conv.LineSpan, Bool)
+selectionSpan :: Types.St -> Types.FileView -> Maybe Conv.LineSpan
 selectionSpan st fv =
   let
     ed = Types.fvEd fv
-    (lo, hi, selected) = case View.activeSelectionRows ed of
-      Just (a, b) -> (a, b, True)
-      Nothing -> let r = fst (Modal.cursorRC ed) in (r, r, False)
+    (lo, hi) = case View.activeSelectionRows ed of
+      Just (a, b) -> (a, b)
+      Nothing -> let r = fst (Modal.cursorRC ed) in (r, r)
     keys = map (\(k, _, _) -> k) (Nav.selectedChanges True fv lo hi)
   in
-    fmap (\lineSpan -> (lineSpan, selected)) (Anchor.lineSpanFor st fv keys)
+    Anchor.lineSpanFor st fv keys
 
 declOf :: Types.FileView -> T.Text
 declOf fv =

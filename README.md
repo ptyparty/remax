@@ -501,8 +501,8 @@ line holds several threads the popup lists them under `goes to`, oldest
 first, and `Tab`/`S-Tab` in normal mode (`M-n`/`M-p` in emacs) pick one.
 `?` asks the agent about the thread; on a line with none, `?` questions
 the lines as anywhere else. `@` comments on the selection or the cursor's line as
-a new thread; a selection pre-fills a ````suggestion```` fence with its
-lines. Each popup shows where it is, the thread's log above the editor
+a new thread, and `C-s` in its popup inserts a ````suggestion```` fence
+with the commented lines as the head has them. Each popup shows where it is, the thread's log above the editor
 (its first post and newest two in full, the rest collapsed to one line
 each; `za` in normal mode, or `C-c z` in emacs, unfolds them all; it
 opens at its newest post, and `↑`, or `k` in normal mode, from the text's

@@ -204,6 +204,10 @@ editorKey st0 np emacs ev =
   case ev of
     V.EvKey (V.KChar 'g') [V.MCtrl]
       | Types.WorkFor _ <- Types.npPurpose np -> CiteAction.openCitePicker
+    V.EvKey (V.KChar 's') [V.MCtrl]
+      | Types.WorkFor wp <- Types.npPurpose np
+      , Types.CommentOn (Conv.OnLines lineSpan) <- Types.wpAction wp ->
+          CiteAction.pasteIntoPopup (ThreadAction.suggestionFence lineSpan)
     V.EvKey (V.KChar 'n') [V.MMeta] | emacs -> moveChoice 1 np
     V.EvKey (V.KChar 'p') [V.MMeta] | emacs -> moveChoice (-1) np
     _ ->

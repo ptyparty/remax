@@ -3,11 +3,14 @@
 module Remax.UI.Action.Cite
   ( openCitePicker
   , handleCiteKey
+  , pasteIntoPopup
   ) where
 
 import Brick qualified as Brick
+import Control.Monad qualified as Monad
 import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
+import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Graphics.Vty qualified as V
 import Remax.Git qualified as Git
@@ -56,14 +59,16 @@ closeCitePicker = State.modify (\s -> s {Types.stCiting = Nothing})
 citeAt :: Types.CitePicker -> Brick.EventM Types.Name Types.St ()
 citeAt picker = do
   closeCitePicker
+  Monad.forM_ (Types.safeIdx (Types.cpCommits picker) (Types.cpAt picker)) (pasteIntoPopup . Git.ccSha)
+
+pasteIntoPopup :: T.Text -> Brick.EventM Types.Name Types.St ()
+pasteIntoPopup text = do
   st <- State.get
-  case (Types.safeIdx (Types.cpCommits picker) (Types.cpAt picker), Types.stNotePopup st) of
-    (Just commit, Just np) ->
-      case Modal.handleInsert (V.EvPaste (TE.encodeUtf8 (Git.ccSha commit))) ((Types.npEd np) {Modal.edMode = Modal.Insert}) of
-        Modal.InsertHandled ed -> setEd ed
-        Modal.InsertExit ed -> setEd ed
-        Modal.InsertUnhandled -> pure ()
-    _ -> pure ()
+  Monad.forM_ (Types.stNotePopup st) $ \np ->
+    case Modal.handleInsert (V.EvPaste (TE.encodeUtf8 text)) ((Types.npEd np) {Modal.edMode = Modal.Insert}) of
+      Modal.InsertHandled ed -> setEd ed
+      Modal.InsertExit ed -> setEd ed
+      Modal.InsertUnhandled -> pure ()
 
 setEd :: Modal.EdState -> Brick.EventM Types.Name Types.St ()
 setEd ed =
