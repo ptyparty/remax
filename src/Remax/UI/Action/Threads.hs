@@ -354,13 +354,23 @@ toggleFoldOf :: Conv.Conversation -> Brick.EventM Types.Name Types.St ()
 toggleFoldOf conv =
   case Conv.convVenue conv of
     Conv.ReviewThread (Just tid) Store.Resolved ->
-      State.modify (\s -> s {Types.stUnfolded = toggleMember tid (Types.stUnfolded s), Types.stBand = Nothing})
+      State.modify $ \s ->
+        let
+          folding = Set.member tid (Types.stUnfolded s)
+          band = case (folding, Types.stPullView s) of
+            (True, Just _) -> Just (Types.Band (Conv.convId conv) 0 False)
+            (True, Nothing) -> Nothing
+            (False, _) -> Types.stBand s
+        in
+          s {Types.stUnfolded = toggleMember tid (Types.stUnfolded s), Types.stBand = band}
     _ -> Types.setMsg "only a resolved thread folds"
 
 toggleFoldAtBand :: Brick.EventM Types.Name Types.St ()
 toggleFoldAtBand = do
   st <- State.get
   case bandPost st of
+    Just (conv, _, _)
+      | Threads.isResolvedFold st conv -> toggleFoldOf conv
     Just (conv, i, post)
       | Markdown.hasDetails (Conv.postBody post) ->
           State.modify (\s -> s {Types.stOpenDetails = toggleMember (Conv.convId conv, i) (Types.stOpenDetails s)})
