@@ -582,14 +582,21 @@ resolveConversation conv = do
   st <- State.get
   case Conv.convVenue conv of
     Conv.ReviewThread (Just tid) Store.Unresolved -> do
-      leaveBand
+      keepBandOnThread conv
       githubJob "resolving the thread" (GitHub.setThreadResolution (Types.stRoot st) Store.Resolved tid) "resolved on GitHub"
       pure Handled
     Conv.ReviewThread (Just tid) Store.Resolved -> do
-      leaveBand
+      keepBandOnThread conv
       githubJob "unresolving the thread" (GitHub.setThreadResolution (Types.stRoot st) Store.Unresolved tid) "unresolved on GitHub"
       pure Handled
     _ -> pure Unhandled
+
+keepBandOnThread :: Conv.Conversation -> Brick.EventM Types.Name Types.St ()
+keepBandOnThread conv = do
+  st <- State.get
+  case Types.stPullView st of
+    Just _ -> State.modify (\s -> s {Types.stBand = Just (Types.Band (Conv.convId conv) 0 False)})
+    Nothing -> leaveBand
 
 editPostedKey :: Brick.EventM Types.Name Types.St Handled
 editPostedKey = do
