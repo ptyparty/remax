@@ -14,6 +14,7 @@ import Remax.Config qualified as Config
 import Remax.Git qualified as Git
 import Remax.Store qualified as Store
 import Remax.UI.Action.Editor qualified as Editor
+import Remax.UI.Action.Inbox qualified as InboxAction
 import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Picker qualified as PickerAction
@@ -36,17 +37,18 @@ import Remax.UI.Model.Nav qualified as Nav
 -- session showing helix's keys would be worse than no sheet at all.
 helpGroups :: Config.KeyMode -> [(T.Text, [(T.Text, T.Text)])]
 helpGroups mode =
-  (reviewGroup mode : sayingGroup : editingGroups mode)
+  (reviewGroup mode : sayingGroup mode : editingGroups mode)
     ++ aroundGroups mode
 
-sayingGroup :: (T.Text, [(T.Text, T.Text)])
-sayingGroup =
+sayingGroup :: Config.KeyMode -> (T.Text, [(T.Text, T.Text)])
+sayingGroup mode =
   ( "saying something"
   ,
     [ ("@", "comment on the lines, for GitHub")
     , ("r", "reply to the thread under the cursor")
     , ("j", "enter the thread; j k move by post")
     , ("\9251 u", "drop the conversation here")
+    , (if mode == Config.KeysEmacs then "C-c i" else "\9251 i", "recent feedback, newest first")
     ]
   )
 
@@ -300,5 +302,6 @@ spaceMenuEntries =
   , ("/", "project search", PickerAction.openGrepPicker "")
   , ("c", "the commit message", VerdictAction.showCommitPopup)
   , ("o", "PR overview", pullView)
+  , ("i", "recent feedback", InboxAction.openInbox)
   , ("?", "keys", Types.showHelp)
   ]

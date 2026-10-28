@@ -144,6 +144,7 @@ executable remax
       Remax.UI.Action.Editor
       Remax.UI.Action.Files
       Remax.UI.Action.Fuzzy
+      Remax.UI.Action.Inbox
       Remax.UI.Action.Menus
       Remax.UI.Action.Notes
       Remax.UI.Action.Open
@@ -161,6 +162,7 @@ executable remax
       Remax.UI.Action.Verdicts
       Remax.UI.Core.Anchor
       Remax.UI.Core.Attrs
+      Remax.UI.Core.Inbox
       Remax.UI.Core.Ink
       Remax.UI.Core.Jobs
       Remax.UI.Core.Markdown
@@ -177,6 +179,7 @@ executable remax
       Remax.UI.Draw.Cite
       Remax.UI.Draw.Header
       Remax.UI.Draw.Help
+      Remax.UI.Draw.Inbox
       Remax.UI.Draw.Notes
       Remax.UI.Draw.Picker
       Remax.UI.Draw.Prompt

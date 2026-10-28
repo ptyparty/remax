@@ -12,7 +12,6 @@ import Control.Monad qualified as Monad
 import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
 import Data.List qualified as List
-import Data.List.NonEmpty qualified as NEL
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Database.SQLite.Simple qualified as SQLite
@@ -23,13 +22,12 @@ import Remax.GitHub qualified as GitHub
 import Remax.Modal qualified as Modal
 import Remax.PullPoll qualified as PullPoll
 import Remax.Submit qualified as Submit
-import Remax.UI.Action.Open qualified as Open
+import Remax.UI.Action.Inbox qualified as InboxAction
 import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Core.Jobs qualified as Jobs
 import Remax.UI.Core.Markdown qualified as Markdown
 import Remax.UI.Core.Threads qualified as Threads
 import Remax.UI.Core.Types qualified as Types
-import Remax.UI.Model.Nav qualified as Nav
 import Remax.UI.Model.Work qualified as WorkModel
 import Remax.Vi qualified as Vi
 import Remax.WorkStore qualified as WorkStore
@@ -202,22 +200,20 @@ dropItem placed = do
 dialog; a PR-level item has no line to go to.
 -}
 jumpToItem :: Submit.Placed -> Brick.EventM Types.Name Types.St ()
-jumpToItem placed =
-  case Submit.itemKind (Submit.placedItem placed) of
-    Submit.NewComment lineSpan -> do
+jumpToItem placed = do
+  st <- State.get
+  let
+    item = Submit.placedItem placed
+    convs = Types.stConversations st
+    conv = case Submit.itemKind item of
+      Submit.ReplyUnder tid _ _ -> Conv.conversationFor (Conv.ThreadConversation tid) convs
+      _ -> List.find ((== Submit.itemTarget item) . Conv.convTarget) convs
+  case fmap (\c -> (c, Conv.convAnchor c)) conv of
+    Just (_, Conv.OnPull) -> Types.setMsg "a PR-level comment has no line"
+    Just (c, _) -> do
       closeDialog
-      Open.openFilePath (Conv.spanPath lineSpan)
-      Nav.gotoLine (Conv.slLineNo (NEL.last (Conv.spanLines lineSpan)))
-    Submit.ReplyUnder tid _ _ -> do
-      st <- State.get
-      case List.find ((== Conv.ThreadConversation tid) . Conv.convId) (Types.stConversations st) of
-        Just conv
-          | Conv.OnPosition pos <- Conv.convAnchor conv -> do
-              closeDialog
-              Open.openFilePath (Conv.posPath pos)
-              Nav.gotoLine (Conv.posLine pos)
-        _ -> Types.setMsg "that thread's line is not in the view"
-    _ -> Types.setMsg "a PR-level comment has no line"
+      InboxAction.jumpTo c
+    Nothing -> Types.setMsg "that item's conversation is gone"
 
 itemLabel :: Types.St -> Submit.Placed -> (T.Text, T.Text, T.Text, T.Text)
 itemLabel st placed =

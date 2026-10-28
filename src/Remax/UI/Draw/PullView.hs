@@ -2,6 +2,7 @@
 
 module Remax.UI.Draw.PullView
   ( pullViewBody
+  , rowWidget
   ) where
 
 import Brick qualified as Brick

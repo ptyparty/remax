@@ -26,13 +26,12 @@ import Remax.Conversation qualified as Conv
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.PullPoll qualified as PullPoll
-import Remax.UI.Action.Open qualified as Open
+import Remax.UI.Action.Inbox qualified as InboxAction
 import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Core.PullView qualified as PullView
 import Remax.UI.Core.Threads qualified as Threads
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.View qualified as View
-import Remax.UI.Model.Nav qualified as Nav
 
 openPullView :: Brick.EventM Types.Name Types.St ()
 openPullView = do
@@ -205,9 +204,6 @@ enterKey = do
     Just (conv, _, post) ->
       case (Conv.postState post, Conv.convAnchor conv) of
         (Conv.Proposal _ _, _) -> Monad.void ThreadAction.takeKey
-        (_, Conv.OnPosition pos) -> do
-          closePullView
-          Open.openFilePath (Conv.posPath pos)
-          Nav.gotoLine (Conv.posLine pos)
-        _ -> Types.setMsg "a PR-level comment has no line"
+        (_, Conv.OnPull) -> Types.setMsg "a PR-level comment has no line"
+        _ -> InboxAction.jumpTo conv
     Nothing -> Types.setMsg "j onto a post first"

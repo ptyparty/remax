@@ -799,6 +799,24 @@ qualified = { qualifiedPost = true }
 alias = "DrawPullView"
 
 [[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Core.Inbox"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Inbox"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Inbox"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "InboxAction"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Draw.Inbox"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DrawInbox"
+
+[[forAnyModule.allowedQualifications]]
 module = "Remax.UI.Core.Markdown"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }

@@ -34,6 +34,7 @@ module Remax.UI.Action.Threads
   , switchAction
   , saveWork
   , reloadAndBand
+  , bandNewest
   ) where
 
 import Brick qualified as Brick
@@ -701,11 +702,14 @@ post of the conversation it went to.
 reloadAndBand :: Maybe Conv.ConversationId -> Brick.EventM Types.Name Types.St ()
 reloadAndBand cid = do
   WorkModel.reloadWork
+  maybe (State.modify (\s -> s {Types.stBand = Nothing})) bandNewest cid
+
+bandNewest :: Conv.ConversationId -> Brick.EventM Types.Name Types.St ()
+bandNewest cid = do
   st <- State.get
   let
     newest = do
-      c <- cid
-      conv <- Conv.conversationFor c (Types.stConversations st)
+      conv <- Conv.conversationFor cid (Types.stConversations st)
       i <- Maybe.listToMaybe (reverse (Threads.bandIndexes st conv))
-      Just (Types.Band c i False)
+      Just (Types.Band cid i False)
   State.modify (\s -> s {Types.stBand = newest})

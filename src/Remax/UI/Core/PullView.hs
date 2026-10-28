@@ -8,6 +8,8 @@ module Remax.UI.Core.PullView
   , checksSummary
   , checksListing
   , hunkBody
+  , conversationRows
+  , placeOf
   ) where
 
 import Brick qualified as Brick
@@ -266,6 +268,21 @@ threadRows st width conv =
     if folded
       then foldedLine : foldedStrip ++ [blank]
       else header : rangeLines ++ logRows ++ [blank]
+
+conversationRows :: Types.St -> Int -> Conv.Conversation -> [Row]
+conversationRows st width conv =
+  let
+    cid = Conv.convId conv
+    (lead, state) = case Conv.convVenue conv of
+      Conv.LocalOnly _ -> (" \9550 ", "note to the agent")
+      _ -> (" \8618 ", Threads.threadState st conv)
+    header = Row Branch [Markdown.Segment Attrs.hintAttr lead Nothing, Markdown.Segment Attrs.trayFileAttr (placeOf st conv) Nothing, Markdown.Segment Attrs.hintAttr (" \183 " <> state) Nothing] Nothing Nothing
+    logRows = map (\tl -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Threads.tlSegs tl) (fmap (\i -> (cid, i)) (Threads.tlPost tl)) Nothing) (threadLog st width conv)
+    postRows (i, post) = dotRow st post Nothing ++ postBody st width cid i post ++ [blank]
+  in
+    case Conv.convAnchor conv of
+      Conv.OnPull -> concatMap postRows (zip [0 ..] (Conv.convPosts conv))
+      _ -> header : map excerptRow (rangeOf st conv) ++ logRows
 
 {- | The thread's posts as the body draws them, without the header the
 timeline already has.
