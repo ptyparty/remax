@@ -42,6 +42,8 @@ module Remax.GitHub
   , addReaction
   , removeReaction
   , editComment
+  , markReady
+  , markDraft
   , InlineComment (..)
   , ReviewEvent (..)
   , reviewEventText
@@ -744,6 +746,12 @@ gitIn root args = do
   pure $ case code of
     Exit.ExitSuccess -> Right (T.strip (T.pack out))
     Exit.ExitFailure _ -> Left (firstLine (T.strip (T.pack err)))
+
+markReady :: FilePath -> T.Text -> Int -> IO (Either GhFailure ())
+markReady root repo n = fmap (fmap (const ())) (runGh root ["pr", "ready", T.pack (show n), "-R", repo])
+
+markDraft :: FilePath -> T.Text -> Int -> IO (Either GhFailure ())
+markDraft root repo n = fmap (fmap (const ())) (runGh root ["pr", "ready", T.pack (show n), "-R", repo, "--undo"])
 
 checkoutPull :: FilePath -> T.Text -> Int -> IO (Either GhFailure ())
 checkoutPull root repo n = fmap (fmap (const ())) (runGh root ["pr", "checkout", T.pack (show n), "-R", repo])

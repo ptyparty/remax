@@ -9,6 +9,8 @@ module Remax.UI.Action.PullView
   , commentOnPull
   , listChecks
   , viewWidth
+  , markReady
+  , markDraft
   ) where
 
 import Brick qualified as Brick
@@ -17,10 +19,13 @@ import Control.Monad.State qualified as State
 import Data.List qualified as List
 import Data.List.NonEmpty qualified as NEL
 import Data.Maybe qualified as Maybe
+import Data.Text qualified as T
 import Graphics.Vty qualified as V
 import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
 import Remax.Git qualified as Git
+import Remax.GitHub qualified as GitHub
+import Remax.PullPoll qualified as PullPoll
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Core.PullView qualified as PullView
@@ -145,6 +150,31 @@ jumpAwaiting d = do
       if null newest
         then Types.setMsg "no thread awaits you"
         else Types.setMsg "no other thread awaits you"
+
+markReady :: Brick.EventM Types.Name Types.St ()
+markReady = changeDraftness PullPoll.ReadyForReview
+
+markDraft :: Brick.EventM Types.Name Types.St ()
+markDraft = changeDraftness PullPoll.Draft
+
+changeDraftness :: PullPoll.Draftness -> Brick.EventM Types.Name Types.St ()
+changeDraftness wanted = do
+  st <- State.get
+  let
+    current = fmap (PullPoll.pullHeadDraft . PullPoll.snapshotHead) (Types.ppSnapshot (Types.stPullPoll st))
+  case (Git.subjectOf (Types.stMode st), wanted) of
+    (Git.Pull pr _, _) | current == Just wanted -> Types.setMsg ("#" <> Types.tshow (Git.prNumber pr) <> " is already " <> draftnessText wanted)
+    (Git.Pull pr _, PullPoll.ReadyForReview) ->
+      ThreadAction.githubJob "marking it ready" (GitHub.markReady (Types.stRoot st) (Git.prRepo pr) (Git.prNumber pr)) "marked ready for review"
+    (Git.Pull pr _, PullPoll.Draft) ->
+      ThreadAction.githubJob "converting to a draft" (GitHub.markDraft (Types.stRoot st) (Git.prRepo pr) (Git.prNumber pr)) "converted to a draft"
+    _ -> Types.setMsg "no pull request open \8212 :pr opens one"
+
+draftnessText :: PullPoll.Draftness -> T.Text
+draftnessText d =
+  case d of
+    PullPoll.ReadyForReview -> "ready for review"
+    PullPoll.Draft -> "a draft"
 
 commentOnPull :: Brick.EventM Types.Name Types.St ()
 commentOnPull = do
