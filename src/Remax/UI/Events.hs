@@ -257,7 +257,8 @@ handleEvent brickEvent =
           | Just _ <- Types.stPullView st
           , not (Types.stSpace st)
           , Maybe.isNothing (Types.stEmacsPrefix st)
-          , Maybe.isNothing (Types.stPrompt st) ->
+          , Maybe.isNothing (Types.stPrompt st)
+          , Maybe.isNothing (Types.stPicker st) ->
               handlePullViewKey ev
         _
           | Just tv <- Types.stTree st -> TreeKeys.handleTreeKey ev tv
