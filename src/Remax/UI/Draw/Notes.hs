@@ -177,12 +177,12 @@ workHint keys rule mode wp =
       Types.FlagsRefused -> []
     sha = ["C-g inserts a sha"]
     (verb, typing, normal) = case Types.wpAction wp of
-      Types.ReplyTo _ _ -> ("posts", sha, [remarks])
+      Types.ReplyTo _ _ -> ("queues for :submit", sha, [remarks])
       Types.AskOn Types.AskRemark _ -> ("saves", sha, flag ++ ["r replies on GitHub instead"])
       Types.AskOn Types.FlagRemark _ -> ("saves", sha, ["? asks the agent instead", "r replies on GitHub instead"])
       Types.CommentOn _ -> ("saves", sha, ["a selection pre-fills a suggestion"])
       Types.EditPending _ _ -> ("saves", sha, [])
-      Types.TakeProposal {} -> ("posts", sha, ["the proposal goes once you post"])
+      Types.TakeProposal {} -> ("queues for :submit", sha, ["the proposal becomes your reply"])
       Types.EditPosted _ _ -> ("edits on GitHub at once", sha, [])
   in
     editorHint keys mode verb typing normal
