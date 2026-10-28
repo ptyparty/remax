@@ -382,6 +382,8 @@ app theme =
           MonadIO.liftIO (V.setMode out V.BracketedPaste True)
         Monad.when (V.supportsMode out V.Mouse) $
           MonadIO.liftIO (V.setMode out V.Mouse True)
+        Monad.when (V.supportsMode out V.Hyperlink) $
+          MonadIO.liftIO (V.setMode out V.Hyperlink True)
         seeded <- State.gets Types.stPullMeta
         Monad.when (Maybe.isNothing seeded) PullAction.refreshPullMeta
         PullAction.pollPullNow
