@@ -160,3 +160,8 @@ poll thread per directory.
   a change makes untrue.
 - Keep commit messages brief and written for someone reviewing a pull
   request, without references to context they would not have.
+- Work happens directly on `main`. Commit there rather than on a feature
+  branch, and do not open pull requests. Work done on a branch anyway is
+  fast-forwarded onto `main`, never merged with a merge commit.
+- Commit titles carry no Shortcut story prefix; remax is not tracked in
+  stories.
