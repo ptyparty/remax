@@ -32,4 +32,4 @@ citeLayer picker =
         Brick.withAttr attr (Brick.txt (Widgets.padT (Widgets.clipT 80 line)))
     shown = take 15 (drop (max 0 (Types.cpAt picker - 14)) (zip [0 ..] commits))
   in
-    Widgets.floatFrame "cite a commit" "j/k \183 \9166 inserts the sha \183 Esc" (Brick.hLimit 82 (Brick.vBox (map row shown)))
+    Widgets.floatFrame "cite a commit" "\8593\8595 moves \183 \9166 inserts the sha \183 Esc closes" (Brick.hLimit 82 (Brick.vBox (map row shown)))

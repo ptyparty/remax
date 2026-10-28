@@ -317,20 +317,20 @@ treeHint :: Types.St -> Types.TreeView -> T.Text
 treeHint st view =
   let
     flat = Types.tvMode view == Types.TreeFlat
-    folding = if flat then "" else "\8594\8592 fold \183 "
+    folding = if flat then "" else "\8594\8592 folds \183 "
     other = if flat then "tree" else "flat"
     showing = case Types.stFileScope st of
-      Git.AllFiles -> "^a hide ignored \183 "
-      Git.VisibleFiles -> "^a all \183 "
+      Git.AllFiles -> "C-a hides ignored \183 "
+      Git.VisibleFiles -> "C-a shows all \183 "
   in
     case Types.tvOp view of
-      Just (Types.OpNaming _ _) -> "\9166 does it \183 esc cancels"
+      Just (Types.OpNaming _ _) -> "\9166 does it \183 Esc cancels"
       Just (Types.OpConfirming _) -> "y deletes it \183 any other key cancels"
       _ ->
-        "\8593\8595 move \183 "
+        "\8593\8595 moves \183 "
           <> folding
-          <> "\9166 open \183 \8633 "
+          <> "\9166 opens \183 \8633 "
           <> other
           <> " \183 "
           <> showing
-          <> "^x file \183 esc closes"
+          <> "C-x file \183 Esc closes"

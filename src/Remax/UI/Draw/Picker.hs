@@ -73,12 +73,12 @@ pickerTitle mode =
 pickerHint :: Types.PickerMode -> T.Text
 pickerHint mode =
   case mode of
-    Types.PickBase -> "\8593\8595 move · \9166 review against this · esc closes"
-    Types.PickBranch -> "\8593\8595 move · \9166 checks out · esc closes"
-    Types.PickRef -> "\8593\8595 move · \9166 review this ref without checking it out · esc closes"
-    Types.PickCommit -> "\8593\8595 move · \9166 opens a ref's history, or reviews a commit against its parent · esc closes"
-    Types.PickParent _ -> "\8593\8595 move · \9166 review against this parent · esc closes"
-    Types.PickRepo -> "\8593\8595 move · \9166 switch to this repository · esc closes"
-    Types.PickPull -> "\9166 open in review mode · Esc close · :pr N skips the picker"
-    Types.PickRange _ -> "\9166 review against the row · Esc keep the base"
-    _ -> "\8593\8595 move · \9166 open · esc closes"
+    Types.PickBase -> "\8593\8595 moves · \9166 reviews against this · Esc closes"
+    Types.PickBranch -> "\8593\8595 moves · \9166 checks out · Esc closes"
+    Types.PickRef -> "\8593\8595 moves · \9166 reviews this ref without checking it out · Esc closes"
+    Types.PickCommit -> "\8593\8595 moves · \9166 opens a ref's history, or reviews a commit against its parent · Esc closes"
+    Types.PickParent _ -> "\8593\8595 moves · \9166 reviews against this parent · Esc closes"
+    Types.PickRepo -> "\8593\8595 moves · \9166 switches to this repository · Esc closes"
+    Types.PickPull -> "\8593\8595 moves · \9166 opens in review mode · Esc closes · :pr N skips the picker"
+    Types.PickRange _ -> "\8593\8595 moves · \9166 reviews against the row · Esc keeps the base"
+    _ -> "\8593\8595 moves · \9166 opens · Esc closes"
