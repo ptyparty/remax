@@ -41,6 +41,8 @@ executables:
     ghc-options:
       - -Wall
       - -threaded
+      - -rtsopts
+      - '"-with-rtsopts=-maxN8 -I0 -A16m"'
     when:
       - condition: flag(ci)
         dependencies:
