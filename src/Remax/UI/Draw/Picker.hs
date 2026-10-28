@@ -25,7 +25,8 @@ pickerLayer pk =
       shown = take visibleCount (drop start (zip [0 ..] (Types.pkMatches pk)))
       inputRow =
         Brick.hBox
-          [ Brick.withAttr Attrs.statusAttr (Brick.txt (" " <> Types.pkInput pk <> "\9612"))
+          [ Brick.withAttr Attrs.hintAttr (Brick.txt (" " <> inputLabel (Types.pkMode pk) <> " "))
+          , Brick.withAttr Attrs.statusAttr (Brick.txt (Types.pkInput pk <> "\9612"))
           , Brick.padLeft Brick.Max (Brick.withAttr Attrs.hintAttr (Brick.txt (pickerCounter pk <> " ")))
           ]
       emptyRow = Brick.withAttr Attrs.hintAttr (Brick.txt "  nothing matches")
@@ -49,6 +50,12 @@ pickerMatchRow pk boxWidth (i, display) =
     if i == Types.pkSel pk
       then Brick.withDefAttr Attrs.floatSelAttr (Brick.withAttr Attrs.floatSelBarAttr (Brick.txt "\9614") <+> line)
       else Brick.txt " " <+> line
+
+inputLabel :: Types.PickerMode -> T.Text
+inputLabel mode =
+  case mode of
+    Types.PickGrep -> "search:"
+    _ -> "filter:"
 
 pickerCounter :: Types.Picker -> T.Text
 pickerCounter pk =
