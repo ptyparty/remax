@@ -38,6 +38,7 @@ openSubmit :: Brick.EventM Types.Name Types.St ()
 openSubmit = do
   st <- State.get
   case (Git.subjectOf (Types.stMode st), Types.ppSnapshot (Types.stPullPoll st)) of
+    (Git.Pull _ _, _) | Maybe.isJust (Types.stSending st) -> Types.setMsg "the review is still sending"
     (Git.Pull pr editing, snap) ->
       case fmap (PullPoll.pullHeadState . PullPoll.snapshotHead) snap of
         Just PullPoll.PullMerged -> Types.setMsg "the pull request is merged \8212 nothing to submit to"
@@ -71,7 +72,6 @@ openSubmit = do
                       , Types.sdSel = 0
                       , Types.sdDeleting = False
                       , Types.sdItems = placed
-                      , Types.sdSending = False
                       , Types.sdFailure = Nothing
                       }
               , Types.stVi = Vi.viIdle
@@ -97,18 +97,16 @@ closeDialog :: Brick.EventM Types.Name Types.St ()
 closeDialog = State.modify (\s -> s {Types.stSubmit = Nothing, Types.stVi = Vi.viIdle})
 
 handleSubmitKey :: V.Event -> Types.SubmitDialog -> Brick.EventM Types.Name Types.St ()
-handleSubmitKey ev dialog
-  | Types.sdSending dialog = pure ()
-  | otherwise = do
-      chord <- Types.readChord ev
-      case chord of
-        Types.CancelKey -> closeDialog
-        Types.PrefixStarted -> pure ()
-        Types.PrefixedKey _ -> Types.setMsg "C-c C-k cancels"
-        Types.PlainKey _ ->
-          case Types.sdFocus dialog of
-            Types.SummaryFocus -> summaryKey ev dialog
-            Types.ListFocus -> listKey ev dialog
+handleSubmitKey ev dialog = do
+  chord <- Types.readChord ev
+  case chord of
+    Types.CancelKey -> closeDialog
+    Types.PrefixStarted -> pure ()
+    Types.PrefixedKey _ -> Types.setMsg "C-c C-k cancels"
+    Types.PlainKey _ ->
+      case Types.sdFocus dialog of
+        Types.SummaryFocus -> summaryKey ev dialog
+        Types.ListFocus -> listKey ev dialog
 
 summaryKey :: V.Event -> Types.SubmitDialog -> Brick.EventM Types.Name Types.St ()
 summaryKey ev dialog =
@@ -266,15 +264,17 @@ post dialog = do
           _ -> True
         epoch = Types.stEpoch st
         landed accepted = Jobs.fromJob (Types.stChan st) (MonadIO.liftIO (recordAccepted (Types.stConn st) (Types.repoText st) accepted))
-      setDialog dialog {Types.sdSending = True, Types.sdFailure = Nothing}
+      closeDialog
+      State.modify (\s -> s {Types.stSending = Just dialog {Types.sdFailure = Nothing}})
       Jobs.startJob "submitting the review" (Submit.submit landed submission) $ \outcome -> do
         latest <- State.get
+        State.modify (\s -> s {Types.stSending = Nothing})
         Monad.when (Types.stEpoch latest == epoch) $
           case outcome of
             Left err -> do
-              Monad.forM_ (Types.stSubmit latest) (\d -> setDialog d {Types.sdSending = False, Types.sdFailure = Just err})
+              restoreDialog (Types.stSending latest) err
               Jobs.jobFailed "submitting" err
-            Right sent -> landSent sent
+            Right sent -> landSent (Types.stSending latest) sent
     _ -> Types.setMsg "no pull request open"
 
 recordAccepted :: SQLite.Connection -> T.Text -> Submit.Accepted -> IO ()
@@ -282,22 +282,26 @@ recordAccepted conn repo accepted = do
   Monad.forM_ (Submit.acceptedAs accepted) (\(lid, cid) -> WorkStore.recordSubmitted conn repo lid cid)
   WorkStore.discardWork conn (Submit.acceptedWork accepted)
 
-landSent :: Submit.Sent -> Brick.EventM Types.Name Types.St ()
-landSent sent = do
+restoreDialog :: Maybe Types.SubmitDialog -> T.Text -> Brick.EventM Types.Name Types.St ()
+restoreDialog sending why =
+  Monad.forM_ sending $ \dialog -> do
+    setDialog dialog {Types.sdFailure = Just why}
+    reopenSubmit
+
+landSent :: Maybe Types.SubmitDialog -> Submit.Sent -> Brick.EventM Types.Name Types.St ()
+landSent sending sent = do
   WorkModel.reloadWork
   ThreadAction.pollSoon
   let
     took = length (Submit.sentAccepted sent)
     reviewed = Maybe.isJust (Submit.sentReview sent)
   case Submit.sentFailure sent of
-    Nothing -> do
-      closeDialog
+    Nothing ->
       Types.setMsg
         ( if reviewed || took > 0
             then "posted " <> (if reviewed then "the review" else "") <> (if took > 0 then (if reviewed then " and " else "") <> Types.tshow took <> " comment(s)" else "")
             else "nothing to send"
         )
     Just failure -> do
-      reopenSubmit
-      State.modify (\s -> s {Types.stSubmit = fmap (\d -> d {Types.sdSending = False, Types.sdFailure = Just (GitHub.failureText failure)}) (Types.stSubmit s)})
+      restoreDialog sending (GitHub.failureText failure)
       Types.setMsg ("GitHub refused: " <> GitHub.failureText failure)

@@ -581,8 +581,11 @@ head's diff still holds as an inline comment, then each reply under its
 thread, then each PR-level comment, and a new comment off the diff as a
 PR-level comment naming its file and line. Each item leaves the store
 the moment GitHub accepts it, so a session that dies mid-send does not
-send it again; a refusal keeps the rest in the dialog with
-GitHub's reason, and `⏎` sends them again. `:submit` is refused on a
+send it again. The dialog closes as the send starts and the header
+shows `✧ submitting the review` until it lands, so you keep reviewing
+meanwhile; `:submit` waits until it does. A refusal brings the dialog
+back with your summary, the rest of the items and GitHub's reason, and
+`⏎` sends them again. `:submit` is refused on a
 merged or closed pull request.
 
 `:pr commits` walks the pull request one commit at a time, each reviewed
