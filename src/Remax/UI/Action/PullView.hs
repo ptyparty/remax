@@ -82,6 +82,7 @@ handlePullViewKey ev = do
     V.EvKey (V.KChar 'p') [V.MCtrl] -> moveStop (-1)
     V.EvKey (V.KChar 'r') [] | plain -> acted ThreadAction.replyKey
     V.EvKey (V.KChar '?') [] | plain -> acted ThreadAction.askKey
+    V.EvKey (V.KChar '!') [] | plain -> acted ThreadAction.flagKey
     V.EvKey (V.KChar '@') [] | plain -> commentOnPull
     V.EvKey (V.KChar 'e') [] | plain -> acted ThreadAction.editKey
     V.EvKey (V.KChar '+') [] | plain -> acted ThreadAction.reactKey
