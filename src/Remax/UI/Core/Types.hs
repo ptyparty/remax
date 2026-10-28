@@ -567,6 +567,7 @@ data PullPoll = PullPoll
   , ppLastOk :: Maybe Double
   , ppFailure :: Maybe T.Text
   , ppNow :: Double
+  , ppExcerptToks :: Map.Map Store.RemoteThreadId [[Highlight.Seg]]
   }
 
 noPullPoll :: PullPoll
@@ -579,6 +580,7 @@ noPullPoll =
     , ppLastOk = Nothing
     , ppFailure = Nothing
     , ppNow = 0
+    , ppExcerptToks = Map.empty
     }
 
 data CommitWalk = CommitWalk
