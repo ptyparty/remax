@@ -180,6 +180,26 @@ handleNotePopupKey ev np0 = do
 
 notePopupKey :: Types.St -> Types.NotePopup -> Bool -> V.Event -> Brick.EventM Types.Name Types.St ()
 notePopupKey st0 np emacs ev =
+  let
+    otherwise_ = editorKey st0 np emacs ev
+    normal = Modal.edMode (Types.npEd np) == Modal.Normal && not (Vi.viBusy (Types.stVi st0))
+    up = ev == V.EvKey V.KUp [] || (normal && ev == V.EvKey (V.KChar 'k') [])
+    down = ev == V.EvKey V.KDown [] || (normal && ev == V.EvKey (V.KChar 'j') [])
+    logScroll = Brick.viewportScroll Types.PopupLogVP
+  in
+    case Types.npPurpose np of
+      Types.WorkFor _
+        | up && fst (Modal.cursorRC (Types.npEd np)) == 0 -> Brick.vScrollBy logScroll (-1)
+        | down -> do
+            mvp <- Brick.lookupViewport Types.PopupLogVP
+            case mvp of
+              Just vp
+                | Brick._vpTop vp + snd (Brick._vpSize vp) < snd (Brick._vpContentSize vp) -> Brick.vScrollBy logScroll 1
+              _ -> otherwise_
+      _ -> otherwise_
+
+editorKey :: Types.St -> Types.NotePopup -> Bool -> V.Event -> Brick.EventM Types.Name Types.St ()
+editorKey st0 np emacs ev =
   case ev of
     V.EvKey (V.KChar 'g') [V.MCtrl]
       | Types.WorkFor _ <- Types.npPurpose np -> CiteAction.openCitePicker
@@ -207,7 +227,9 @@ toggleLog wp =
       Types.FoldedLog -> Types.UnfoldedLog
       Types.UnfoldedLog -> Types.FoldedLog
   in
-    State.modify (\s -> s {Types.stNotePopup = fmap (\p -> p {Types.npPurpose = Types.WorkFor wp {Types.wpLog = flipped}}) (Types.stNotePopup s)})
+    do
+      State.modify (\s -> s {Types.stNotePopup = fmap (\p -> p {Types.npPurpose = Types.WorkFor wp {Types.wpLog = flipped}}) (Types.stNotePopup s)})
+      Brick.vScrollToEnd (Brick.viewportScroll Types.PopupLogVP)
 
 popupBoxWidth :: Int -> Int
 popupBoxWidth columns = min 90 (max 50 (columns - 20))

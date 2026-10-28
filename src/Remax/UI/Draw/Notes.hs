@@ -230,23 +230,21 @@ workRows st width budget wp =
       in
         map row (zip [0 ..] rows)
     room = budget - 2
-    (logRows, kept, foldHint) = case Types.wpLog wp of
+    (logRows, foldHint) = case Types.wpLog wp of
       Types.FoldedLog ->
-        let
-          shown = concatMap full opening ++ map collapsed older ++ concatMap full newest
-        in
-          (shown, drop (max 0 (length shown - room)) shown, if null older then "" else " \183 " <> foldKey (Config.cfgKeys (Types.stConfig st)) <> " unfolds")
+        (concatMap full opening ++ map collapsed older ++ concatMap full newest, if null older then "" else " \183 " <> foldKey (Config.cfgKeys (Types.stConfig st)) <> " unfolds")
       Types.UnfoldedLog ->
-        let
-          shown = concatMap full posts
-        in
-          (shown, take room shown, " \183 " <> foldKey (Config.cfgKeys (Types.stConfig st)) <> " folds")
+        (concatMap full posts, " \183 " <> foldKey (Config.cfgKeys (Types.stConfig st)) <> " folds")
+    scrollHint = if length logRows > room then " \183 \8593 scrolls" else ""
+    logView =
+      Brick.vLimit (max 1 (min room (length logRows))) $
+        Brick.viewport Types.PopupLogVP Brick.Vertical (Brick.vBox logRows)
     rule =
-      Brick.withAttr Attrs.hintAttr (Brick.txt (Widgets.clipT width ("\9472 " <> ruleText wp <> foldHint <> " " <> T.replicate width "\9472")))
+      Brick.withAttr Attrs.hintAttr (Brick.txt (Widgets.clipT width ("\9472 " <> ruleText wp <> foldHint <> scrollHint <> " " <> T.replicate width "\9472")))
   in
     if null logRows
       then [rule, Brick.txt " "]
-      else kept ++ [Brick.txt " ", rule, Brick.txt " "]
+      else [logView, Brick.txt " ", rule, Brick.txt " "]
 
 ruleText :: Types.WorkPopup -> T.Text
 ruleText wp =

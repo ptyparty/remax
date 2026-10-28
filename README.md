@@ -498,7 +498,9 @@ the lines as anywhere else. `@` comments on the selection or the cursor's line a
 a new thread; a selection pre-fills a ````suggestion```` fence with its
 lines. Each popup shows where it is, the thread's log above the editor
 (its first post and newest two in full, the rest collapsed to one line
-each; `za` in normal mode, or `C-c z` in emacs, unfolds them all), a rule naming what the text becomes, and its keys: `⏎` in normal mode posts or saves, `C-g` opens a
+each; `za` in normal mode, or `C-c z` in emacs, unfolds them all; it
+opens at its newest post, and `↑`, or `k` in normal mode, from the text's
+first line scrolls up through it, `↓` or `j` back down), a rule naming what the text becomes, and its keys: `⏎` in normal mode posts or saves, `C-g` opens a
 picker of the pull request's commits and inserts the chosen sha, `C-c`
 (`C-c C-k` in emacs) discards, and in the reply popup `?` or `!` turns the text into a question
 or a flag for the agent while `r` turns it back. Replies,
