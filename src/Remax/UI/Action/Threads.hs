@@ -75,13 +75,20 @@ cursorConversations st =
     Nothing -> []
     Just fv ->
       let
-        rowIx = cursorRow fv
-        ending = Anchor.conversationsAt st fv rowIx
-        inside = case Types.safeIdx (Types.fvRows fv) rowIx of
-          Just row -> filter (Anchor.anchorCovers (T.pack (Types.fvPath fv)) row . Conv.convAnchor) (Types.stConversations st)
-          Nothing -> []
+        rowIxs = cursorRows fv
+        ending = concatMap (Anchor.conversationsAt st fv) rowIxs
+        covered = Anchor.coveredRows (T.pack (Types.fvPath fv)) (Types.fvRows fv)
+        inside = filter (\c -> any (`Set.member` covered (Conv.convAnchor c)) rowIxs) (Types.stConversations st)
       in
         List.nubBy (\a b -> Conv.convId a == Conv.convId b) (ending ++ inside)
+
+cursorRows :: Types.FileView -> [Int]
+cursorRows fv =
+  let
+    here = cursorRow fv
+    removed i = maybe False (Maybe.isNothing . DiffModel.rNewRow) (Types.safeIdx (Types.fvRows fv) i)
+  in
+    reverse (takeWhile removed [here - 1, here - 2 .. 0]) ++ [here]
 
 cursorRow :: Types.FileView -> Int
 cursorRow fv = View.cursorDisplayRow (Types.fvRows fv) (fst (Modal.cursorRC (Types.fvEd fv)))
@@ -103,7 +110,7 @@ bandStops st =
     Just fv ->
       concatMap
         (\c -> map (\i -> Types.Band (Conv.convId c) i False) (Threads.bandIndexes st c))
-        (Anchor.conversationsAt st fv (cursorRow fv))
+        (List.nubBy (\a b -> Conv.convId a == Conv.convId b) (concatMap (Anchor.conversationsAt st fv) (cursorRows fv)))
 
 enterThread :: Brick.EventM Types.Name Types.St Handled
 enterThread = do
@@ -620,8 +627,9 @@ retireNotesOn keys = do
       Just fv ->
         let
           path = T.pack (Types.fvPath fv)
-          rows = filter (\r -> any (`elem` map Store.lineKeyToText keys) (Maybe.catMaybes [DiffModel.rKey r, DiffModel.rRemarkKey r])) (Types.fvRows fv)
-          covers c = any (\r -> Anchor.anchorCovers path r (Conv.convAnchor c)) rows
+          keyIxs = Maybe.mapMaybe (\(i, r) -> if any (`elem` map Store.lineKeyToText keys) (Maybe.catMaybes [DiffModel.rKey r, DiffModel.rRemarkKey r]) then Just i else Nothing) (zip [0 ..] (Types.fvRows fv))
+          covered = Anchor.coveredRows path (Types.fvRows fv)
+          covers c = any (`Set.member` covered (Conv.convAnchor c)) keyIxs
           threadId c = case Conv.convVenue c of
             Conv.ReviewThread (Just tid) _ | covers c -> Just tid
             _ -> Nothing

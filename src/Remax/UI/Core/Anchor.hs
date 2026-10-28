@@ -2,7 +2,7 @@
 
 module Remax.UI.Core.Anchor
   ( anchorIn
-  , anchorCovers
+  , coveredRows
   , conversationsAt
   , conversationsIn
   , survives
@@ -90,21 +90,26 @@ survives byKey lineSpan =
       (Just a, Just b) | a <= b -> Survives b
       _ -> Gone
 
-{- | Whether a row sits inside an anchor's range, by its keys for a local
-span or by its head line for a GitHub position. A base-side position
-is left to the row it ends on.
+{- | The display rows inside an anchor's range: by their keys for a local
+span, by their line number on the comment's side for a GitHub position.
 -}
-anchorCovers :: T.Text -> DiffModel.RowR -> Conv.Anchor -> Bool
-anchorCovers path row anchor =
-  case anchor of
-    Conv.OnLines lineSpan
-      | Conv.spanPath lineSpan == path -> any (`elem` map Store.lineKeyToText (Conv.spanKeys lineSpan)) (rowKeys row)
-    Conv.OnPosition pos
-      | Conv.posPath pos == path && Conv.posSide pos == Conv.HeadSide ->
-          case DiffModel.rNewRow row of
-            Just n -> n + 1 >= Maybe.fromMaybe (Conv.posLine pos) (Conv.posStartLine pos) && n + 1 <= Conv.posLine pos
-            Nothing -> False
-    _ -> False
+coveredRows :: T.Text -> [DiffModel.RowR] -> Conv.Anchor -> Set.Set Int
+coveredRows path rows =
+  let
+    located = zip [0 ..] (locate rows)
+    pick f = Set.fromList (Maybe.mapMaybe (\(i, l) -> if f l then Just i else Nothing) located)
+    within pos n = n >= Maybe.fromMaybe (Conv.posLine pos) (Conv.posStartLine pos) && n <= Conv.posLine pos
+  in
+    \anchor -> case anchor of
+      Conv.OnLines lineSpan
+        | Conv.spanPath lineSpan == path ->
+            pick (\l -> any (`elem` map Store.lineKeyToText (Conv.spanKeys lineSpan)) (rowKeys (locRow l)))
+      Conv.OnPosition pos
+        | Conv.posPath pos == path ->
+            case Conv.posSide pos of
+              Conv.HeadSide -> pick (maybe False (within pos) . locHead)
+              Conv.BaseSide -> pick (maybe False (within pos) . locBase)
+      _ -> Set.empty
 
 rowKeys :: DiffModel.RowR -> [T.Text]
 rowKeys r = Maybe.catMaybes [DiffModel.rKey r, DiffModel.rRemarkKey r]
