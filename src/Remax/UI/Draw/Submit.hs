@@ -23,7 +23,7 @@ submitLayer st dialog =
     number = case Git.subjectOf (Types.stMode st) of
       Git.Pull pr _ -> "#" <> Types.tshow (Git.prNumber pr)
       _ -> ""
-    title = "submit review \183 " <> number <> (if Types.sdSending dialog then " \183 sending\8230" else "")
+    title = "submit review \183 " <> number
     width = 94
     items = Types.sdItems dialog
     itemRows = zipWith (itemRow st dialog (width - 4)) [0 ..] items

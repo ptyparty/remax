@@ -356,7 +356,6 @@ data SubmitDialog = SubmitDialog
   , sdSel :: Int
   , sdDeleting :: Bool
   , sdItems :: [Submit.Placed]
-  , sdSending :: Bool
   , sdFailure :: Maybe T.Text
   }
 
@@ -498,6 +497,7 @@ data St = St
   , stZPending :: Bool -- a z waiting for its a, to fold
   , stReacting :: Maybe ReactionPicker
   , stSubmit :: Maybe SubmitDialog
+  , stSending :: Maybe SubmitDialog
   , stPullView :: Maybe PullView -- the pull request's own page, over the body
   , stNow :: Clock.UTCTime -- wall clock, for ages; moved on the attending beat
   , stTour :: [Store.TourStep]

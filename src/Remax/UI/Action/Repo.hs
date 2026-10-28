@@ -170,6 +170,7 @@ arriveAt target remembered saved mode passId loaded = do
         , Types.stCiting = Nothing
         , Types.stReacting = Nothing
         , Types.stSubmit = Nothing
+        , Types.stSending = Nothing
         , Types.stPullView = Nothing
         , Types.stBaseAt = Nothing
         , Types.stPullLocal = Nothing
