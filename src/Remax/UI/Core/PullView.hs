@@ -199,7 +199,7 @@ dotRow st post event =
     age = case Conv.postState post of
       Conv.Posted _ at _ -> Threads.ageText (Types.stNow st) at
       _ -> ""
-    attr = if Conv.postAuthor post == Conv.Viewer then Attrs.noteInlineAttr else Attrs.replyInlineAttr
+    attr = Threads.authorInk (Conv.postAuthor post)
   in
     [ Row
         Dot

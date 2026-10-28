@@ -43,6 +43,7 @@ module Remax.UI.Core.Attrs
   , modeDotInsAttr
   , noteInlineAttr
   , replyInlineAttr
+  , agentInlineAttr
   , guideAttr
   , floatAttr
   , floatSelAttr
@@ -110,6 +111,7 @@ headerAttr
   , modeDotInsAttr
   , noteInlineAttr
   , replyInlineAttr
+  , agentInlineAttr
   , guideAttr
   , floatAttr
   , floatSelAttr
@@ -138,6 +140,7 @@ modeDotNorAttr = Brick.attrName "modeDotNor"
 modeDotInsAttr = Brick.attrName "modeDotIns"
 noteInlineAttr = Brick.attrName "noteInline"
 replyInlineAttr = Brick.attrName "replyInline"
+agentInlineAttr = Brick.attrName "agentInline"
 guideAttr = Brick.attrName "guide"
 floatAttr = Brick.attrName "float"
 floatSelAttr = floatAttr <> Brick.attrName "sel"
@@ -357,6 +360,7 @@ mkAttrMap mth =
       , (pendingMarkAttr, BrickUtil.fg inkBlue)
       , (noteInlineAttr, BrickUtil.fg inkLavender)
       , (replyInlineAttr, BrickUtil.fg inkMidBlue)
+      , (agentInlineAttr, BrickUtil.fg inkTeal)
       , (guideAttr, BrickUtil.fg inkTeal `V.withBackColor` surfGuide)
       , (floatAttr, onFloat V.defAttr)
       , (floatSelAttr, V.defAttr `V.withBackColor` surfSel)

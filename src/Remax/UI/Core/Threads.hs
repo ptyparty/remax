@@ -15,6 +15,8 @@ module Remax.UI.Core.Threads
   , threadState
   , anchorPlace
   , authorName
+  , authorInk
+  , railGlyph
   , ageText
   , shortAge
   , isResolvedFold
@@ -89,11 +91,11 @@ threadLines st width conv =
     column = authorColumn posts
     rowsFor (i, post) =
       let
-        body = postRows st width column cid bare i post
         strip =
           if selected == Just i
             then [ThreadLine cid (Just i) Nothing (stripSegs column (postKeys keys (Types.flagRule st) (Conv.convVenue conv) post))]
             else []
+        body = postRows st width column cid bare (length strip) i post
       in
         body ++ strip
     header = case Conv.convVenue conv of
@@ -232,42 +234,60 @@ data Look = Look
   , lookSlot :: T.Text
   , lookAuthorAttr :: Brick.AttrName
   , lookRailAttr :: Brick.AttrName
+  , lookSlotAttr :: Brick.AttrName
   }
 
 lookOf :: Types.St -> Bool -> Conv.Post -> Look
 lookOf st bare post =
-  case Conv.postState post of
-    Conv.Posted _ at _ ->
-      Look
-        { lookRail = "\9474"
-        , lookSlot = ageText (Types.stNow st) at
-        , lookAuthorAttr = if Conv.postAuthor post == Conv.Viewer then Attrs.noteInlineAttr else Attrs.replyInlineAttr
-        , lookRailAttr = Attrs.hintAttr
-        }
-    Conv.Draft ->
-      Look
-        { lookRail = "\9478"
-        , lookSlot = "draft"
-        , lookAuthorAttr = Attrs.noteInlineAttr
-        , lookRailAttr = Attrs.questionMarkAttr
-        }
-    Conv.Proposal _ ->
-      Look
-        { lookRail = "\9478"
-        , lookSlot = "proposes"
-        , lookAuthorAttr = Attrs.guideAttr
-        , lookRailAttr = Attrs.guideAttr
-        }
-    Conv.Local at ->
-      Look
-        { lookRail = "\9550"
-        , lookSlot = if bare then ageText (Types.stNow st) at else "local"
-        , lookAuthorAttr =
-            if bare
-              then (if Conv.postAuthor post == Conv.Viewer then Attrs.noteInlineAttr else Attrs.replyInlineAttr)
-              else Attrs.hintAttr
-        , lookRailAttr = Attrs.hintAttr
-        }
+  let
+    ink = authorInk (Conv.postAuthor post)
+  in
+    case Conv.postState post of
+      Conv.Posted _ at _ ->
+        Look
+          { lookRail = "\9474"
+          , lookSlot = ageText (Types.stNow st) at
+          , lookAuthorAttr = ink
+          , lookRailAttr = ink
+          , lookSlotAttr = Attrs.hintAttr
+          }
+      Conv.Draft ->
+        Look
+          { lookRail = "\9478"
+          , lookSlot = "draft"
+          , lookAuthorAttr = Attrs.noteInlineAttr
+          , lookRailAttr = Attrs.questionMarkAttr
+          , lookSlotAttr = Attrs.questionMarkAttr
+          }
+      Conv.Proposal _ ->
+        Look
+          { lookRail = "\9478"
+          , lookSlot = "proposes"
+          , lookAuthorAttr = Attrs.guideAttr
+          , lookRailAttr = Attrs.guideAttr
+          , lookSlotAttr = Attrs.guideAttr
+          }
+      Conv.Local at ->
+        Look
+          { lookRail = "\9550"
+          , lookSlot = if bare then ageText (Types.stNow st) at else "local"
+          , lookAuthorAttr = ink
+          , lookRailAttr = ink
+          , lookSlotAttr = Attrs.hintAttr
+          }
+
+authorInk :: Conv.Author -> Brick.AttrName
+authorInk author =
+  case author of
+    Conv.Viewer -> Attrs.noteInlineAttr
+    Conv.Agent _ -> Attrs.agentInlineAttr
+    Conv.Person _ -> Attrs.replyInlineAttr
+
+railGlyph :: T.Text -> Int -> Int -> T.Text
+railGlyph rail height j
+  | height <= 1 = "\9472"
+  | j == 0 = "\9581"
+  | otherwise = rail
 
 slotWidth :: Int
 slotWidth = 8
@@ -276,23 +296,24 @@ detailsFold :: Types.St -> Conv.ConversationId -> Int -> Markdown.Fold
 detailsFold st cid i =
   if Set.member (cid, i) (Types.stOpenDetails st) then Markdown.Unfolded else Markdown.Folded
 
-postRows :: Types.St -> Int -> Int -> Conv.ConversationId -> Bool -> Int -> Conv.Post -> [ThreadLine]
-postRows st width column cid bare i post =
+postRows :: Types.St -> Int -> Int -> Conv.ConversationId -> Bool -> Int -> Int -> Conv.Post -> [ThreadLine]
+postRows st width column cid bare following i post =
   let
     look = lookOf st bare post
     label = if bare then bareLabel post else authorLabel post
     bodyWidth = max 12 (width - column - 3 - slotWidth - 1)
     rendered = Markdown.render (detailsFold st cid i) bodyWidth (Conv.postBody post)
     rows = if null rendered then [Markdown.plainRow ""] else rendered
+    height = length rows + length reactionRow + following
     lead j =
       [ Markdown.Segment (lookAuthorAttr look) (T.justifyRight column ' ' (if j == (0 :: Int) then clip column label else "")) Nothing
-      , Markdown.Segment (lookRailAttr look) (" " <> lookRail look <> " ") Nothing
+      , Markdown.Segment (lookRailAttr look) (" " <> railGlyph (lookRail look) height j <> " ") Nothing
       ]
     trailer j row =
       if j == 0
         then
           [ Markdown.Segment Attrs.hintAttr (T.replicate (max 1 (bodyWidth - T.length (Markdown.renderText row) + 1)) " ") Nothing
-          , Markdown.Segment (lookRailAttr look) (T.justifyRight slotWidth ' ' (lookSlot look)) Nothing
+          , Markdown.Segment (lookSlotAttr look) (T.justifyRight slotWidth ' ' (lookSlot look)) Nothing
           ]
         else []
     line j row = ThreadLine cid (Just i) (Markdown.rowFill row) (lead j ++ Markdown.rowSegments row ++ trailer j row)
