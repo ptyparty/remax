@@ -563,7 +563,7 @@ review summary, a quote-reply as a new PR-level comment), `?` asks, `+`
 reacts (not on a review summary, which GitHub gives no reactions), `y`
 copies the link, `Space u` resolves or unresolves a thread, `e` and `dd` act on your pending text, and
 `⏎` takes a proposal or, on a thread's posted comment, opens its lines
-in the diff. `@` drafts a PR-level comment.
+in the diff. `]` and `[` jump to the newest post of the next or previous thread awaiting you, wrapping around the timeline (`C-c ]` and `C-c [` in Emacs keys). `@` drafts a PR-level comment.
 
 ### Submitting
 

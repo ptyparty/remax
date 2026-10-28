@@ -5,6 +5,7 @@ module Remax.UI.Action.PullView
   , togglePullView
   , closePullView
   , handlePullViewKey
+  , jumpAwaiting
   , commentOnPull
   , listChecks
   , viewWidth
@@ -14,6 +15,8 @@ import Brick qualified as Brick
 import Control.Monad qualified as Monad
 import Control.Monad.State qualified as State
 import Data.List qualified as List
+import Data.List.NonEmpty qualified as NEL
+import Data.Maybe qualified as Maybe
 import Graphics.Vty qualified as V
 import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
@@ -21,6 +24,7 @@ import Remax.Git qualified as Git
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Core.PullView qualified as PullView
+import Remax.UI.Core.Threads qualified as Threads
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.View qualified as View
 import Remax.UI.Model.Nav qualified as Nav
@@ -80,6 +84,8 @@ handlePullViewKey ev = do
     V.EvKey (V.KChar 'k') [] | plain -> moveStop (-1)
     V.EvKey V.KUp [] -> moveStop (-1)
     V.EvKey (V.KChar 'p') [V.MCtrl] -> moveStop (-1)
+    V.EvKey (V.KChar ']') [] | plain -> jumpAwaiting 1
+    V.EvKey (V.KChar '[') [] | plain -> jumpAwaiting (-1)
     V.EvKey (V.KChar 'r') [] | plain -> acted ThreadAction.replyKey
     V.EvKey (V.KChar '?') [] | plain -> acted ThreadAction.askKey
     V.EvKey (V.KChar '!') [] | plain -> acted ThreadAction.flagKey
@@ -112,6 +118,33 @@ moveStop d = do
       Just i -> Types.safeIdx all_ (max 0 (min (length all_ - 1) (i + d)))
       Nothing -> if d > 0 then Types.safeIdx all_ 0 else Types.safeIdx all_ (length all_ - 1)
   State.modify (\s -> s {Types.stBand = next})
+
+{- | Moves to the newest post of the next thread awaiting your answer,
+wrapping around the timeline.
+-}
+jumpAwaiting :: Int -> Brick.EventM Types.Name Types.St ()
+jumpAwaiting d = do
+  width <- viewWidth
+  st <- State.get
+  let
+    all_ = PullView.stops st width
+    awaits b = maybe False Threads.awaitsYou (Conv.conversationFor (Types.bandConv b) (Types.stConversations st))
+    newest = map NEL.last . NEL.groupBy (\a b -> Types.bandConv a == Types.bandConv b) . filter awaits $ all_
+    current = Types.stBand st
+    here = current >>= \b -> List.elemIndex b {Types.bandDeleting = False} all_
+    position b = Maybe.fromMaybe 0 (List.elemIndex b all_)
+    elsewhere b = fmap Types.bandConv current /= Just (Types.bandConv b)
+    candidates = filter elsewhere newest
+    (before, after) = List.partition (\b -> maybe False (position b <) here) candidates
+    target = case here of
+      Nothing -> if d > 0 then Maybe.listToMaybe candidates else Maybe.listToMaybe (reverse candidates)
+      Just _ -> if d > 0 then Maybe.listToMaybe (after ++ before) else Maybe.listToMaybe (reverse before ++ reverse after)
+  case target of
+    Just b -> State.modify (\s -> s {Types.stBand = Just b})
+    Nothing ->
+      if null newest
+        then Types.setMsg "no thread awaits you"
+        else Types.setMsg "no other thread awaits you"
 
 commentOnPull :: Brick.EventM Types.Name Types.St ()
 commentOnPull = do

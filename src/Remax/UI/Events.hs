@@ -573,8 +573,12 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'z') [] -> ThreadAction.toggleFoldAtBand
         V.EvKey (V.KChar '+') [] -> onPost ThreadAction.reactKey (pure ())
         V.EvKey (V.KChar 'y') [] -> onPost ThreadAction.copyKey (pure ())
-        V.EvKey (V.KChar ']') [] -> PullAction.walkRun 1
-        V.EvKey (V.KChar '[') [] -> PullAction.walkRun (-1)
+        V.EvKey (V.KChar ']') []
+          | Maybe.isJust (Types.stPullView st) -> PullViewAction.jumpAwaiting 1
+          | otherwise -> PullAction.walkRun 1
+        V.EvKey (V.KChar '[') []
+          | Maybe.isJust (Types.stPullView st) -> PullViewAction.jumpAwaiting (-1)
+          | otherwise -> PullAction.walkRun (-1)
         V.EvKey (V.KChar 'x') [] -> Nav.selectCurrentHunk
         V.EvKey (V.KChar 'p') [] -> VerdictAction.cycleWalkFilter
         V.EvKey (V.KChar 'w') [] -> Settings.toggleIgnoreWs
