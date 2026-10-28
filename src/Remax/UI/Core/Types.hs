@@ -111,7 +111,7 @@ import Remax.Vi qualified as Vi
 import System.FilePath ((</>))
 import System.FilePath qualified as FilePath
 
-data Name = BodyVP | TrayVP | PullVP | TheCursor
+data Name = BodyVP | TrayVP | PullVP | PopupLogVP | TheCursor
   deriving (Eq, Ord, Show)
 
 -- FileChangedOnDisk carries an absolute path: the watcher callback is

@@ -397,6 +397,7 @@ openWorkPopupAt _ place cid action initial = do
         , Types.wpLog = Types.FoldedLog
         }
   State.modify (\s -> s {Types.stNotePopup = Just (Types.NotePopup ed1 (Types.WorkFor popup)), Types.stVi = Vi.viIdle})
+  Brick.vScrollToEnd (Brick.viewportScroll Types.PopupLogVP)
   pure Handled
 
 {- | In the popup, ? turns a reply into a question for the agent and r

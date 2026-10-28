@@ -148,6 +148,7 @@ wheelTargetOf name =
     Types.BodyVP -> WheelBody
     Types.TrayVP -> WheelTray
     Types.PullVP -> WheelBody
+    Types.PopupLogVP -> WheelNowhere
     Types.TheCursor -> WheelNowhere
 
 handleWheel :: WheelTarget -> V.Button -> Brick.EventM Types.Name Types.St ()
