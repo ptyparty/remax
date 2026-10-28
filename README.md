@@ -471,9 +471,10 @@ its summary as `▸ <summary> · za opens`, and `za` with the band on the
 post opens and folds it), and its age at the end of
 the first line. Your pending reply has a `┆` rail and `draft` in the
 age slot, an agent's proposal `✦ claude` and `proposes`, and local
-talk with the agent `⇄ you` with a `╎` rail and `local`. A resolved
-thread folds to `✓ resolved · <author> · <first line> · za opens`, and
-`za` opens and folds it. The gutter marks a thread's line `↪` and a
+talk with the agent `⇄ you` with a `╎` rail and `local`. `za` folds
+and opens any thread on GitHub. A resolved one starts folded, as `✓
+resolved · <author> · <first line> · za opens`, and an open one starts
+open and folds to `▸ <state> · <author> · <first line> · za opens`. The gutter marks a thread's line `↪` and a
 draft's line `@`.
 
 `j` from a line with a thread enters it, and `j`/`k` then move by post
@@ -563,7 +564,8 @@ thread nested under the review that started it with `path:range ·
 state`, its diff lines as a highlighted code block with their signs and
 line numbers, taken from GitHub so they read the same whatever is
 checked out, and its log as the body draws
-it. A resolved thread folds to one line and `za` opens it. Your drafts
+it. `za` folds a thread to one line and opens it again; resolved
+threads start folded. Your drafts
 on the pull request follow the posted entries as `◌ you · draft · sends
 with :submit`, then `◌ you · pending review` holds your line comments
 and the agent's proposed ones as threads, like a posted review. Pending

@@ -195,7 +195,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stThreads = suThreads startup
     , Types.stWork = suWork startup
     , Types.stBand = Nothing
-    , Types.stUnfolded = Set.empty
+    , Types.stFoldFlipped = Set.empty
     , Types.stOpenDetails = Set.empty
     , Types.stConfirm = Nothing
     , Types.stCiting = Nothing

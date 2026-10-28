@@ -25,7 +25,9 @@ module Remax.UI.Core.Threads
   , railGlyph
   , ageText
   , shortAge
-  , isResolvedFold
+  , isFolded
+  , foldedMark
+  , onGitHub
   , lineHint
   , noteHint
   , outdatedHint
@@ -94,8 +96,8 @@ threadLines st width conv =
       Just _ -> outdatedRows cid (Conv.convAnchor conv)
       Nothing -> []
   in
-    if isResolvedFold st conv
-      then [ThreadLine cid Nothing Nothing (resolvedSegs width conv)]
+    if isFolded st conv
+      then [ThreadLine cid Nothing Nothing (foldedSegs st width conv)]
       else outdated ++ header ++ postLines st width conv
 
 postLines :: Types.St -> Int -> Conv.Conversation -> [ThreadLine]
@@ -152,24 +154,40 @@ outdatedRows cid anchor =
           header (T.replace " (outdated)" "" (rangeOf anchor)) : quoted (map (\(n, t) -> (n, T.drop 1 t)) numbered)
       _ -> []
 
-isResolvedFold :: Types.St -> Conv.Conversation -> Bool
-isResolvedFold st conv =
+isFolded :: Types.St -> Conv.Conversation -> Bool
+isFolded st conv =
   case Conv.convVenue conv of
-    Conv.ReviewThread (Just tid) Store.Resolved -> not (Set.member tid (Types.stUnfolded st))
+    Conv.ReviewThread (Just tid) resolution -> foldsByDefault resolution /= Set.member tid (Types.stFoldFlipped st)
     _ -> False
 
-resolvedSegs :: Int -> Conv.Conversation -> [Markdown.Segment]
-resolvedSegs width conv =
+foldsByDefault :: Store.Resolution -> Bool
+foldsByDefault resolution =
+  case resolution of
+    Store.Resolved -> True
+    Store.Unresolved -> False
+
+foldedSegs :: Types.St -> Int -> Conv.Conversation -> [Markdown.Segment]
+foldedSegs st width conv =
   let
     first = Maybe.listToMaybe (Conv.convPosts conv)
     author = maybe "" (authorName . Conv.postAuthor) first
     line = maybe "" (Markdown.firstLine . Conv.postBody) first
-    lead = "\10003 resolved \183 " <> author <> " \183 "
+    (mark, attr) = foldedMark st conv
+    lead = mark <> " \183 " <> author <> " \183 "
     room = max 8 (width - T.length lead - 11)
   in
-    [ Markdown.Segment Attrs.doneMarkAttr "\10003 resolved" Nothing
+    [ Markdown.Segment attr mark Nothing
     , Markdown.Segment Attrs.hintAttr (" \183 " <> author <> " \183 " <> clip room line <> " \183 za opens") Nothing
     ]
+
+{- | How a folded thread names itself: a resolved one by its check, an
+open one by whose turn it is.
+-}
+foldedMark :: Types.St -> Conv.Conversation -> (T.Text, Brick.AttrName)
+foldedMark st conv =
+  case Conv.convVenue conv of
+    Conv.ReviewThread _ Store.Resolved -> ("\10003 resolved", Attrs.doneMarkAttr)
+    _ -> ("\9656 " <> threadState st conv, Attrs.replyInlineAttr)
 
 clip :: Int -> T.Text -> T.Text
 clip room t = if T.length t > room then T.take (max 0 (room - 1)) t <> "\8230" else t
@@ -428,7 +446,7 @@ bandIndexes :: Types.St -> Conv.Conversation -> [Int]
 bandIndexes st conv =
   case Conv.convVenue conv of
     Conv.LocalOnly _ -> []
-    _ -> if isResolvedFold st conv then [] else bandable conv
+    _ -> if isFolded st conv then [] else bandable conv
 
 postKeys :: Config.KeyMode -> Types.FlagRule -> Conv.Venue -> Conv.Post -> T.Text
 postKeys keys rule venue post =
