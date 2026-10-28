@@ -19,7 +19,6 @@ module Remax.Conversation
   , Anchor (..)
   , LocalId (..)
   , WorkId (..)
-  , storedId
   , Target (..)
   , targetLocalId
   , Work (..)
@@ -43,6 +42,7 @@ module Remax.Conversation
   , PostState (..)
   , Post (..)
   , isLocalPost
+  , newestPost
   , Venue (..)
   , ConversationId (..)
   , conversationIdText
@@ -70,6 +70,7 @@ import Data.List qualified as List
 import Data.List.NonEmpty qualified as NEL
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
+import Data.Ord qualified as Ord
 import Data.Text qualified as T
 import Remax.Store qualified as Store
 
@@ -180,7 +181,7 @@ targetLocalId t =
     _ -> Nothing
 
 data Work
-  = Proposed AgentName Markdown
+  = Proposed AgentName Markdown T.Text
   | Pending Author Markdown
   | Aside Author Markdown T.Text
   | Edit Store.CommentId Markdown
@@ -189,7 +190,7 @@ data Work
 workBody :: Work -> Markdown
 workBody w =
   case w of
-    Proposed _ b -> b
+    Proposed _ b _ -> b
     Pending _ b -> b
     Aside _ b _ -> b
     Edit _ b -> b
@@ -304,7 +305,7 @@ emptyRemote :: Remote
 emptyRemote = Remote {remoteViewer = Nothing, remoteThreads = [], remoteComments = [], remoteReviews = []}
 
 data PostState
-  = Proposal AgentName
+  = Proposal AgentName T.Text
   | Draft
   | Posted Store.CommentId T.Text (Maybe T.Text)
   | Local T.Text
@@ -326,6 +327,26 @@ isLocalPost p =
   case postState p of
     Local _ -> True
     _ -> False
+
+newestPost :: [Post] -> Maybe Post
+newestPost posts =
+  let
+    (own, remote) = List.partition (Maybe.isJust . postWork) posts
+    newestOwn = fmap (List.maximumBy (Ord.comparing (\p -> storedId =<< postWork p))) (NEL.nonEmpty own)
+    newestRemote = fmap (List.maximumBy (Ord.comparing postStamp)) (NEL.nonEmpty remote)
+  in
+    case (newestOwn, newestRemote) of
+      (Just o, Just r) | Just ownAt <- postStamp o, Just remoteAt <- postStamp r, remoteAt > ownAt -> Just r
+      (Just o, _) -> Just o
+      (Nothing, r) -> r
+
+postStamp :: Post -> Maybe T.Text
+postStamp p =
+  case postState p of
+    Posted _ at _ -> Just at
+    Local at -> Just at
+    Proposal _ at -> Just at
+    Draft -> Nothing
 
 data Venue
   = ReviewThread (Maybe Store.RemoteThreadId) Store.Resolution
@@ -482,7 +503,7 @@ workPosts items =
   let
     post (wid, w) =
       case w of
-        Proposed name b -> Just (Post (Agent name) b (Proposal name) [] (Just wid) Nothing Nothing)
+        Proposed name b at -> Just (Post (Agent name) b (Proposal name at) [] (Just wid) Nothing Nothing)
         Pending author b -> Just (Post author b Draft [] (Just wid) Nothing Nothing)
         Aside author b at -> Just (Post author b (Local at) [] (Just wid) Nothing Nothing)
         Edit _ _ -> Nothing
@@ -501,7 +522,7 @@ postSection s =
     Posted {} -> BoundForGitHub
     Draft -> BoundForGitHub
     Local _ -> LocalTalk
-    Proposal _ -> AgentProposal
+    Proposal _ _ -> AgentProposal
 
 newThreadConversation :: LocalId -> Anchor -> [(WorkId, Work)] -> Conversation
 newThreadConversation lid anchor items =
@@ -613,7 +634,7 @@ edit wid body own =
           ( i
           , case w of
               Pending author _ -> Pending author body
-              Proposed name _ -> Proposed name body
+              Proposed name _ at -> Proposed name body at
               Aside author _ at -> Aside author body at
               Edit cid _ -> Edit cid body
           )
@@ -633,7 +654,7 @@ take wid own =
   let
     taken (i, w) =
       case w of
-        Proposed _ b | i == wid -> (i, Pending Viewer b)
+        Proposed _ b _ | i == wid -> (i, Pending Viewer b)
         _ -> (i, w)
   in
     own {workItems = Map.map (map taken) (workItems own)}

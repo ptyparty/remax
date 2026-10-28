@@ -366,7 +366,7 @@ discardKey = do
               | otherwise -> do
                   State.modify (\s -> s {Types.stConfirm = Just (Types.Confirm "discard the text you typed? y / n" (dropWork wid "discarded"))})
                   pure Handled
-            Conv.Proposal _ -> dropWork wid "proposal dropped" >> pure Handled
+            Conv.Proposal _ _ -> dropWork wid "proposal dropped" >> pure Handled
             _ -> pure Unhandled
     _ -> pure Unhandled
 
@@ -383,7 +383,7 @@ takeKey = do
   st <- State.get
   case bandPost st of
     Just (conv, _, post)
-      | Conv.Proposal _ <- Conv.postState post
+      | Conv.Proposal _ _ <- Conv.postState post
       , Just wid <- Conv.postWork post ->
           openWorkPopup conv (Types.TakeProposal wid (Conv.convTarget conv) (repliedAuthor conv Nothing)) (Conv.markdownText (Conv.postBody post))
     _ -> pure Unhandled

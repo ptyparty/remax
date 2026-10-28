@@ -22,7 +22,6 @@ import Data.List qualified as List
 import Data.List.NonEmpty qualified as NEL
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
-import Data.Ord qualified as Ord
 import Data.Text qualified as T
 import Database.SQLite.Simple qualified as SQLite
 import Remax.Conversation qualified as Conv
@@ -85,15 +84,11 @@ parseParty t =
 
 listedParty :: Listed -> Party
 listedParty l =
-  case newestPost l of
+  case Conv.newestPost (listedPosts l) of
     Nothing -> AwaitingNote
     Just newest -> case Conv.postAuthor newest of
       Conv.Agent _ -> AwaitingReviewer
       _ -> AwaitingAgent
-
-newestPost :: Listed -> Maybe Conv.Post
-newestPost =
-  fmap (List.maximumBy (Ord.comparing (\p -> Conv.storedId =<< Conv.postWork p))) . NEL.nonEmpty . listedPosts
 
 {- | Everything to list for a repository: the conversations the session
 draws, from the store and the last poll's cache, then the lines with a
@@ -220,7 +215,7 @@ digestOf party listed =
     line l =
       listedId l
         <> "\t"
-        <> maybe "" (\p -> Conv.authorText (Conv.postAuthor p) <> "\t" <> Conv.markdownText (Conv.postBody p)) (newestPost l)
+        <> maybe "" (\p -> Conv.authorText (Conv.postAuthor p) <> "\t" <> Conv.markdownText (Conv.postBody p)) (Conv.newestPost (listedPosts l))
   in
     map line (filter wanted listed)
 
@@ -337,5 +332,5 @@ stateWord s =
   case s of
     Conv.Posted {} -> "posted"
     Conv.Draft -> "pending"
-    Conv.Proposal _ -> "proposal"
+    Conv.Proposal _ _ -> "proposal"
     Conv.Local _ -> "local"

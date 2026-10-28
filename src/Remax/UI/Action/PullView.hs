@@ -204,7 +204,7 @@ enterKey = do
   case ThreadAction.bandPost st of
     Just (conv, _, post) ->
       case (Conv.postState post, Conv.convAnchor conv) of
-        (Conv.Proposal _, _) -> Monad.void ThreadAction.takeKey
+        (Conv.Proposal _ _, _) -> Monad.void ThreadAction.takeKey
         (_, Conv.OnPosition pos) -> do
           closePullView
           Open.openFilePath (Conv.posPath pos)
