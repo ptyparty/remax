@@ -338,7 +338,6 @@ applyVerdictLines v = do
       advanceAfterLines v lo hi
       pure True
 
--- | Mark the lines a GitHub thread sits on, when they are in the session.
 markAnchorLines :: Store.Verdict -> Conv.Anchor -> Brick.EventM Types.Name Types.St ()
 markAnchorLines v anchor = do
   st <- State.get

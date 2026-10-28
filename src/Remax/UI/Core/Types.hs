@@ -321,7 +321,6 @@ data WorkAction
   | TakeProposal Conv.WorkId Conv.Target T.Text
   | EditPosted GitHub.CommentKind Store.CommentId
 
--- | Whether a message to the agent flags the thread's lines or questions them.
 data AgentRemark
   = FlagRemark
   | AskRemark
@@ -614,7 +613,6 @@ rebaseEffMode mRebase mode =
       | otherwise -> Git.VsRef "HEAD^"
     _ -> mode
 
--- | Reviewing someone else's pull request leaves nothing for the agent to fix.
 data FlagRule
   = FlagsAllowed
   | FlagsRefused
@@ -742,9 +740,6 @@ data Chord
   | PrefixedKey V.Event
   | PlainKey V.Event
 
-{- | Dialogs cancel on C-c, except in the emacs keymap, where C-c is a
-prefix and C-c C-k cancels.
--}
 readChord :: V.Event -> Brick.EventM Name St Chord
 readChord ev = do
   st <- State.get
