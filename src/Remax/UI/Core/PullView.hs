@@ -249,21 +249,22 @@ threadRows st width conv =
   let
     cid = Conv.convId conv
     header = Row Branch [Markdown.Segment Attrs.hintAttr " \8618 " Nothing, Markdown.Segment Attrs.trayFileAttr (placeOf st conv) Nothing, Markdown.Segment Attrs.hintAttr (" \183 " <> Threads.threadState st conv) Nothing] Nothing Nothing
-    folded = Threads.isResolvedFold st conv
-    resolvedLine =
+    folded = Threads.isFolded st conv
+    (mark, markAttr) = Threads.foldedMark st conv
+    foldedLine =
       Row
         Branch
-        [ Markdown.Segment Attrs.doneMarkAttr " \10003 " Nothing
-        , Markdown.Segment Attrs.hintAttr (placeOf st conv <> " \183 resolved \183 " <> Types.tshow (length (Conv.convPosts conv)) <> " comments \183 za opens") Nothing
+        [ Markdown.Segment markAttr (" " <> mark) Nothing
+        , Markdown.Segment Attrs.hintAttr (" \183 " <> placeOf st conv <> " \183 " <> Types.tshow (length (Conv.convPosts conv)) <> " comments \183 za opens") Nothing
         ]
         (Just (cid, 0))
         Nothing
-    resolvedStrip = maybe [] (stripRow st cid 0) (Maybe.listToMaybe (Conv.convPosts conv))
+    foldedStrip = maybe [] (stripRow st cid 0) (Maybe.listToMaybe (Conv.convPosts conv))
     rangeLines = map excerptRow (rangeOf st conv)
     logRows = map (\tl -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Threads.tlSegs tl) (fmap (\i -> (cid, i)) (Threads.tlPost tl)) Nothing) (threadLog st width conv)
   in
     if folded
-      then resolvedLine : resolvedStrip ++ [blank]
+      then foldedLine : foldedStrip ++ [blank]
       else header : rangeLines ++ logRows ++ [blank]
 
 {- | The thread's posts as the body draws them, without the header the

@@ -392,37 +392,34 @@ toggleFold :: Brick.EventM Types.Name Types.St ()
 toggleFold = do
   st <- State.get
   let
-    folding = filter resolved (cursorConversations st)
-    resolved conv = case Conv.convVenue conv of
-      Conv.ReviewThread (Just _) Store.Resolved -> True
-      _ -> False
+    folding = filter Threads.onGitHub (cursorConversations st)
   case cursorConversations st of
-    [] -> Types.setMsg "nothing folded here"
+    [] -> Types.setMsg "nothing folds here"
     _
-      | null folding -> Types.setMsg "only a resolved thread folds"
+      | null folding -> Types.setMsg "only a thread on GitHub folds"
       | otherwise -> mapM_ toggleFoldOf folding
 
 toggleFoldOf :: Conv.Conversation -> Brick.EventM Types.Name Types.St ()
 toggleFoldOf conv =
   case Conv.convVenue conv of
-    Conv.ReviewThread (Just tid) Store.Resolved ->
+    Conv.ReviewThread (Just tid) _ ->
       State.modify $ \s ->
         let
-          folding = Set.member tid (Types.stUnfolded s)
+          folding = not (Threads.isFolded s conv)
           band = case (folding, Types.stPullView s) of
             (True, Just _) -> Just (Types.Band (Conv.convId conv) 0 False)
             (True, Nothing) -> Nothing
             (False, _) -> Types.stBand s
         in
-          s {Types.stUnfolded = toggleMember tid (Types.stUnfolded s), Types.stBand = band}
-    _ -> Types.setMsg "only a resolved thread folds"
+          s {Types.stFoldFlipped = toggleMember tid (Types.stFoldFlipped s), Types.stBand = band}
+    _ -> Types.setMsg "only a thread on GitHub folds"
 
 toggleFoldAtBand :: Brick.EventM Types.Name Types.St ()
 toggleFoldAtBand = do
   st <- State.get
   case bandPost st of
     Just (conv, _, _)
-      | Threads.isResolvedFold st conv -> toggleFoldOf conv
+      | Threads.isFolded st conv -> toggleFoldOf conv
     Just (conv, i, post)
       | Markdown.hasDetails (Conv.postBody post) ->
           State.modify (\s -> s {Types.stOpenDetails = toggleMember (Conv.convId conv, i) (Types.stOpenDetails s)})
