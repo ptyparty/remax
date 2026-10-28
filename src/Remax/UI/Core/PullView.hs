@@ -187,7 +187,7 @@ entryRows st width entry =
         case post of
           Just p ->
             dotRow st p event
-              ++ (if T.null (T.strip (Conv.markdownText (Conv.postBody p))) then [] else postBody st width convId 0 p)
+              ++ (if T.null (T.strip (Conv.markdownText (Conv.postBody p))) then [] else postBody st width convId 0 p ++ (if null threads then [] else [blank]))
               ++ concatMap (threadRows st width) threads
               ++ [blank]
           Nothing -> concatMap (threadRows st width) threads
@@ -246,7 +246,7 @@ threadRows :: Types.St -> Int -> Conv.Conversation -> [Row]
 threadRows st width conv =
   let
     cid = Conv.convId conv
-    header = Row Rail [Markdown.Segment Attrs.msgAttr "  " Nothing, Markdown.Segment Attrs.trayFileAttr (Threads.anchorPlace (Conv.convAnchor conv)) Nothing, Markdown.Segment Attrs.hintAttr (" \183 " <> Threads.threadState conv) Nothing] Nothing Nothing
+    header = Row Rail [Markdown.Segment Attrs.hintAttr "  \8618 " Nothing, Markdown.Segment Attrs.trayFileAttr (Threads.anchorPlace (Conv.convAnchor conv)) Nothing, Markdown.Segment Attrs.hintAttr (" \183 " <> Threads.threadState conv) Nothing] Nothing Nothing
     folded = Threads.isResolvedFold st conv
     resolvedLine =
       Row
