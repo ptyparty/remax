@@ -568,8 +568,9 @@ in the diff. `]` and `[` jump to the newest post of the next or previous thread 
 ### Submitting
 
 `:submit` opens `submit review · #N` over the code: the event (`h`/`l`
-pick Comment, Approve or Request changes; feedback mode offers Comment
-alone), the summary, which opens in insert mode, and `going out · N`
+pick Comment, Approve or Request changes; on your own pull request,
+and in feedback mode, the review is a Comment and the event row is
+hidden), the summary, which opens in insert mode, and `going out · N`
 listing every pending comment and reply with its first line: `@
 path:line new comment`, `↪ path:line reply to <author>`, `@ PR-level
 comment`. `Tab` enters the list, where `j`/`k` pick, `e` opens the

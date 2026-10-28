@@ -48,16 +48,24 @@ openSubmit = do
           placed <- MonadIO.liftIO (Submit.placeItems (Types.stRoot st) pr items)
           let
             ed0 = Modal.newEdState 0 [""]
-            event = case editing of
-              Git.Checkout -> Just GitHub.EventComment
-              Git.ReadOnly -> Nothing
+            own = do
+              s <- snap
+              viewer <- Conv.remoteViewer (PullPoll.snapshotRemote s)
+              pure (Conv.loginToText viewer == PullPoll.pullHeadAuthor (PullPoll.snapshotHead s))
+            events = case (editing, own) of
+              (Git.Checkout, _) -> Types.CommentOnly
+              (_, Just True) -> Types.CommentOnly
+              _ -> Types.AnyEvent
+            event = case events of
+              Types.CommentOnly -> Just GitHub.EventComment
+              Types.AnyEvent -> Nothing
           State.modify $ \s ->
             s
               { Types.stSubmit =
                   Just
                     Types.SubmitDialog
                       { Types.sdEvent = event
-                      , Types.sdCommentOnly = editing == Git.Checkout
+                      , Types.sdEvents = events
                       , Types.sdSummary = ed0 {Modal.edMode = Modal.Insert}
                       , Types.sdFocus = Types.SummaryFocus
                       , Types.sdSel = 0
@@ -122,8 +130,8 @@ summaryKey ev dialog =
       (Modal.Normal, V.EvKey V.KRight []) -> setDialog dialog {Types.sdEvent = stepEvent 1 dialog}
       (Modal.Normal, _) -> Monad.forM_ (Modal.handleNormal ev ed) (\next -> setDialog dialog {Types.sdSummary = next})
 
-{- | h and l walk Comment, Approve and Request changes; feedback mode
-offers Comment alone.
+{- | h and l walk Comment, Approve and Request changes; your own pull
+request offers Comment alone.
 -}
 stepEvent :: Int -> Types.SubmitDialog -> Maybe GitHub.ReviewEvent
 stepEvent d dialog =
@@ -131,8 +139,8 @@ stepEvent d dialog =
     events = [GitHub.EventComment, GitHub.EventApprove, GitHub.EventRequestChanges]
     here = Types.sdEvent dialog >>= (`List.elemIndex` events)
   in
-    case (Types.sdCommentOnly dialog, here) of
-      (True, _) -> Just GitHub.EventComment
+    case (Types.sdEvents dialog, here) of
+      (Types.CommentOnly, _) -> Just GitHub.EventComment
       (_, Just i) -> Types.safeIdx events (max 0 (min 2 (i + d)))
       (_, Nothing) -> Just (if d < 0 then GitHub.EventRequestChanges else GitHub.EventComment)
 

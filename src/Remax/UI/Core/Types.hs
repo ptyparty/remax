@@ -41,6 +41,7 @@ module Remax.UI.Core.Types
   , SubmitDialog (..)
   , PullView (..)
   , SubmitFocus (..)
+  , EventChoice (..)
   , AmendTarget (..)
   , MarkUndo (..)
   , FileView (..)
@@ -349,7 +350,7 @@ everything pending, placed as it will post.
 -}
 data SubmitDialog = SubmitDialog
   { sdEvent :: Maybe GitHub.ReviewEvent
-  , sdCommentOnly :: Bool
+  , sdEvents :: EventChoice
   , sdSummary :: Modal.EdState
   , sdFocus :: SubmitFocus
   , sdSel :: Int
@@ -358,6 +359,9 @@ data SubmitDialog = SubmitDialog
   , sdSending :: Bool
   , sdFailure :: Maybe T.Text
   }
+
+data EventChoice = CommentOnly | AnyEvent
+  deriving (Eq)
 
 data SubmitFocus = SummaryFocus | ListFocus
   deriving (Eq)

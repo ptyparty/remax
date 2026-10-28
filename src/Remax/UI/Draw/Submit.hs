@@ -36,12 +36,11 @@ submitLayer st dialog =
       Nothing -> []
     body =
       Brick.vBox
-        ( [ eventRow dialog
-          , Brick.txt " "
-          , Brick.withAttr Attrs.hintAttr (Brick.txt "summary")
-          , summaryRows dialog (width - 4)
-          , Brick.txt " "
-          ]
+        ( eventRow dialog
+            ++ [ Brick.withAttr Attrs.hintAttr (Brick.txt "summary")
+               , summaryRows dialog (width - 4)
+               , Brick.txt " "
+               ]
             ++ failure
             ++ localWarning width (Types.stPullLocal st)
             ++ [going]
@@ -72,31 +71,40 @@ localWarning width local =
 
 hint :: Config.KeyMode -> Types.SubmitDialog -> T.Text
 hint keys dialog =
-  case Types.sdFocus dialog of
-    Types.SummaryFocus ->
-      case Modal.edMode (Types.sdSummary dialog) of
-        Modal.Insert -> "Esc \9166 posts \183 " <> Types.cancelKeyText keys <> " closes"
-        Modal.Normal -> "\9166 posts \183 h/l picks the event \183 Tab goes to the list \183 i edits \183 Esc closes"
-    Types.ListFocus -> "\8593\8595 moves \183 e edits \183 dd drops \183 \9166 jumps to its line \183 Tab or Esc goes to the summary"
+  let
+    eventKeys = case Types.sdEvents dialog of
+      Types.CommentOnly -> ""
+      Types.AnyEvent -> "h/l picks the event \183 "
+  in
+    case Types.sdFocus dialog of
+      Types.SummaryFocus ->
+        case Modal.edMode (Types.sdSummary dialog) of
+          Modal.Insert -> "Esc \9166 posts \183 " <> Types.cancelKeyText keys <> " closes"
+          Modal.Normal -> "\9166 posts \183 " <> eventKeys <> "Tab goes to the list \183 i edits \183 Esc closes"
+      Types.ListFocus -> "\8593\8595 moves \183 e edits \183 dd drops \183 \9166 jumps to its line \183 Tab or Esc goes to the summary"
 
-eventRow :: Types.SubmitDialog -> BrickTypes.Widget Types.Name
+eventRow :: Types.SubmitDialog -> [BrickTypes.Widget Types.Name]
 eventRow dialog =
   let
     radio event label =
       let
         on = Types.sdEvent dialog == Just event
-        dimmed = Types.sdCommentOnly dialog && event /= GitHub.EventComment
       in
         Brick.withAttr
-          (if on then Attrs.noteInlineAttr else if dimmed then Attrs.hairAttr else Attrs.msgAttr)
+          (if on then Attrs.noteInlineAttr else Attrs.msgAttr)
           (Brick.txt ((if on then "(\8226) " else "( ) ") <> label <> "   "))
   in
-    Brick.hBox
-      [ Brick.withAttr Attrs.hintAttr (Brick.txt "event    ")
-      , radio GitHub.EventComment "Comment"
-      , radio GitHub.EventApprove "Approve"
-      , radio GitHub.EventRequestChanges "Request changes"
-      ]
+    case Types.sdEvents dialog of
+      Types.CommentOnly -> []
+      Types.AnyEvent ->
+        [ Brick.hBox
+            [ Brick.withAttr Attrs.hintAttr (Brick.txt "event    ")
+            , radio GitHub.EventComment "Comment"
+            , radio GitHub.EventApprove "Approve"
+            , radio GitHub.EventRequestChanges "Request changes"
+            ]
+        , Brick.txt " "
+        ]
 
 summaryRows :: Types.SubmitDialog -> Int -> BrickTypes.Widget Types.Name
 summaryRows dialog width =
