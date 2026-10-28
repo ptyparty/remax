@@ -7,6 +7,7 @@ module Remax.UI.Core.PullView
   , stops
   , checksSummary
   , checksListing
+  , hunkBody
   ) where
 
 import Brick qualified as Brick
@@ -17,6 +18,7 @@ import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
+import Remax.Highlight qualified as Highlight
 import Remax.PullPoll qualified as PullPoll
 import Remax.Store qualified as Store
 import Remax.UI.Core.Attrs qualified as Attrs
@@ -257,7 +259,7 @@ threadRows st width conv =
         (Just (cid, 0))
         Nothing
     resolvedStrip = maybe [] (stripRow st cid 0) (Maybe.listToMaybe (Conv.convPosts conv))
-    rangeLines = map (\(n, t) -> Row Rail [Markdown.Segment Attrs.hintAttr ("       " <> T.justifyRight 4 ' ' (Types.tshow n) <> " " <> t) Nothing] Nothing Nothing) (rangeOf st conv)
+    rangeLines = map excerptRow (rangeOf st conv)
     logRows = map (\tl -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Threads.tlSegs tl) (fmap (\i -> (cid, i)) (Threads.tlPost tl)) Nothing) (threadLog st width conv)
   in
     if folded
@@ -270,22 +272,107 @@ timeline already has.
 threadLog :: Types.St -> Int -> Conv.Conversation -> [Threads.ThreadLine]
 threadLog st width conv = drop 1 (Threads.threadLines st (width - 4) conv)
 
-{- | The diff lines a range thread sits on, numbered as GitHub shows
-them, from the hunk GitHub keeps with the comment.
+data Mark = Context | Added | Removed
+  deriving (Eq)
+
+data ExcerptLine = ExcerptLine
+  { exMark :: Mark
+  , exNumber :: Maybe Int
+  , exText :: T.Text
+  , exToks :: Maybe [Highlight.Seg]
+  }
+
+{- | The diff lines a range thread sits on, from the hunk GitHub keeps
+with the comment. The hunk ends at the comment's line as it was when
+written, so the excerpt counts back from there and renumbers to where
+the thread sits now.
 -}
-rangeOf :: Types.St -> Conv.Conversation -> [(Int, T.Text)]
+rangeOf :: Types.St -> Conv.Conversation -> [ExcerptLine]
 rangeOf st conv =
   case (Conv.convId conv, Conv.convAnchor conv) of
     (Conv.ThreadConversation tid, Conv.OnPosition pos)
-      | Just start <- Conv.posStartLine pos -> do
-          let
-            hunk = do
-              snap <- Types.ppSnapshot (Types.stPullPoll st)
-              thread <- List.find ((== tid) . Conv.remoteThreadId) (Conv.remoteThreads (PullPoll.snapshotRemote snap))
-              Just (Conv.remoteCommentDiffHunk (NEL.head (Conv.remoteThreadComments thread)))
-            count = Conv.posLine pos - start + 1
-          maybe [] (\h -> zip [start ..] (reverse (take count (reverse (filter (not . T.isPrefixOf "@@") (T.lines h)))))) hunk
+      | Just start <- Conv.posStartLine pos ->
+          Maybe.fromMaybe [] $ do
+            snap <- Types.ppSnapshot (Types.stPullPoll st)
+            thread <- List.find ((== tid) . Conv.remoteThreadId) (Conv.remoteThreads (PullPoll.snapshotRemote snap))
+            excerpt (Conv.posSide pos) start (Conv.posLine pos) (Map.lookup tid (Types.ppExcerptToks (Types.stPullPoll st))) (Conv.remoteCommentDiffHunk (NEL.head (Conv.remoteThreadComments thread)))
     _ -> []
+
+excerpt :: Conv.Side -> Int -> Int -> Maybe [[Highlight.Seg]] -> T.Text -> Maybe [ExcerptLine]
+excerpt side start end toks hunk =
+  case T.lines hunk of
+    header : _ -> do
+      (base0, head0) <- hunkStarts header
+      let
+        numbered = number base0 head0 (hunkBody hunk)
+        tokensAt i content = do
+          segs <- toks >>= (`Types.safeIdx` i)
+          if T.concat (map snd segs) == content then Just segs else Nothing
+        onSide (i, (mark, base, headNo, content)) =
+          let
+            n = case side of
+              Conv.BaseSide -> if mark == Added then Nothing else base
+              Conv.HeadSide -> if mark == Removed then Nothing else headNo
+          in
+            ExcerptLine mark n content (tokensAt i content)
+        sided = map onSide (zip [0 ..] numbered)
+        backTo :: Int -> [ExcerptLine] -> [ExcerptLine]
+        backTo left ls =
+          case ls of
+            l : rest
+              | left > 0 -> l : backTo (if Maybe.isJust (exNumber l) then left - 1 else left) rest
+            _ -> []
+        picked = reverse (backTo (end - start + 1) (reverse sided))
+      lastNo <- Maybe.listToMaybe (reverse (Maybe.mapMaybe exNumber picked))
+      Just (map (\l -> l {exNumber = fmap (+ (end - lastNo)) (exNumber l)}) picked)
+    [] -> Nothing
+
+hunkBody :: T.Text -> [T.Text]
+hunkBody hunk = filter (not . T.isPrefixOf "\\") (drop 1 (T.lines hunk))
+
+hunkStarts :: T.Text -> Maybe (Int, Int)
+hunkStarts header =
+  case T.words header of
+    "@@" : base : headSide : _ -> (,) <$> startOf '-' base <*> startOf '+' headSide
+    _ -> Nothing
+ where
+  startOf sign t = do
+    (c, rest) <- T.uncons t
+    if c == sign then readInt (T.takeWhile (/= ',') rest) else Nothing
+  readInt t = case reads (T.unpack t) of
+    [(n, "")] -> Just n
+    _ -> Nothing
+
+number :: Int -> Int -> [T.Text] -> [(Mark, Maybe Int, Maybe Int, T.Text)]
+number base headNo ls =
+  case ls of
+    [] -> []
+    l : rest ->
+      let
+        content = T.drop 1 l
+      in
+        case T.take 1 l of
+          "+" -> (Added, Nothing, Just headNo, content) : number base (headNo + 1) rest
+          "-" -> (Removed, Just base, Nothing, content) : number (base + 1) headNo rest
+          _ -> (Context, Just base, Just headNo, content) : number (base + 1) (headNo + 1) rest
+
+excerptRow :: ExcerptLine -> Row
+excerptRow line =
+  let
+    numberCol = maybe "    " (\n -> T.justifyRight 3 ' ' (Types.tshow n) <> " ") (exNumber line)
+    sign = case exMark line of
+      Added -> Markdown.Segment Attrs.addedMarkAttr "+ " Nothing
+      Removed -> Markdown.Segment Attrs.removedMarkAttr "- " Nothing
+      Context -> Markdown.Segment Attrs.mdCodeAttr "  " Nothing
+    code = case exMark line of
+      Removed -> [Markdown.Segment Attrs.removedTextAttr (exText line) Nothing]
+      _ -> map (\(attr, t) -> Markdown.Segment attr t Nothing) (Maybe.fromMaybe [(Attrs.mdCodeAttr, exText line)] (exToks line))
+  in
+    Row
+      Rail
+      (Markdown.Segment Attrs.mdCodeAttr " " Nothing : Markdown.Segment Attrs.lineNrAttr numberCol Nothing : sign : code)
+      Nothing
+      (Just (Markdown.Row (Just Attrs.mdCodeAttr) []))
 
 {- | Your pending comments and the agent's proposals, on the pull request
 and on lines, after the posted entries; pending replies sit inside their

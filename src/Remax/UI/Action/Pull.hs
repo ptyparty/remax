@@ -21,14 +21,22 @@ import Brick qualified as Brick
 import Control.Monad qualified as Monad
 import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
+import Data.List.NonEmpty qualified as NEL
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import GHC.Clock qualified as GHCClock
+import Remax.Conversation qualified as Conv
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
+import Remax.Highlight qualified as Highlight
 import Remax.PullPoll qualified as PullPoll
 import Remax.RemoteCache qualified as RemoteCache
+import Remax.Store qualified as Store
+import Remax.TreeSitter qualified as TS
 import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Core.Jobs qualified as Jobs
+import Remax.UI.Core.PullView qualified as PullView
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Model.Load qualified as Load
 import Remax.UI.Model.Nav qualified as Nav
@@ -146,11 +154,30 @@ applyPolled polled = do
   State.modify (\s -> WorkModel.withConversations s {Types.stPullMeta = Just (PullPoll.snapshotMeta snap)})
   WorkModel.placeOutdated
   st <- State.get
+  toks <- MonadIO.liftIO (excerptTokens (Types.stHls st) (Types.ppExcerptToks (Types.stPullPoll st)) snap)
+  modifyPoll (\pp -> pp {Types.ppExcerptToks = toks})
   Monad.when (PullPoll.polledFreshness polled == PullPoll.Changed) $
     MonadIO.liftIO (RemoteCache.writeRemote (Types.repoText st) (PullPoll.snapshotPull snap) (PullPoll.snapshotRemote snap))
   case PullPoll.polledHead polled of
     GitHub.RefsFetched -> Load.refreshGit
     GitHub.RefsInPlace -> pure ()
+
+excerptTokens :: TS.HighlighterTable -> Map.Map Store.RemoteThreadId [[Highlight.Seg]] -> PullPoll.Snapshot -> IO (Map.Map Store.RemoteThreadId [[Highlight.Seg]])
+excerptTokens table known snap =
+  let
+    ranged thread = case Conv.remoteThreadWhere thread of
+      Right pos | Maybe.isJust (Conv.posStartLine pos) && Map.notMember (Conv.remoteThreadId thread) known -> Just (thread, pos)
+      _ -> Nothing
+    highlight (thread, pos) =
+      case TS.highlighterFor table (T.unpack (Conv.posPath pos)) Nothing of
+        Nothing -> pure Nothing
+        Just hl -> do
+          got <- TS.tsHighlight hl (map (T.drop 1) (PullView.hunkBody (Conv.remoteCommentDiffHunk (NEL.head (Conv.remoteThreadComments thread)))))
+          pure (fmap (\scoped -> (Conv.remoteThreadId thread, map (map (\(scope, t) -> (Highlight.scopeSeg scope, t))) scoped)) got)
+  in
+    do
+      fresh <- traverse highlight (Maybe.mapMaybe ranged (Conv.remoteThreads (PullPoll.snapshotRemote snap)))
+      pure (Map.union known (Map.fromList (Maybe.catMaybes fresh)))
 
 onPull :: Types.St -> Int -> Bool
 onPull st n =

@@ -560,10 +560,11 @@ Markdown, `checks  ✓ N passed · mergeable` (`c`, or `C-c k`, lists the
 checks), then the conversation on one gutter: each PR-level comment and
 review as a `●` entry with its author, age and event, each review
 thread nested under the review that started it with `path:range ·
-state`, the range's diff lines in full, and its log as the body draws
+state`, the range's diff lines as a highlighted code block with their
+signs and the head side's line numbers, and its log as the body draws
 it. A resolved thread folds to one line and `za` opens it. Your drafts
 follow the posted entries as `◌ you · draft · <place> · sends with
-:submit`, pending replies sit inside their threads, and the last line
+:submit`, the agent's proposals as `◌ ✦ claude · proposes · <place>`, pending replies sit inside their threads, and the last line
 counts `drafts · N to send · :submit sends`.
 
 `j`/`k` move by post, including posts inside threads, and the selected
