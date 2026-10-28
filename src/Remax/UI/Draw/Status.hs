@@ -137,10 +137,10 @@ verbHint verbs keys =
       Feedback -> text
   in
     case keys of
-      Config.KeysVi -> "\9251\9166 accept · " <> flag "\9251! flag · " <> "\9251q question · " <> pullView "\9251c PR · " <> "\9251? keys "
+      Config.KeysVi -> "\9251\9166 accept · " <> flag "\9251! flag · " <> "\9251q question · " <> pullView "\9251o PR · " <> "\9251? keys "
       Config.KeysEmacs ->
-        "C-c \9166 accept · " <> flag "C-c ! flag · " <> "C-c ? question · " <> pullView "C-c c PR · " <> "M-x help "
-      Config.KeysHelix -> "\9166 accept · " <> flag "! flag · " <> "? question · " <> pullView "\9251c PR · " <> "\9251 menu · \9251? keys "
+        "C-c \9166 accept · " <> flag "C-c ! flag · " <> "C-c ? question · " <> pullView "C-c o PR · " <> "M-x help "
+      Config.KeysHelix -> "\9166 accept · " <> flag "! flag · " <> "? question · " <> pullView "\9251o PR · " <> "\9251 menu · \9251? keys "
 
 pullViewHint :: Config.KeyMode -> T.Text
 pullViewHint keys =
