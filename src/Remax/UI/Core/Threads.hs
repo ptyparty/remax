@@ -217,6 +217,7 @@ authorLabel post =
   case Conv.postState post of
     Conv.Proposal name -> "\10022 " <> Conv.agentNameToText name
     Conv.Local _ -> "\8644 " <> authorName (Conv.postAuthor post)
+    Conv.Posted {} | Conv.postAuthor post == Conv.Viewer -> "\8599 " <> authorName Conv.Viewer
     _ -> authorName (Conv.postAuthor post)
 
 bareLabel :: Conv.Post -> T.Text
