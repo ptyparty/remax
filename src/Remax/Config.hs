@@ -8,6 +8,7 @@
 module Remax.Config
   ( Config (..)
   , KeyMode (..)
+  , TrayStart (..)
   , keyModeFromText
   , keyModeToText
   , keyModeNames
@@ -65,8 +66,12 @@ data Config = Config
   , cfgWordDiff :: Bool -- mark the words that differ within a changed line (on)
   , cfgUntracked :: Bool -- show files git does not track yet (on)
   , cfgSettle :: Bool -- accepted lines glow briefly as their wash clears (on)
+  , cfgTray :: TrayStart
   , cfgSplit :: DiffModel.SplitConfig
   }
+
+data TrayStart = TrayOpen | TrayClosed
+  deriving (Eq)
 
 defaultConfig :: Config
 defaultConfig =
@@ -78,6 +83,7 @@ defaultConfig =
     , cfgWordDiff = True
     , cfgUntracked = True
     , cfgSettle = True
+    , cfgTray = TrayOpen
     , cfgSplit = DiffModel.defaultSplitConfig
     }
 
@@ -185,6 +191,7 @@ fromEntries entries =
       , cfgWordDiff = getInt "word-diff" (1 :: Int) /= 0
       , cfgUntracked = getInt "untracked" (1 :: Int) /= 0
       , cfgSettle = getInt "settle" (1 :: Int) /= 0
+      , cfgTray = if getInt "tray" (1 :: Int) /= 0 then TrayOpen else TrayClosed
       , cfgSplit =
           DiffModel.SplitConfig
             { DiffModel.splitThreshold =

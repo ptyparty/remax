@@ -171,7 +171,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stPassId = suPassId startup
     , Types.stCounts = Map.empty
     , Types.stPunch = []
-    , Types.stTray = True
+    , Types.stTray = Config.cfgTray (suConfig startup) == Config.TrayOpen
     , Types.stLastGit = 0
     , Types.stLastRefPoll = 0
     , Types.stGitQueued = False
