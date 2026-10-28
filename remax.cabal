@@ -201,7 +201,7 @@ executable remax
   hs-source-dirs:
       app
       src
-  ghc-options: -Wall -threaded
+  ghc-options: -Wall -threaded -rtsopts "-with-rtsopts=-maxN8 -I0 -A16m"
   cc-options: -O1 -std=gnu11 -D_DEFAULT_SOURCE -D_BSD_SOURCE
   include-dirs:
       vendor/tree-sitter/include
