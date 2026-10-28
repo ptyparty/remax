@@ -254,13 +254,14 @@ threadRows st width conv =
         [ Markdown.Segment Attrs.doneMarkAttr "  \10003 " Nothing
         , Markdown.Segment Attrs.hintAttr (Threads.anchorPlace (Conv.convAnchor conv) <> " \183 resolved \183 " <> Types.tshow (length (Conv.convPosts conv)) <> " comments \183 za opens") Nothing
         ]
+        (Just (cid, 0))
         Nothing
-        Nothing
+    resolvedStrip = maybe [] (stripRow st cid 0) (Maybe.listToMaybe (Conv.convPosts conv))
     rangeLines = map (\(n, t) -> Row Rail [Markdown.Segment Attrs.hintAttr ("       " <> T.justifyRight 4 ' ' (Types.tshow n) <> " " <> t) Nothing] Nothing Nothing) (rangeOf st conv)
     logRows = map (\tl -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Threads.tlSegs tl) (fmap (\i -> (cid, i)) (Threads.tlPost tl)) Nothing) (threadLog st width conv)
   in
     if folded
-      then [resolvedLine, blank]
+      then resolvedLine : resolvedStrip ++ [blank]
       else header : rangeLines ++ logRows ++ [blank]
 
 {- | The thread's posts as the body draws them, without the header the
