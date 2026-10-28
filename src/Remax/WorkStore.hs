@@ -107,7 +107,7 @@ loadItems conn scope targets = do
         _ -> Map.lookup (Conv.LocalId tid) targets
       work <- case kind of
         "proposed" -> case Conv.parseAuthor author of
-          Conv.Agent name -> Just (Conv.Proposed name (Conv.Markdown body))
+          Conv.Agent name -> Just (Conv.Proposed name (Conv.Markdown body) (isoStamp at))
           _ -> Nothing
         "pending" -> Just (Conv.Pending (Conv.parseAuthor author) (Conv.Markdown body))
         "aside" -> Just (Conv.Aside (Conv.parseAuthor author) (Conv.Markdown body) (isoStamp at))

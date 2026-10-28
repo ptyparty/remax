@@ -424,11 +424,11 @@ draftRows st width convs =
     unsent c = Maybe.mapMaybe (\(i, p) -> if isUnsent p then Just (c, i, p) else Nothing) (zip [0 ..] (Conv.convPosts c))
     isUnsent p = case Conv.postState p of
       Conv.Draft -> True
-      Conv.Proposal _ -> True
+      Conv.Proposal _ _ -> True
       _ -> False
     pullDrafts = maybe [] unsent (List.find ((== Conv.PullConversation) . Conv.convId) convs)
     heading p = case Conv.postState p of
-      Conv.Proposal name ->
+      Conv.Proposal name _ ->
         [ Markdown.Segment Attrs.guideAttr ("\10022 " <> Conv.agentNameToText name) Nothing
         , Markdown.Segment Attrs.guideAttr " \183 proposes" Nothing
         , Markdown.Segment Attrs.hintAttr " \183 yours to take or drop" Nothing

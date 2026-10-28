@@ -221,7 +221,7 @@ isPosted p =
 isProposal :: Conv.Post -> Bool
 isProposal p =
   case Conv.postState p of
-    Conv.Proposal _ -> True
+    Conv.Proposal _ _ -> True
     _ -> False
 
 data Turn = Settled | ReplyPending | YourTurn | TheirTurn | AuthorsTurn
@@ -253,14 +253,14 @@ threadTurn seat conv =
     case Conv.convVenue conv of
       Conv.ReviewThread _ Store.Resolved -> Settled
       _ ->
-        case reverse (filter (not . Conv.isLocalPost) (Conv.convPosts conv)) of
-          (newest : _) ->
+        case Conv.newestPost (filter (not . Conv.isLocalPost) (Conv.convPosts conv)) of
+          Just newest ->
             case (Conv.postState newest, Conv.postAuthor newest) of
               (Conv.Draft, _) -> ReplyPending
-              (Conv.Proposal _, _) -> YourTurn
+              (Conv.Proposal _ _, _) -> YourTurn
               (_, Conv.Viewer) -> TheirTurn
               _ -> owed
-          [] -> owed
+          Nothing -> owed
 
 takenAs :: Conv.Target -> T.Text -> T.Text
 takenAs target author =
@@ -308,7 +308,7 @@ columnCap = 16
 authorLabel :: Conv.Post -> T.Text
 authorLabel post =
   case Conv.postState post of
-    Conv.Proposal name -> "\10022 " <> Conv.agentNameToText name
+    Conv.Proposal name _ -> "\10022 " <> Conv.agentNameToText name
     Conv.Local _ -> "\8644 " <> authorName (Conv.postAuthor post)
     Conv.Posted {} | Conv.postAuthor post == Conv.Viewer -> "\8599 " <> authorName Conv.Viewer
     _ -> authorName (Conv.postAuthor post)
@@ -353,7 +353,7 @@ lookOf st bare post =
           , lookRailAttr = Attrs.questionMarkAttr
           , lookSlotAttr = Attrs.questionMarkAttr
           }
-      Conv.Proposal _ ->
+      Conv.Proposal _ _ ->
         Look
           { lookRail = "\9478"
           , lookSlot = "proposes"
@@ -480,7 +480,7 @@ postKeys keys rule venue post =
             ++ [key "y copy link" "C-c y copy link"]
             ++ resolve
         Conv.Draft -> [key "e edit" "C-c e edit", key "dd discard" "C-c d discard"]
-        Conv.Proposal _ -> [key ("\9166 take as your " <> takenWord) ("C-c C-c take as your " <> takenWord), key "dd drop" "C-c d drop"]
+        Conv.Proposal _ _ -> [key ("\9166 take as your " <> takenWord) ("C-c C-c take as your " <> takenWord), key "dd drop" "C-c d drop"]
         Conv.Local _ -> []
 
 possessive :: Conv.Author -> T.Text
@@ -501,7 +501,7 @@ postLabel venue post =
     case Conv.postState post of
       Conv.Posted {} -> who <> " comment"
       Conv.Draft -> "your pending " <> kind
-      Conv.Proposal name -> Conv.agentNameToText name <> "'s proposal"
+      Conv.Proposal name _ -> Conv.agentNameToText name <> "'s proposal"
       Conv.Local _ -> who <> " note"
 
 anchorPlace :: Conv.Anchor -> T.Text

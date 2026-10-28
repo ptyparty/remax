@@ -879,7 +879,7 @@ printListed described =
               Conv.Agent (Conv.AgentName n) -> n
             tag = case Conv.postState post of
               Conv.Draft -> " [pending]"
-              Conv.Proposal _ -> " [proposal]"
+              Conv.Proposal _ _ -> " [proposal]"
               _ -> ""
             label = who <> tag <> ": "
             indent = T.replicate (T.length label) " "
