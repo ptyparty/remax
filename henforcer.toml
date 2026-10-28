@@ -155,10 +155,16 @@ qualified = { qualifiedPost = true }
 alias = "ListUtils"
 
 [[forAnyModule.allowedQualifications]]
-module = "Data.Digest.Pure.SHA"
+module = "Crypto.Hash.SHA256"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }
-alias = "SHA"
+alias = "SHA256"
+
+[[forAnyModule.allowedQualifications]]
+module = "Data.ByteString.Base16"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Base16"
 
 [[forAnyModule.allowedQualifications]]
 module = "Data.FileEmbed"
@@ -251,18 +257,6 @@ module = "Data.Text.IO"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }
 alias = "TIO"
-
-[[forAnyModule.allowedQualifications]]
-module = "Data.Text.Lazy"
-[[forAnyModule.allowedQualifications.importScheme]]
-qualified = { qualifiedPost = true }
-alias = "TL"
-
-[[forAnyModule.allowedQualifications]]
-module = "Data.Text.Lazy.Encoding"
-[[forAnyModule.allowedQualifications.importScheme]]
-qualified = { qualifiedPost = true }
-alias = "TLE"
 
 [[forAnyModule.allowedQualifications]]
 module = "Data.Text.Read"

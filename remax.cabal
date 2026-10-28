@@ -243,12 +243,13 @@ executable remax
       stdc++
   build-depends:
       Diff
-    , SHA
     , array
     , base >=4.17 && <5
+    , base16-bytestring
     , brick >=2.0
     , bytestring
     , containers
+    , cryptohash-sha256
     , directory
     , file-embed
     , filepath

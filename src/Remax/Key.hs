@@ -15,12 +15,14 @@ module Remax.Key
   , sha256Hex
   ) where
 
-import Data.Digest.Pure.SHA qualified as SHA
+import Crypto.Hash.SHA256 qualified as SHA256
+import Data.ByteString qualified as BS
+import Data.ByteString.Base16 qualified as Base16
+import Data.ByteString.Char8 qualified as BSC
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as TL
-import Data.Text.Lazy.Encoding qualified as TLE
+import Data.Text.Encoding qualified as TE
 
 -- One key per marked changed line ("+text" or "-text"), in the order the
 -- lines appear in the file's decorations. The copy ordinal keeps twins
@@ -30,13 +32,13 @@ lineKeys :: T.Text -> T.Text -> [T.Text] -> [T.Text]
 lineKeys repo file markedLines =
   let
     lineId l =
-      sha256Hex (T.intercalate "\NUL" ["remax/1", repo, file, l])
+      sha256HexBytes (TE.encodeUtf8 (T.intercalate "\NUL" ["remax/1", repo, file, l]))
     go _ [] = []
     go seen (l : rest) =
       let
         lid = lineId l
         ordinal = Map.findWithDefault (0 :: Int) lid seen
-        key = sha256Hex (T.concat [lid, "\NUL", T.pack (show ordinal)])
+        key = TE.decodeLatin1 (sha256HexBytes (BS.concat [lid, "\NUL", BSC.pack (show ordinal)]))
       in
         key : go (Map.insert lid (ordinal + 1) seen) rest
   in
@@ -61,4 +63,8 @@ noteGroupId repo keys =
 
 sha256Hex :: T.Text -> T.Text
 sha256Hex =
-  T.pack . SHA.showDigest . SHA.sha256 . TLE.encodeUtf8 . TL.fromStrict
+  TE.decodeLatin1 . sha256HexBytes . TE.encodeUtf8
+
+sha256HexBytes :: BS.ByteString -> BS.ByteString
+sha256HexBytes =
+  Base16.encode . SHA256.hash

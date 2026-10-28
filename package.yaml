@@ -99,9 +99,11 @@ executables:
     dependencies:
       - array
       - base >= 4.17 && < 5
+      - base16-bytestring
       - brick >= 2.0
       - bytestring
       - containers
+      - cryptohash-sha256
       - Diff
       - directory
       - file-embed
@@ -110,7 +112,6 @@ executables:
       - fsnotify >= 0.4
       - mtl
       - process
-      - SHA
       - sqlite-simple
       - text
       - time
