@@ -3,6 +3,7 @@
 module Remax.UI.Core.Threads
   ( ThreadLine (..)
   , threadLines
+  , postLines
   , rowLines
   , rowLineCount
   , reactionSegs
@@ -16,6 +17,7 @@ module Remax.UI.Core.Threads
   , awaitingYou
   , awaitsYou
   , proposedComments
+  , isProposal
   , anchorPlace
   , takenAs
   , authorName
@@ -85,6 +87,21 @@ threadLines :: Types.St -> Int -> Conv.Conversation -> [ThreadLine]
 threadLines st width conv =
   let
     cid = Conv.convId conv
+    header = case Conv.convVenue conv of
+      Conv.ReviewThread (Just _) _ -> [ThreadLine cid Nothing Nothing (headerSegs st conv)]
+      _ -> []
+    outdated = case Map.lookup cid (Types.stOutdated st) of
+      Just _ -> outdatedRows cid (Conv.convAnchor conv)
+      Nothing -> []
+  in
+    if isResolvedFold st conv
+      then [ThreadLine cid Nothing Nothing (resolvedSegs width conv)]
+      else outdated ++ header ++ postLines st width conv
+
+postLines :: Types.St -> Int -> Conv.Conversation -> [ThreadLine]
+postLines st width conv =
+  let
+    cid = Conv.convId conv
     posts = Conv.convPosts conv
     bare = case Conv.convVenue conv of
       Conv.LocalOnly _ -> True
@@ -103,16 +120,8 @@ threadLines st width conv =
         body = postRows st width column cid bare (length strip) i post
       in
         body ++ strip
-    header = case Conv.convVenue conv of
-      Conv.ReviewThread (Just _) _ -> [ThreadLine cid Nothing Nothing (headerSegs st conv)]
-      _ -> []
-    outdated = case Map.lookup cid (Types.stOutdated st) of
-      Just _ -> outdatedRows cid (Conv.convAnchor conv)
-      Nothing -> []
   in
-    if isResolvedFold st conv
-      then [ThreadLine cid Nothing Nothing (resolvedSegs width conv)]
-      else outdated ++ header ++ concatMap rowsFor (zip [0 ..] posts)
+    concatMap rowsFor (zip [0 ..] posts)
 
 {- | What a conversation whose lines left the file remembers of them:
 the first three, numbered as they were, then how many more.
@@ -245,7 +254,9 @@ threadState :: Types.St -> Conv.Conversation -> T.Text
 threadState st conv =
   case threadTurn (seatOf st) conv of
     Settled -> "resolved"
-    ReplyPending -> "your reply is pending"
+    ReplyPending -> case Conv.convVenue conv of
+      Conv.ReviewThread Nothing _ -> "your comment is pending"
+      _ -> "your reply is pending"
     YourTurn -> "awaiting you"
     TheirTurn -> "awaiting them"
     AuthorsTurn -> "awaiting the author"

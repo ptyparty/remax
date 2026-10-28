@@ -270,7 +270,7 @@ threadRows st width conv =
 timeline already has.
 -}
 threadLog :: Types.St -> Int -> Conv.Conversation -> [Threads.ThreadLine]
-threadLog st width conv = drop 1 (Threads.threadLines st (width - 4) conv)
+threadLog st width = Threads.postLines st (width - 4)
 
 data Mark = Context | Added | Removed
   deriving (Eq)
@@ -296,7 +296,29 @@ rangeOf st conv =
             snap <- Types.ppSnapshot (Types.stPullPoll st)
             thread <- List.find ((== tid) . Conv.remoteThreadId) (Conv.remoteThreads (PullPoll.snapshotRemote snap))
             excerpt (Conv.posSide pos) start (Conv.posLine pos) (Map.lookup tid (Types.ppExcerptToks (Types.stPullPoll st))) (Conv.remoteCommentDiffHunk (NEL.head (Conv.remoteThreadComments thread)))
+    (_, Conv.OnLines lineSpan)
+      | length (Conv.spanLines lineSpan) > 1 ->
+          map (spanExcerpt st lineSpan) (NEL.toList (Conv.spanLines lineSpan))
     _ -> []
+
+spanExcerpt :: Types.St -> Conv.LineSpan -> Conv.SpanLine -> ExcerptLine
+spanExcerpt st lineSpan line =
+  let
+    (mark, content) = case T.uncons (Conv.slText line) of
+      Just ('+', rest) -> (Added, rest)
+      Just ('-', rest) -> (Removed, rest)
+      Just (_, rest) -> (Context, rest)
+      Nothing -> (Context, "")
+    onSide = case (Conv.spanSide lineSpan, mark) of
+      (Conv.HeadSide, Removed) -> False
+      (Conv.BaseSide, Added) -> False
+      _ -> True
+    toks = do
+      fv <- List.find ((== Conv.spanPath lineSpan) . T.pack . Types.fvPath) (Types.stFiles st)
+      segs <- Types.safeIdx (Types.fvToks fv) (Conv.slLineNo line - 1)
+      if Conv.spanSide lineSpan == Conv.HeadSide && onSide && T.concat (map snd segs) == content then Just segs else Nothing
+  in
+    ExcerptLine mark (if onSide then Just (Conv.slLineNo line) else Nothing) content toks
 
 excerpt :: Conv.Side -> Int -> Int -> Maybe [[Highlight.Seg]] -> T.Text -> Maybe [ExcerptLine]
 excerpt side start end toks hunk =
@@ -374,9 +396,10 @@ excerptRow line =
       Nothing
       (Just (Markdown.Row (Just Attrs.mdCodeAttr) []))
 
-{- | Your pending comments and the agent's proposals, on the pull request
-and on lines, after the posted entries; pending replies sit inside their
-threads already.
+{- | Your pending comments on the pull request and the agent's proposals
+for it, then the review your line comments will go out in, with the
+agent's proposed line comments beside them; pending replies sit inside
+their threads already.
 -}
 draftRows :: Types.St -> Int -> [Conv.Conversation] -> [Row]
 draftRows st width convs =
@@ -388,24 +411,39 @@ draftRows st width convs =
       Conv.Proposal _ -> True
       _ -> False
     pullDrafts = maybe [] unsent (List.find ((== Conv.PullConversation) . Conv.convId) convs)
-    place c = Threads.anchorPlace (Conv.convAnchor c)
-    heading c p = case Conv.postState p of
+    heading p = case Conv.postState p of
       Conv.Proposal name ->
         [ Markdown.Segment Attrs.guideAttr ("\10022 " <> Conv.agentNameToText name) Nothing
         , Markdown.Segment Attrs.guideAttr " \183 proposes" Nothing
-        , Markdown.Segment Attrs.hintAttr (" \183 " <> place c <> " \183 yours to take or drop") Nothing
+        , Markdown.Segment Attrs.hintAttr " \183 yours to take or drop" Nothing
         ]
       _ ->
         [ Markdown.Segment Attrs.noteInlineAttr "you" Nothing
         , Markdown.Segment Attrs.questionMarkAttr " \183 draft" Nothing
-        , Markdown.Segment Attrs.hintAttr (" \183 " <> place c <> " \183 sends with :submit") Nothing
+        , Markdown.Segment Attrs.hintAttr " \183 sends with :submit" Nothing
         ]
     draft (c, i, p) =
-      Row Pending (heading c p) Nothing Nothing
+      Row Pending (heading p) Nothing Nothing
         : postBody st width (Conv.convId c) i p
         ++ [blank]
+    posts = concatMap Conv.convPosts newThreads
+    count label n = if n == 0 then [] else [Types.tshow n <> " " <> label]
+    tally =
+      count (if drafted == 1 then "comment" else "comments") drafted
+        ++ count "proposed" (length (filter Threads.isProposal posts))
+    drafted = length (filter ((== Conv.Draft) . Conv.postState) posts)
+    review =
+      Row
+        Pending
+        [ Markdown.Segment Attrs.noteInlineAttr "you" Nothing
+        , Markdown.Segment Attrs.questionMarkAttr " \183 pending review" Nothing
+        , Markdown.Segment Attrs.hintAttr (T.concat (map (" \183 " <>) (tally ++ ["sends with :submit"]))) Nothing
+        ]
+        Nothing
+        Nothing
   in
-    concatMap draft (pullDrafts ++ concatMap unsent newThreads)
+    concatMap draft pullDrafts
+      ++ (if null newThreads then [] else review : concatMap (threadRows st width) newThreads ++ [blank])
 
 footerRows :: Types.St -> [Row]
 footerRows st =
