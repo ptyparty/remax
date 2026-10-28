@@ -157,7 +157,7 @@ workTitle wp =
       Types.ReplyOrigin author -> "reply \183 to " <> author
       Types.CommentOrigin -> "comment \183 " <> T.takeWhile (/= ' ') (Types.wpPlace wp)
       Types.AskOrigin -> "ask \183 the agent"
-    Types.TakeProposal _ _ author -> "reply \183 to " <> author <> " \183 from the proposal"
+    Types.TakeProposal _ target author -> Threads.takenAs target author <> " \183 from the proposal"
     Types.EditPosted _ _ -> "edit \183 your comment on GitHub"
 
 foldKey :: Config.KeyMode -> T.Text
@@ -183,6 +183,7 @@ workHint keys rule mode wp =
       Types.CommentOn (Conv.OnLines _) -> ("saves", sha ++ ["C-s inserts a suggestion"], [])
       Types.CommentOn _ -> ("saves", sha, [])
       Types.EditPending _ _ -> ("saves", sha, [])
+      Types.TakeProposal _ (Conv.NewThread _ _) _ -> ("queues for :submit", sha, ["the proposal becomes your comment"])
       Types.TakeProposal {} -> ("queues for :submit", sha, ["the proposal becomes your reply"])
       Types.EditPosted _ _ -> ("edits on GitHub at once", sha, [])
   in
@@ -270,7 +271,7 @@ ruleText wp =
       Types.ReplyOrigin author -> "your reply to " <> author <> " \183 waits for :submit"
       Types.CommentOrigin -> "your comment \183 waits for :submit"
       Types.AskOrigin -> "ask the agent"
-    Types.TakeProposal _ _ author -> "reply to " <> author <> " \183 waits for :submit"
+    Types.TakeProposal _ target author -> Threads.takenAs target author <> " \183 waits for :submit"
     Types.EditPosted _ _ -> "your posted comment \183 edits on GitHub when you save"
 
 -- an amend that quietly stages files is the surprise this is here

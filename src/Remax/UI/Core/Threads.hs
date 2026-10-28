@@ -16,6 +16,7 @@ module Remax.UI.Core.Threads
   , awaitingYou
   , awaitsYou
   , anchorPlace
+  , takenAs
   , authorName
   , authorInk
   , railGlyph
@@ -233,6 +234,12 @@ threadTurn seat conv =
               _ -> owed
           [] -> owed
 
+takenAs :: Conv.Target -> T.Text -> T.Text
+takenAs target author =
+  case target of
+    Conv.NewThread _ anchor -> "comment on " <> anchorPlace anchor
+    _ -> "reply to " <> author
+
 threadState :: Types.St -> Conv.Conversation -> T.Text
 threadState st conv =
   case threadTurn (seatOf st) conv of
@@ -415,6 +422,9 @@ postKeys keys rule venue post =
     summary = case venue of
       Conv.ReviewSummary {} -> True
       _ -> False
+    takenWord = case venue of
+      Conv.ReviewThread Nothing _ -> "comment"
+      _ -> "reply"
     resolve = case venue of
       Conv.ReviewThread _ Store.Resolved -> [key "\9251u unresolve" "C-c u unresolve"]
       Conv.ReviewThread {} -> [key "\9251u resolve" "C-c u resolve"]
@@ -430,7 +440,7 @@ postKeys keys rule venue post =
             ++ [key "y copy link" "C-c y copy link"]
             ++ resolve
         Conv.Draft -> [key "e edit" "C-c e edit", key "dd discard" "C-c d discard"]
-        Conv.Proposal _ -> [key "\9166 take as your reply" "C-c C-c take as your reply", key "dd drop" "C-c d drop"]
+        Conv.Proposal _ -> [key ("\9166 take as your " <> takenWord) ("C-c C-c take as your " <> takenWord), key "dd drop" "C-c d drop"]
         Conv.Local _ -> []
 
 possessive :: Conv.Author -> T.Text

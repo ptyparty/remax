@@ -175,8 +175,8 @@ usage =
   \       remax [-C DIR] reply ID TEXT   answer a conversation; shows in the review\n\
   \                                     session, and never reaches GitHub\n\
   \       remax [-C DIR] comment HUNK TEXT\n\
-  \                                     draft a GitHub comment on a hunk for the\n\
-  \                                     reviewer, pending until they submit it\n\
+  \                                     propose a GitHub comment on a hunk; the\n\
+  \                                     reviewer takes it with Enter\n\
   \       remax [-C DIR] comment --revise ID TEXT\n\
   \                                     propose text for a conversation; the\n\
   \                                     reviewer takes it with Enter\n\
@@ -834,7 +834,7 @@ comment args = do
         ((root, h) : _) -> do
           cached <- RemoteCache.readRemote (T.pack root)
           Monad.void (Feedback.commentOnHunk conn root (fmap RemoteCache.cachedPull cached) h text)
-          putStrLn ("comment drafted on " ++ Hunks.hunkFile h ++ ":" ++ show (Hunks.hunkLine h) ++ "; it posts when the reviewer submits")
+          putStrLn ("comment proposed on " ++ Hunks.hunkFile h ++ ":" ++ show (Hunks.hunkLine h) ++ "; the reviewer takes it with Enter")
 
 -- JSON output ------------------------------------------------------------------
 

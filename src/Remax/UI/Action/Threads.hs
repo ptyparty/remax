@@ -453,11 +453,11 @@ saveWork wp text = do
         MonadIO.liftIO (WorkStore.editWork conn wid body)
         reloadAndBand (Types.wpConv wp)
         Types.setMsg "edited \183 still waits for :submit"
-      Types.TakeProposal wid _ author -> do
+      Types.TakeProposal wid target author -> do
         MonadIO.liftIO (WorkStore.takeWork conn wid)
         MonadIO.liftIO (WorkStore.editWork conn wid body)
         reloadAndBand (Types.wpConv wp)
-        Types.setMsg ("taken as your reply to " <> author <> " \183 waits for :submit")
+        Types.setMsg ("taken as your " <> Threads.takenAs target author <> " \183 waits for :submit")
       Types.EditPosted kind cid ->
         case pullOf st of
           Just pr -> githubJob "editing the comment" (GitHub.editComment (Types.stRoot st) (Git.prRepo pr) kind cid text) "edited on GitHub"
