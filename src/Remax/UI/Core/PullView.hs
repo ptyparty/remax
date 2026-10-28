@@ -122,7 +122,7 @@ headerRows st width =
         description = map (\r -> Row Blank (Markdown.rowSegments r) Nothing (Just r)) (Markdown.render Markdown.Folded (width - 4) (Conv.Markdown (PullPoll.pullHeadBody h)))
         emacs = Config.cfgKeys (Types.stConfig st) == Config.KeysEmacs
         checksKey = if emacs then "    C-c k lists them" else "    c lists them"
-        conversationKeys = if emacs then "conversation \183 C-n C-p move by post \183 C-c g comment on the PR" else "conversation \183 j/k move by post \183 @ comment on the PR"
+        conversationKeys = if emacs then "conversation \183 C-n C-p move by post \183 C-c [ ] threads awaiting you \183 C-c g comment on the PR" else "conversation \183 j/k move by post \183 [ ] threads awaiting you \183 @ comment on the PR"
       in
         [ Row Blank [Markdown.Segment Attrs.trayFileAttr (PullPoll.pullHeadTitle h) Nothing] Nothing Nothing
         , hint Blank (T.intercalate " \183 " parts)

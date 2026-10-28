@@ -14,6 +14,7 @@ module Remax.UI.Core.Threads
   , possessive
   , threadState
   , awaitingYou
+  , awaitsYou
   , anchorPlace
   , authorName
   , authorInk
@@ -220,12 +221,13 @@ threadState conv =
 
 awaitingYou :: [Conv.Conversation] -> Int
 awaitingYou =
-  let
-    yours conv = case Conv.convVenue conv of
-      Conv.ReviewThread {} -> threadTurn conv == YourTurn
-      _ -> False
-  in
-    length . filter yours
+  length . filter awaitsYou
+
+awaitsYou :: Conv.Conversation -> Bool
+awaitsYou conv =
+  case Conv.convVenue conv of
+    Conv.ReviewThread {} -> threadTurn conv == YourTurn
+    _ -> False
 
 authorColumn :: [Conv.Post] -> Int
 authorColumn posts = max 6 (min columnCap (maximum (0 : map (T.length . authorLabel) posts)))
