@@ -15,7 +15,6 @@ import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
 import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
-import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Ink qualified as Ink
@@ -39,9 +38,7 @@ statusBar st =
       modeChip st
         <+> (if Maybe.isJust (Types.stPullView st) then Brick.withAttr Attrs.hintAttr (Brick.txt " PR view ") else Brick.txt "")
         <+> pollChip st
-        <+> pullChip st
-        <+> declSeg st
-        <+> meterSeg st
+        <+> placeSeg st
         <+> Brick.txt "  "
         <+> middle
         <+> Brick.padLeft Brick.Max (Brick.withAttr Attrs.hintAttr (Brick.txt ("  " <> statusHint st)))
@@ -103,26 +100,22 @@ pollChip st =
     then Brick.withAttr Attrs.watchPollAttr (Brick.txt " \9888 poll ")
     else Brick.txt ""
 
-pullChip :: Types.St -> Brick.Widget Types.Name
-pullChip st =
-  case PullAction.pullFreshness st of
-    Nothing -> Brick.txt ""
-    Just PullAction.AwaitingFirstPoll -> Brick.withAttr Attrs.hintAttr (Brick.txt " \8635 syncing ")
-    Just (PullAction.SyncedAgo secs) -> Brick.withAttr Attrs.hintAttr (Brick.txt (" \8635 synced " <> PullAction.shortAge secs <> " "))
-    Just (PullAction.StaleSince age reason) ->
-      Brick.withAttr Attrs.watchPollAttr (Brick.txt (" " <> PullAction.staleText age <> " \183 " <> reason <> " "))
+placeSeg :: Types.St -> Brick.Widget Types.Name
+placeSeg st =
+  case Maybe.catMaybes [declSeg st, meterSeg st] of
+    [] -> Brick.txt ""
+    segs -> Brick.hBox (Brick.txt " " : List.intersperse (Brick.withAttr Attrs.trayDeclAttr (Brick.txt " \183  ")) segs)
 
-declSeg :: Types.St -> Brick.Widget Types.Name
+declSeg :: Types.St -> Maybe (Brick.Widget Types.Name)
 declSeg st =
   case Types.currentFileMay st of
     Just fv ->
       -- nearest decl at or above the cursor, found by walking up
       -- from it rather than rebuilding the buffer every frame
       case List.find View.isDeclLine (Modal.bufferUpward (Types.fvEd fv)) of
-        Just d ->
-          Brick.withAttr Attrs.trayDeclAttr (Brick.txt (" " <> T.take 32 (View.declName d) <> " \183"))
-        Nothing -> Brick.txt ""
-    Nothing -> Brick.txt ""
+        Just d -> Just (Brick.withAttr Attrs.trayDeclAttr (Brick.txt (T.take 32 (View.declName d))))
+        Nothing -> Nothing
+    Nothing -> Nothing
 
 -- in vi the verbs sit under the leader, so the hint has to say so
 -- Named for the keymap in use, all three of them. The verbs sit
@@ -226,12 +219,15 @@ verbsFor st =
     Git.Pull _ Git.Checkout -> Feedback
     _ -> AllVerbs
 
-meterSeg :: Types.St -> Brick.Widget Types.Name
+meterSeg :: Types.St -> Maybe (Brick.Widget Types.Name)
 meterSeg st =
   let
     total = sum (map (length . Types.fvRuns) (Types.stFiles st))
     pending = sum (map Types.fvPending (Types.stFiles st))
+    inPull = case Git.subjectOf (Types.stMode st) of
+      Git.Pull {} -> True
+      _ -> False
   in
-    if total == 0
-      then Brick.txt ""
-      else Brick.txt "  " <+> Ink.meterW (Types.settleLevel st) (total - pending) total
+    if total == 0 || inPull
+      then Nothing
+      else Just (Ink.meterW (Types.settleLevel st) (total - pending) total)

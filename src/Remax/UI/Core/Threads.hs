@@ -13,6 +13,7 @@ module Remax.UI.Core.Threads
   , postLabel
   , possessive
   , threadState
+  , awaitingYou
   , anchorPlace
   , authorName
   , authorInk
@@ -192,19 +193,39 @@ isProposal p =
     Conv.Proposal _ -> True
     _ -> False
 
-threadState :: Conv.Conversation -> T.Text
-threadState conv =
+data Turn = Settled | ReplyPending | YourTurn | TheirTurn
+  deriving (Eq, Show)
+
+threadTurn :: Conv.Conversation -> Turn
+threadTurn conv =
   case Conv.convVenue conv of
-    Conv.ReviewThread _ Store.Resolved -> "resolved"
+    Conv.ReviewThread _ Store.Resolved -> Settled
     _ ->
       case reverse (filter (not . Conv.isLocalPost) (Conv.convPosts conv)) of
         (newest : _) ->
           case (Conv.postState newest, Conv.postAuthor newest) of
-            (Conv.Draft, _) -> "your reply is pending"
-            (Conv.Proposal _, _) -> "awaiting you"
-            (_, Conv.Viewer) -> "awaiting them"
-            _ -> "awaiting you"
-        [] -> "awaiting you"
+            (Conv.Draft, _) -> ReplyPending
+            (Conv.Proposal _, _) -> YourTurn
+            (_, Conv.Viewer) -> TheirTurn
+            _ -> YourTurn
+        [] -> YourTurn
+
+threadState :: Conv.Conversation -> T.Text
+threadState conv =
+  case threadTurn conv of
+    Settled -> "resolved"
+    ReplyPending -> "your reply is pending"
+    YourTurn -> "awaiting you"
+    TheirTurn -> "awaiting them"
+
+awaitingYou :: [Conv.Conversation] -> Int
+awaitingYou =
+  let
+    yours conv = case Conv.convVenue conv of
+      Conv.ReviewThread {} -> threadTurn conv == YourTurn
+      _ -> False
+  in
+    length . filter yours
 
 authorColumn :: [Conv.Post] -> Int
 authorColumn posts = max 6 (min columnCap (maximum (0 : map (T.length . authorLabel) posts)))
