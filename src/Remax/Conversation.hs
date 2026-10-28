@@ -19,6 +19,7 @@ module Remax.Conversation
   , Anchor (..)
   , LocalId (..)
   , WorkId (..)
+  , storedId
   , Target (..)
   , targetLocalId
   , Work (..)
@@ -571,13 +572,16 @@ reviewConversation viewer r =
         ]
     }
 
+storedId :: WorkId -> Maybe Int
+storedId i =
+  case i of
+    StoredWork n -> Just n
+    LegacyPost _ _ -> Nothing
+
 addWork :: Target -> Work -> OwnWork -> OwnWork
 addWork target w own =
   let
-    stored (i, _) = case i of
-      StoredWork n -> Just n
-      LegacyPost _ _ -> Nothing
-    wid = StoredWork (1 + maximum (0 : Maybe.mapMaybe stored (concat (Map.elems (workItems own)))))
+    wid = StoredWork (1 + maximum (0 : Maybe.mapMaybe (storedId . fst) (concat (Map.elems (workItems own)))))
   in
     own {workItems = Map.insertWith (flip (++)) target [(wid, w)] (workItems own)}
 
