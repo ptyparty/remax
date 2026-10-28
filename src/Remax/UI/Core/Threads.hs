@@ -15,6 +15,7 @@ module Remax.UI.Core.Threads
   , threadState
   , awaitingYou
   , awaitsYou
+  , proposedComments
   , anchorPlace
   , takenAs
   , authorName
@@ -251,7 +252,17 @@ threadState st conv =
 
 awaitingYou :: Types.St -> Int
 awaitingYou st =
-  length (filter (awaitsYou st) (Types.stConversations st))
+  length (filter (\c -> onGitHub c && awaitsYou st c) (Types.stConversations st))
+
+onGitHub :: Conv.Conversation -> Bool
+onGitHub conv =
+  case Conv.convVenue conv of
+    Conv.ReviewThread (Just _) _ -> True
+    _ -> False
+
+proposedComments :: Types.St -> Int
+proposedComments st =
+  length (filter (\c -> not (onGitHub c) && any isProposal (Conv.convPosts c)) (Types.stConversations st))
 
 awaitsYou :: Types.St -> Conv.Conversation -> Bool
 awaitsYou st conv =

@@ -287,28 +287,38 @@ rangeOf st conv =
           maybe [] (\h -> zip [start ..] (reverse (take count (reverse (filter (not . T.isPrefixOf "@@") (T.lines h)))))) hunk
     _ -> []
 
-{- | Your pending comments on the pull request and on lines, after the
-posted entries; pending replies sit inside their threads already.
+{- | Your pending comments and the agent's proposals, on the pull request
+and on lines, after the posted entries; pending replies sit inside their
+threads already.
 -}
 draftRows :: Types.St -> Int -> [Conv.Conversation] -> [Row]
 draftRows st width convs =
   let
     newThreads = Maybe.mapMaybe (\c -> case Conv.convVenue c of Conv.ReviewThread Nothing _ -> Just c; _ -> Nothing) convs
-    pullDrafts = maybe [] (\c -> Maybe.mapMaybe (\(i, p) -> if Conv.postState p == Conv.Draft then Just (c, i, p) else Nothing) (zip [0 ..] (Conv.convPosts c))) (List.find ((== Conv.PullConversation) . Conv.convId) convs)
-    lineDrafts = concatMap (\c -> Maybe.mapMaybe (\(i, p) -> if Conv.postState p == Conv.Draft then Just (c, i, p) else Nothing) (zip [0 ..] (Conv.convPosts c))) newThreads
-    draft (c, i, p) =
-      Row
-        Pending
+    unsent c = Maybe.mapMaybe (\(i, p) -> if isUnsent p then Just (c, i, p) else Nothing) (zip [0 ..] (Conv.convPosts c))
+    isUnsent p = case Conv.postState p of
+      Conv.Draft -> True
+      Conv.Proposal _ -> True
+      _ -> False
+    pullDrafts = maybe [] unsent (List.find ((== Conv.PullConversation) . Conv.convId) convs)
+    place c = Threads.anchorPlace (Conv.convAnchor c)
+    heading c p = case Conv.postState p of
+      Conv.Proposal name ->
+        [ Markdown.Segment Attrs.guideAttr ("\10022 " <> Conv.agentNameToText name) Nothing
+        , Markdown.Segment Attrs.guideAttr " \183 proposes" Nothing
+        , Markdown.Segment Attrs.hintAttr (" \183 " <> place c <> " \183 yours to take or drop") Nothing
+        ]
+      _ ->
         [ Markdown.Segment Attrs.noteInlineAttr "you" Nothing
         , Markdown.Segment Attrs.questionMarkAttr " \183 draft" Nothing
-        , Markdown.Segment Attrs.hintAttr (" \183 " <> Threads.anchorPlace (Conv.convAnchor c) <> " \183 sends with :submit") Nothing
+        , Markdown.Segment Attrs.hintAttr (" \183 " <> place c <> " \183 sends with :submit") Nothing
         ]
-        Nothing
-        Nothing
+    draft (c, i, p) =
+      Row Pending (heading c p) Nothing Nothing
         : postBody st width (Conv.convId c) i p
         ++ [blank]
   in
-    concatMap draft (pullDrafts ++ lineDrafts)
+    concatMap draft (pullDrafts ++ concatMap unsent newThreads)
 
 footerRows :: Types.St -> [Row]
 footerRows st =

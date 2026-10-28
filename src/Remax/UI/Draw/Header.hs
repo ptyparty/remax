@@ -122,8 +122,9 @@ localSegs st =
       _ -> []
     unpushed = counted Attrs.questionMarkAttr (maybe 0 Git.localUnpushed (Types.stPullLocal st)) "unpushed"
     toSubmit = counted Attrs.noteInlineAttr (length (Submit.outgoing (WorkModel.remoteOf st) (Types.stWork st))) "to submit"
+    proposed = counted Attrs.guideAttr (Threads.proposedComments st) "proposed"
   in
-    tree ++ unpushed ++ toSubmit
+    tree ++ unpushed ++ toSubmit ++ proposed
 
 githubHalf :: Types.St -> Brick.Widget Types.Name -> Brick.Widget Types.Name
 githubHalf st checksSeg =
