@@ -22,6 +22,10 @@ module Remax.GitHub
   , viewPull
   , Opened (..)
   , openedMode
+  , PullStart (..)
+  , Authorship (..)
+  , pullStart
+  , startedMode
   , openPull
   , checkoutPull
   , checksFromRollup
@@ -584,6 +588,7 @@ data PullMeta = PullMeta
   , metaState :: T.Text
   , metaHeadBranch :: T.Text
   , metaBaseBranch :: T.Text
+  , metaAuthor :: T.Text
   , metaChecks :: Checks
   }
   deriving (Eq, Show)
@@ -591,7 +596,7 @@ data PullMeta = PullMeta
 viewPull :: FilePath -> T.Text -> Int -> IO (Either GhFailure PullMeta)
 viewPull root repo n = do
   let
-    jq = "[ .title, .state, .headRefName, .baseRefName, " <> checksJq <> " ] | @tsv"
+    jq = "[ .title, .state, .headRefName, .baseRefName, .author.login, " <> checksJq <> " ] | @tsv"
   got <-
     runGh
       root
@@ -601,13 +606,13 @@ viewPull root repo n = do
       , "-R"
       , repo
       , "--json"
-      , "title,state,headRefName,baseRefName,statusCheckRollup"
+      , "title,state,headRefName,baseRefName,author,statusCheckRollup"
       , "--jq"
       , jq
       ]
   pure $ case fmap (T.splitOn "\t" . T.strip) got of
     Left failure -> Left failure
-    Right [title, state, headBranch, baseBranch, checks] ->
+    Right [title, state, headBranch, baseBranch, author, checks] ->
       Right
         PullMeta
           { metaNumber = n
@@ -615,6 +620,7 @@ viewPull root repo n = do
           , metaState = state
           , metaHeadBranch = headBranch
           , metaBaseBranch = baseBranch
+          , metaAuthor = author
           , metaChecks = checksFromText checks
           }
     Right _ -> Left (GhFailed ("unexpected answer for pull request #" <> T.pack (show n)))
@@ -627,6 +633,28 @@ data Opened = Opened
 
 openedMode :: Opened -> Git.ReviewMode
 openedMode opened = Git.AtPull (openedPull opened) Git.ReadOnly
+
+data Authorship = YourPull | TheirPull
+
+data PullStart = EditYourPull | ReviewPull Authorship
+
+pullStart :: FilePath -> Opened -> IO PullStart
+pullStart root opened = do
+  viewer <- viewerLogin root
+  branch <- Git.currentBranch root
+  let
+    authorship = case viewer of
+      Right login | login == metaAuthor (openedMeta opened) -> YourPull
+      _ -> TheirPull
+  pure $ case authorship of
+    YourPull | branch == Just (Git.prHeadBranch (openedPull opened)) -> EditYourPull
+    _ -> ReviewPull authorship
+
+startedMode :: PullStart -> Opened -> Git.ReviewMode
+startedMode start opened =
+  case start of
+    EditYourPull -> Git.AtPull (openedPull opened) Git.Checkout
+    ReviewPull _ -> openedMode opened
 
 openPull :: FilePath -> Maybe T.Text -> Int -> IO (Either GhFailure Opened)
 openPull root cached n = do

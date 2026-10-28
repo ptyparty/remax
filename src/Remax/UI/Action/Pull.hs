@@ -40,18 +40,36 @@ openPull n = do
   known <- MonadIO.liftIO (GitHub.cachedRepoName (Types.stConn st) (Types.stRoot st))
   let
     label = "opening PR #" <> Types.tshow n
-  Jobs.startJob label (GitHub.openPull (Types.stRoot st) (GitHub.repoCached known) n) $ \outcome -> do
+  Jobs.startJob label (openAndStart (Types.stRoot st) known n) $ \outcome -> do
     latest <- State.get
     Monad.when (Types.stEpoch latest == Types.stEpoch st) $
       case outcome of
         Left err -> Jobs.jobFailed label err
         Right (Left failure) -> Types.setMsg ("! " <> GitHub.failureText failure)
-        Right (Right opened) -> do
+        Right (Right (opened, start)) -> do
           MonadIO.liftIO (GitHub.rememberRepoName (Types.stConn latest) known (GitHub.openedRepo opened))
           State.modify (\s -> s {Types.stPullMeta = Just (GitHub.openedMeta opened), Types.stPullPoll = Types.noPullPoll})
-          Settings.setMode (GitHub.openedMode opened)
-          Types.setMsg ("PR #" <> Types.tshow n <> " \183 " <> GitHub.metaTitle (GitHub.openedMeta opened))
+          Settings.setMode (GitHub.startedMode start opened)
+          State.modify Types.showPullView
+          Types.setMsg (openedMessage start opened)
           pollPullNow
+
+openAndStart :: FilePath -> GitHub.RepoName -> Int -> IO (Either GitHub.GhFailure (GitHub.Opened, GitHub.PullStart))
+openAndStart root known n = do
+  got <- GitHub.openPull root (GitHub.repoCached known) n
+  case got of
+    Left failure -> pure (Left failure)
+    Right opened -> fmap (\start -> Right (opened, start)) (GitHub.pullStart root opened)
+
+openedMessage :: GitHub.PullStart -> GitHub.Opened -> T.Text
+openedMessage start opened =
+  let
+    title = Git.pullLabel (GitHub.openedPull opened) <> " \183 " <> GitHub.metaTitle (GitHub.openedMeta opened)
+  in
+    case start of
+      GitHub.EditYourPull -> "editing " <> title
+      GitHub.ReviewPull GitHub.YourPull -> title <> " \183 :pr edit checks it out"
+      GitHub.ReviewPull GitHub.TheirPull -> title
 
 refreshPullMeta :: Brick.EventM Types.Name Types.St ()
 refreshPullMeta = do

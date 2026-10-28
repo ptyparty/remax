@@ -69,6 +69,7 @@ module Remax.UI.Core.Types
   , searchSigil
   , VerdictScope (..)
   , setMsg
+  , showPullView
   , Chord (..)
   , readChord
   , cancelKeyText
@@ -763,6 +764,9 @@ cancelKeyText keys =
   case keys of
     Config.KeysEmacs -> "C-c C-k"
     _ -> "C-c"
+
+showPullView :: St -> St
+showPullView s = s {stPullView = Just PullView, stBand = Nothing, stVi = Vi.viIdle}
 
 setMsg :: T.Text -> Brick.EventM Name St ()
 setMsg t = State.modify (\s -> s {stMsg = t})
