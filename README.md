@@ -408,8 +408,11 @@ fetches the pull request's head into `refs/remax/pull/N/head` and the
 base into `refs/remax/pull/N/base`, which it then points at the
 merge-base, so the diff is the one GitHub shows.
 
-The review is read-only, like `--ref`. The header reads `PR #N review`,
-and the git bar becomes `#N branch→base · head…base · review · checks`.
+The review is read-only, like `--ref`. The git bar becomes the pull
+request's bar: on the left `#N branch→base · review · head…base` and what
+this checkout holds, `● uncommitted`, `N unpushed` and `N to submit`; on
+the right, after `github`, `N awaiting you`, the checks, `mergeable` or
+`conflicts`, and the age of the last poll. Each count hides at zero.
 `!` is refused with `read-only: @ drafts a comment`; `?` asks the agent
 as anywhere else. Bare `:pr` picks another. `:mode tree` returns to the working tree.
 
@@ -418,10 +421,9 @@ seconds. It asks for the pull request, its review comments, conversation,
 reviews and commits with the ETag of the previous answer, so an unchanged
 answer costs no rate limit, and asks GraphQL for the review threads,
 force-pushes and checks. When the head moves, the session fetches it again
-and re-lists the files. The header shows `↻ 4s` and the status line
-`↻ synced 4s`, the age of the last successful poll. A failing poll turns
-both to `⚠ stale 2m`, and the status line names the reason. Each list
-reads every page.
+and re-lists the files. The bar shows `↻ 4s`, the age of the last
+successful poll. A failing poll turns it to `⚠ stale 2m` with the reason.
+Each list reads every page.
 
 `:base` in a pull request picks any point of its history to review the
 head against. The picker, titled `review head <sha> against`, lists the
@@ -446,7 +448,7 @@ working tree at the current stop against the pull request's base, the git
 bar shows the stop, and `:continue` folds the edits into the stopped
 commit as it does in any rebase. Open each pull request of a stack in
 turn this way to address its feedback in the commit it belongs to.
-The header reads `PR #N edit` and the git bar's chip `edit`. The files
+The git bar's chip reads `edit`. The files
 are editable, and `!` and `?` mean what they do anywhere else. A tour
 stays with the pull request across both modes. `:pr review` returns to
 the read-only head as fetched.

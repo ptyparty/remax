@@ -11,17 +11,22 @@ module Remax.UI.Draw.Header
 
 import Brick ((<+>))
 import Brick qualified as Brick
+import Data.List qualified as List
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
+import Remax.PullPoll qualified as PullPoll
 import Remax.Store qualified as Store
+import Remax.Submit qualified as Submit
 import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Threads qualified as Threads
 import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
 import Remax.UI.Core.Widgets qualified as Widgets
+import Remax.UI.Model.Work qualified as WorkModel
 import System.FilePath qualified as FilePath
 
 -- Outside a rebase the same full-width slot answers "where am I in git":
@@ -96,19 +101,49 @@ pullBar st pr editing =
       _ -> Brick.emptyWidget
   in
     Brick.withDefAttr Attrs.headerRebaseAttr . Brick.padRight Brick.Max $
-      Brick.hBox
+      Brick.hBox $
         [ Brick.withAttr Attrs.headerFileAttr (Brick.txt (" #" <> Types.tshow (Git.prNumber pr) <> " " <> Git.prHeadBranch pr <> "\8594" <> Git.prBaseBranch pr))
         , walkSeg
         , stopSeg
         , dot
-        , Brick.withAttr Attrs.rebaseShaAttr (Brick.txt (maybe "?" fst (Types.stHead st) <> "\8230" <> Maybe.fromMaybe "?" (Types.stBaseAt st)))
-        , dot
         , Brick.withAttr Attrs.guideAttr (Brick.txt chip)
         , dot
-        , Brick.txt "0@ 0\8801"
-        , dot
-        , checksSeg
+        , Brick.withAttr Attrs.rebaseShaAttr (Brick.txt (maybe "?" fst (Types.stHead st) <> "\8230" <> Maybe.fromMaybe "?" (Types.stBaseAt st)))
         ]
+          ++ concatMap (\w -> [dot, w]) (localSegs st)
+          ++ [Brick.padLeft Brick.Max (githubHalf st checksSeg)]
+
+localSegs :: Types.St -> [Brick.Widget Types.Name]
+localSegs st =
+  let
+    counted attr n label = if n == 0 then [] else [Brick.withAttr attr (Brick.txt (Types.tshow n <> " " <> label))]
+    tree = case fmap Git.localTree (Types.stPullLocal st) of
+      Just Git.DirtyTree -> [Brick.withAttr Attrs.questionMarkAttr (Brick.txt "\9679 uncommitted")]
+      _ -> []
+    unpushed = counted Attrs.questionMarkAttr (maybe 0 Git.localUnpushed (Types.stPullLocal st)) "unpushed"
+    toSubmit = counted Attrs.noteInlineAttr (length (Submit.outgoing (WorkModel.remoteOf st) (Types.stWork st))) "to submit"
+  in
+    tree ++ unpushed ++ toSubmit
+
+githubHalf :: Types.St -> Brick.Widget Types.Name -> Brick.Widget Types.Name
+githubHalf st checksSeg =
+  let
+    dot = Brick.withAttr Attrs.headerAttr (Brick.txt " \183 ")
+    awaiting = case Threads.awaitingYou (Types.stConversations st) of
+      0 -> []
+      n -> [Brick.withAttr Attrs.replyInlineAttr (Brick.txt (Types.tshow n <> " awaiting you"))]
+    merge = case fmap PullPoll.snapshotMergeable (Types.ppSnapshot (Types.stPullPoll st)) of
+      Just "MERGEABLE" -> [Brick.withAttr Attrs.headerOkAttr (Brick.txt "mergeable")]
+      Just "CONFLICTING" -> [Brick.withAttr Attrs.conflictAttr (Brick.txt "conflicts")]
+      _ -> []
+    fresh = case PullAction.pullFreshness st of
+      Nothing -> []
+      Just PullAction.AwaitingFirstPoll -> [Brick.withAttr Attrs.hintAttr (Brick.txt "\8635 \8230")]
+      Just (PullAction.SyncedAgo secs) -> [Brick.withAttr Attrs.hintAttr (Brick.txt ("\8635 " <> PullAction.shortAge secs))]
+      Just (PullAction.StaleSince age reason) -> [Brick.withAttr Attrs.conflictAttr (Brick.txt (PullAction.staleText age <> " \183 " <> reason))]
+    items = awaiting ++ [checksSeg] ++ merge ++ fresh
+  in
+    Brick.hBox (Brick.withAttr Attrs.hintAttr (Brick.txt "github ") : List.intersperse dot items ++ [Brick.txt " "])
 
 -- The commit under review gets its own full-width bar during a rebase:
 -- step, sha, and the whole subject line. Space c shows the full
@@ -138,8 +173,10 @@ rebaseBar rb =
 headerBar :: Types.St -> Brick.Widget Types.Name
 headerBar st =
   let
-    lead = " remax · " <> Git.modeLabel (Types.stMode st) <> " · "
-    trailing = [rebaseSeg st, pullSeg st, watchSeg st, busySeg st]
+    lead = case Git.subjectOf (Types.stMode st) of
+      Git.Pull {} -> " remax · "
+      _ -> " remax · " <> Git.modeLabel (Types.stMode st) <> " · "
+    trailing = [rebaseSeg st, watchSeg st, busySeg st]
   in
     Brick.withDefAttr Attrs.headerAttr . Brick.padRight Brick.Max $
       case Types.currentFileMay st of
@@ -171,15 +208,6 @@ watchSeg st =
     case mine of
       Nothing -> Brick.txt ""
       Just (glyph, label) -> glyphSeg glyph label
-
-pullSeg :: Types.St -> Brick.Widget Types.Name
-pullSeg st =
-  case PullAction.pullFreshness st of
-    Nothing -> Brick.txt ""
-    Just PullAction.AwaitingFirstPoll -> Brick.txt "  \183  \8635 \8230"
-    Just (PullAction.SyncedAgo secs) -> Brick.txt ("  \183  \8635 " <> PullAction.shortAge secs)
-    Just (PullAction.StaleSince age _) ->
-      Brick.txt "  \183  " <+> Brick.withAttr Attrs.conflictAttr (Brick.txt (PullAction.staleText age))
 
 busySeg :: Types.St -> Brick.Widget Types.Name
 busySeg st =
