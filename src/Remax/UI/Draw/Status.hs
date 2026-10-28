@@ -159,6 +159,7 @@ popupWord wp =
       Types.ReplyOrigin _ -> "reply"
       Types.CommentOrigin -> "comment"
       Types.AskOrigin -> "ask"
+    Types.TakeProposal _ (Conv.NewThread _ _) _ -> "comment"
     Types.TakeProposal {} -> "reply"
     Types.EditPosted _ _ -> "edit"
 
@@ -169,7 +170,7 @@ popupStatus wp =
     Types.AskOn _ _ -> "the agent about " <> T.takeWhile (/= ' ') (Types.wpPlace wp)
     Types.CommentOn anchor -> "new comment on " <> Threads.anchorPlace anchor
     Types.EditPending _ _ -> "editing your pending text"
-    Types.TakeProposal _ _ _ -> "editing the proposal as your reply"
+    Types.TakeProposal _ target author -> "editing the proposal as your " <> Threads.takenAs target author
     Types.EditPosted _ _ -> "editing your comment on GitHub"
 
 statusHint :: Types.St -> T.Text

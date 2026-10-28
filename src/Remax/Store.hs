@@ -226,6 +226,9 @@ openStore = do
     \ WHERE pull IS NULL AND target_kind IN ('thread', 'comment')"
   SQLite.execute_
     conn
+    "UPDATE work SET kind = 'proposed' WHERE kind = 'pending' AND author LIKE 'agent:%' AND target_kind = 'new'"
+  SQLite.execute_
+    conn
     "CREATE TABLE IF NOT EXISTS work_target (\
     \  repo TEXT NOT NULL,\
     \  local_id TEXT PRIMARY KEY,\

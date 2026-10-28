@@ -253,8 +253,8 @@ spanLine (key, line) = do
   n <- listedLineNo line
   Just (Conv.SpanLine key n (listedLineText line))
 
-{- | A comment the agent drafts on a hunk, pending as the reviewer's own
-until they submit it.
+{- | A comment the agent proposes on a hunk, which the reviewer takes as
+their own before it can be submitted.
 -}
 commentOnHunk :: SQLite.Connection -> FilePath -> Maybe Int -> Hunks.Hunk -> T.Text -> IO Conv.LocalId
 commentOnHunk conn root pull hunk text = do
@@ -276,7 +276,7 @@ commentOnHunk conn root pull hunk text = do
     Just ne -> do
       let
         lineSpan = Conv.LineSpan {Conv.spanPath = T.pack (Hunks.hunkFile hunk), Conv.spanSide = side, Conv.spanLines = ne, Conv.spanAt = Nothing}
-      _ <- WorkStore.addPending conn scope (Conv.NewThread lid (Conv.OnLines lineSpan)) (Conv.Agent agentName) (Conv.Markdown text)
+      _ <- WorkStore.setProposal conn scope (Conv.NewThread lid (Conv.OnLines lineSpan)) agentName (Conv.Markdown text)
       pure lid
 
 -- | The agent's proposed text on a conversation; the next replaces it.
