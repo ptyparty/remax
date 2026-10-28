@@ -357,6 +357,8 @@ stays a prefix there too.
 | `:edit [PATH]` | suspend into `$EDITOR` at the cursor (or on PATH) |
 | `:checkout` | switch branches — a picker over local branches in the same columns (branch, how long ago, the tip you'd land on, subject), most recently committed first with `← current` marked; `⏎` checks out. `:checkout NAME` skips the picker. Refused mid-rebase |
 | `:pr` | open a pull request of the repository this checkout belongs to — a picker over its open pull requests (number, author, title, age, CI, your review state, a `draft` mark, and `← open` on the one under review); `⏎` opens the row on its [PR view](#the-pr-view). `:pr N` skips the picker; `:pr commits` walks its commits, `:pr edit` checks it out to address its feedback and `:pr review` returns to the read-only head. See [Reviewing a pull request](#reviewing-a-pull-request) |
+| `:ready` | mark the open pull request ready for review |
+| `:draft` | convert the open pull request to a draft |
 | `:q` | quit |
 
 The command line completes itself: a bare `:` lists every command with

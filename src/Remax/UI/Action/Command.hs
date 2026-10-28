@@ -25,6 +25,7 @@ import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Picker qualified as PickerAction
 import Remax.UI.Action.Pull qualified as PullAction
+import Remax.UI.Action.PullView qualified as PullViewAction
 import Remax.UI.Action.Rebase qualified as Rebase
 import Remax.UI.Action.Repo qualified as Repo
 import Remax.UI.Action.Settings qualified as Settings
@@ -74,6 +75,8 @@ commandTable =
   , ("checkout", NoArg, "switch branches (picker)")
   , ("pr", ArgPull, "open pull request N on its page, in edit mode if it is yours and checked out; bare :pr picks one; :pr commits walks its commits; :pr edit checks it out, :pr review returns")
   , ("submit", NoArg, "send every pending comment and reply to GitHub as one review")
+  , ("ready", NoArg, "mark the pull request ready for review")
+  , ("draft", NoArg, "convert the pull request to a draft")
   , ("q", NoArg, "quit")
   ]
 
@@ -198,6 +201,8 @@ runCommand input =
     ["pr", "commits"] -> PullAction.startCommitWalk
     ["pr", "edit"] -> PullAction.editPull
     ["submit"] -> SubmitAction.openSubmit
+    ["ready"] -> PullViewAction.markReady
+    ["draft"] -> PullViewAction.markDraft
     ["pr", "review"] -> PullAction.reviewPull
     ["pr", n] | Just k <- GitHub.pullNumber n -> PullAction.openPull k
     ["base", "branch"] -> Settings.setBaseBranch
