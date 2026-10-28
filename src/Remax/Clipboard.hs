@@ -18,17 +18,21 @@ module Remax.Clipboard
   , writeClipboard
   ) where
 
+import Control.Concurrent qualified as Concurrent
 import Control.Exception qualified as Exception
+import Control.Monad qualified as Monad
 import Data.Bits ((.&.), (.|.))
 import Data.Bits qualified as Bits
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BSC
+import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Word qualified as DataWord
 import System.Directory qualified as Directory
 import System.Environment qualified as Env
 import System.Exit qualified as Exit
+import System.IO qualified as SysIO
 import System.Process qualified as Process
 import System.Timeout qualified as Timeout
 
@@ -113,6 +117,9 @@ xselTool =
 toolTimeoutMicros :: Int
 toolTimeoutMicros = 2000000
 
+copyWaitMicros :: Int
+copyWaitMicros = 200000
+
 -- Terminals cap what they will accept in one escape sequence, and a
 -- truncated paste is worse than a refused one.
 osc52Limit :: Int
@@ -135,17 +142,27 @@ writeClipboard clip emit text =
               Right () -> pure True
               Left e -> const (pure False) (e :: Exception.IOException)
     ClipTool _ (bin, args) _ -> do
-      done <-
-        Timeout.timeout
-          toolTimeoutMicros
-          (Exception.try (Process.readProcessWithExitCode bin args (T.unpack text)))
-      case done of
-        -- a helper still running is the normal case for xclip, which
-        -- stays alive to serve the selection it was just handed
-        Nothing -> pure True
-        Just (Right (Exit.ExitSuccess, _, _)) -> pure True
-        Just (Right _) -> pure False
-        Just (Left e) -> const (pure False) (e :: Exception.IOException)
+      attempted <- Exception.try $ do
+        sink <- SysIO.openFile "/dev/null" SysIO.WriteMode
+        (stdin, _, _, handle) <-
+          Process.createProcess
+            (Process.proc bin args)
+              { Process.std_in = Process.CreatePipe
+              , Process.std_out = Process.UseHandle sink
+              , Process.std_err = Process.UseHandle sink
+              }
+        Monad.forM_ stdin $ \h -> do
+          BS.hPut h (TE.encodeUtf8 text)
+          SysIO.hClose h
+        SysIO.hClose sink
+        exited <- Timeout.timeout copyWaitMicros (Process.waitForProcess handle)
+        Monad.when (Maybe.isNothing exited) (Monad.void (Concurrent.forkIO (Monad.void (Process.waitForProcess handle))))
+        pure exited
+      case attempted of
+        Right Nothing -> pure True
+        Right (Just Exit.ExitSuccess) -> pure True
+        Right (Just _) -> pure False
+        Left e -> const (pure False) (e :: Exception.IOException)
 
 -- What the clipboard currently holds, or Nothing when there is no way to
 -- ask (or nothing there).
