@@ -246,7 +246,7 @@ threadRows :: Types.St -> Int -> Conv.Conversation -> [Row]
 threadRows st width conv =
   let
     cid = Conv.convId conv
-    header = Row Branch [Markdown.Segment Attrs.hintAttr " \8618 " Nothing, Markdown.Segment Attrs.trayFileAttr (Threads.anchorPlace (Conv.convAnchor conv)) Nothing, Markdown.Segment Attrs.hintAttr (" \183 " <> Threads.threadState conv) Nothing] Nothing Nothing
+    header = Row Branch [Markdown.Segment Attrs.hintAttr " \8618 " Nothing, Markdown.Segment Attrs.trayFileAttr (Threads.anchorPlace (Conv.convAnchor conv)) Nothing, Markdown.Segment Attrs.hintAttr (" \183 " <> Threads.threadState st conv) Nothing] Nothing Nothing
     folded = Threads.isResolvedFold st conv
     resolvedLine =
       Row

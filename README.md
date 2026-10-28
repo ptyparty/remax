@@ -460,7 +460,9 @@ the read-only head as fetched.
 A review thread on a line opens under it as a log, in review and edit
 mode alike. The header reads `↪ thread · <state> · N on GitHub · N draft
 · N proposal · N local`, where the state is `awaiting you`, `awaiting
-them`, `your reply is pending` or `resolved`. Each post is a row: the
+them`, `awaiting the author`, `your reply is pending` or `resolved`. On
+someone else's pull request, a thread you have not posted in awaits the
+author rather than you. Each post is a row: the
 author right-aligned in a column, a rail, the body rendered as Markdown
 (headings, bold, code, links, lists and tables; links and images open
 on click in a terminal that supports OSC 8; a `<details>` block shows

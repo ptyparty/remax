@@ -133,7 +133,7 @@ jumpAwaiting d = do
   st <- State.get
   let
     all_ = PullView.stops st width
-    awaits b = maybe False Threads.awaitsYou (Conv.conversationFor (Types.bandConv b) (Types.stConversations st))
+    awaits b = maybe False (Threads.awaitsYou st) (Conv.conversationFor (Types.bandConv b) (Types.stConversations st))
     newest = map NEL.last . NEL.groupBy (\a b -> Types.bandConv a == Types.bandConv b) . filter awaits $ all_
     current = Types.stBand st
     here = current >>= \b -> List.elemIndex b {Types.bandDeleting = False} all_

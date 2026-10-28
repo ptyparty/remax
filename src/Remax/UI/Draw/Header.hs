@@ -129,7 +129,7 @@ githubHalf :: Types.St -> Brick.Widget Types.Name -> Brick.Widget Types.Name
 githubHalf st checksSeg =
   let
     dot = Brick.withAttr Attrs.headerAttr (Brick.txt " \183 ")
-    awaiting = case Threads.awaitingYou (Types.stConversations st) of
+    awaiting = case Threads.awaitingYou st of
       0 -> []
       n -> [Brick.withAttr Attrs.replyInlineAttr (Brick.txt (Types.tshow n <> " awaiting you"))]
     merge = case fmap PullPoll.snapshotMergeable (Types.ppSnapshot (Types.stPullPoll st)) of

@@ -38,6 +38,7 @@ import Data.Time.Clock qualified as Clock
 import Data.Time.Format.ISO8601 qualified as ISO8601
 import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
+import Remax.PullPoll qualified as PullPoll
 import Remax.Store qualified as Store
 import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Markdown qualified as Markdown
@@ -101,7 +102,7 @@ threadLines st width conv =
       in
         body ++ strip
     header = case Conv.convVenue conv of
-      Conv.ReviewThread (Just _) _ -> [ThreadLine cid Nothing Nothing (headerSegs conv)]
+      Conv.ReviewThread (Just _) _ -> [ThreadLine cid Nothing Nothing (headerSegs st conv)]
       _ -> []
     outdated = case Map.lookup cid (Types.stOutdated st) of
       Just _ -> outdatedRows cid (Conv.convAnchor conv)
@@ -162,8 +163,8 @@ resolvedSegs width conv =
 clip :: Int -> T.Text -> T.Text
 clip room t = if T.length t > room then T.take (max 0 (room - 1)) t <> "\8230" else t
 
-headerSegs :: Conv.Conversation -> [Markdown.Segment]
-headerSegs conv =
+headerSegs :: Types.St -> Conv.Conversation -> [Markdown.Segment]
+headerSegs st conv =
   let
     posts = Conv.convPosts conv
     count label n = if n == 0 then [] else [Types.tshow n <> " " <> label]
@@ -172,7 +173,7 @@ headerSegs conv =
     proposals = length (filter isProposal posts)
     locals = length (filter Conv.isLocalPost posts)
     parts =
-      [threadState conv]
+      [threadState st conv]
         ++ count "on GitHub" posted
         ++ count "draft" drafts
         ++ count "proposal" proposals
@@ -194,39 +195,61 @@ isProposal p =
     Conv.Proposal _ -> True
     _ -> False
 
-data Turn = Settled | ReplyPending | YourTurn | TheirTurn
+data Turn = Settled | ReplyPending | YourTurn | TheirTurn | AuthorsTurn
   deriving (Eq, Show)
 
-threadTurn :: Conv.Conversation -> Turn
-threadTurn conv =
-  case Conv.convVenue conv of
-    Conv.ReviewThread _ Store.Resolved -> Settled
-    _ ->
-      case reverse (filter (not . Conv.isLocalPost) (Conv.convPosts conv)) of
-        (newest : _) ->
-          case (Conv.postState newest, Conv.postAuthor newest) of
-            (Conv.Draft, _) -> ReplyPending
-            (Conv.Proposal _, _) -> YourTurn
-            (_, Conv.Viewer) -> TheirTurn
-            _ -> YourTurn
-        [] -> YourTurn
+data Seat = PullAuthor | Bystander
+  deriving (Eq)
 
-threadState :: Conv.Conversation -> T.Text
-threadState conv =
-  case threadTurn conv of
+seatOf :: Types.St -> Seat
+seatOf st =
+  let
+    authorAndViewer = do
+      snap <- Types.ppSnapshot (Types.stPullPoll st)
+      viewer <- Conv.remoteViewer (PullPoll.snapshotRemote snap)
+      pure (Conv.loginToText viewer, PullPoll.pullHeadAuthor (PullPoll.snapshotHead snap))
+  in
+    case authorAndViewer of
+      Just (viewer, author) | viewer /= author -> Bystander
+      _ -> PullAuthor
+
+threadTurn :: Seat -> Conv.Conversation -> Turn
+threadTurn seat conv =
+  let
+    joined = any (\p -> Conv.postAuthor p == Conv.Viewer && not (Conv.isLocalPost p)) (Conv.convPosts conv)
+    owed = case (seat, joined) of
+      (Bystander, False) -> AuthorsTurn
+      _ -> YourTurn
+  in
+    case Conv.convVenue conv of
+      Conv.ReviewThread _ Store.Resolved -> Settled
+      _ ->
+        case reverse (filter (not . Conv.isLocalPost) (Conv.convPosts conv)) of
+          (newest : _) ->
+            case (Conv.postState newest, Conv.postAuthor newest) of
+              (Conv.Draft, _) -> ReplyPending
+              (Conv.Proposal _, _) -> YourTurn
+              (_, Conv.Viewer) -> TheirTurn
+              _ -> owed
+          [] -> owed
+
+threadState :: Types.St -> Conv.Conversation -> T.Text
+threadState st conv =
+  case threadTurn (seatOf st) conv of
     Settled -> "resolved"
     ReplyPending -> "your reply is pending"
     YourTurn -> "awaiting you"
     TheirTurn -> "awaiting them"
+    AuthorsTurn -> "awaiting the author"
 
-awaitingYou :: [Conv.Conversation] -> Int
-awaitingYou =
-  length . filter awaitsYou
+awaitingYou :: Types.St -> Int
+awaitingYou st =
+  length (filter (awaitsYou st) (Types.stConversations st))
 
-awaitsYou :: Conv.Conversation -> Bool
-awaitsYou conv =
+awaitsYou :: Types.St -> Conv.Conversation -> Bool
+awaitsYou st conv =
   case Conv.convVenue conv of
-    Conv.ReviewThread {} -> threadTurn conv == YourTurn
+    Conv.ReviewThread {} -> threadTurn (seatOf st) conv == YourTurn
     _ -> False
 
 authorColumn :: [Conv.Post] -> Int
