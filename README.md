@@ -178,6 +178,7 @@ Normal mode:
 | `gh gl gs` / Home End | line start / line end / first non-blank — on a long line the view scrolls horizontally to follow the cursor (gutter stays pinned); `gh` brings it home |
 | `gg ge` | file start / file end (`:N` on the command line for a particular line) |
 | `ga` | goto the alternate file (also `Space a`) |
+| `gR` | the other hunks in the change set that mention the name under the cursor (also `Space m`, `:uses NAME`) — see `Space m` below |
 | `v` | extend mode: every motion grows the selection; `;` collapses |
 | `x` | select line, repeat to extend |
 | `X` | select the current hunk — the review-unit object: `X r` reviews what you just saw selected, `X d` deletes it, `X >` indents it |
@@ -196,7 +197,7 @@ Normal mode:
 | `u` | undo |
 | `y` | yank the selection (or cursor cell) — line-wise for `x` selections; the yank slot is session-wide, so paste works across files (and the note popup), and it goes to the **system clipboard** too |
 | `p` / `P` | paste after / before: whole lines below/above for a line-wise yank, after/at the cursor otherwise; the paste is selected. Pastes the **system clipboard** when it holds something copied outside the session, the yank slot otherwise |
-| `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `e` `$EDITOR` here, `p` walk filter (pending / unresolved / all), `w` toggle ignore-whitespace, `u` resolve or unresolve the thread, or resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `c` full message of the commit under review, `i` [recent feedback](#recent-feedback) |
+| `Space` | menu (helix-style infobox): `⏎` accept, `!` flag, `q` question, `x` select the hunk (all four also live on their own keys here, and are the *only* way to reach them in the vi keymap), `f` file picker, `b` open files, `t` project tree, `e` `$EDITOR` here, `p` walk filter (pending / unresolved / all), `w` toggle ignore-whitespace, `u` resolve or unresolve the thread, or resolve the note here, `h` make the hunk under the cursor the current one, `a` bounce to the alternate file (the one before the last file jump, hunk restored), `/` project-wide search, `m` the hunks that mention the name here, `c` full message of the commit under review, `i` [recent feedback](#recent-feedback) |
 | `.` | repeat the last insert session (the entering command plus what was typed), helix-style — `c`-fix-`Esc` then `.` applies the same change at the cursor |
 | `Enter` | **accept the selection as reviewed** — a selection is required, so what you accept is always visibly highlighted (`X Enter` for the hunk you're looking at). Completing a hunk jumps to the next pending one; a partial mark steps to the next line |
 | `!` / `?` | flag-to-return-to / question — the selection's lines, or the whole current hunk with none. The note popup opens immediately for the reason (`note-on-flag = 0` in the config turns that off); discarding it (`Ctrl-c`, `C-c C-k` in emacs, or `Esc` from its normal mode) cancels the mark as well, since the verdict has not been explained yet — save an empty note to keep the mark without one. The jump to the next hunk waits until the popup closes, and never happens if the mark is cancelled |
@@ -204,6 +205,7 @@ Normal mode:
 | mouse wheel | three lines at a time: moves the cursor in the body (so the view follows as it does for `j`/`k`), scrolls the tray over the tray, and steps a picker or popup one row |
 | `/`, `n` / `N` | search the file (literal, helix-shaped: the match becomes the selection); repeat forward / back, wrapping |
 | `Space /` | project-wide search (`git grep` behind the picker; also `:grep TEXT`; in `:ref` and `:commit` mode it searches the reviewed commit rather than the working tree): type, pick a hit, Enter jumps to the file and line with the match selected — and `n`/`N` then walk the **hit list across files** without re-searching (a fresh `/` or `*` returns them to in-file duty). The results box stretches to the pane width so lines keep their context |
+| `Space m` | the other hunks in this change set whose changed lines (`+` or `-`) mention the selection (single-line) or the identifier under the cursor, as a whole word, so `foo` skips `fooBar`. One hit jumps straight to the line, with the name selected when the line is an added one; several open a picker of `path:line  mark  declaration  ·  line`, filtered as you type, and more than 200 are cut off with a `+` on the count. Either way it is an investigation move: `'` returns to the hunk under review, and `ga` goes back when the jump changed files. It reads the change set already loaded, so it works the same in `:ref` and `:commit` mode |
 | `:` | the command line — see below |
 | `*` | search for the selection (single-line) or the identifier under the cursor — primes `n`/`N` and jumps to the next occurrence |
 | `'` | jump back to the hunk under review — **global**: review-flow navigation (`]`/`[`, auto-advance, `Space h`) drops the anchor there, and investigation moves (pickers, `Space /`, `ga`, `:open`) don't touch it, so wandering off to check something always has a way home |
@@ -288,7 +290,7 @@ drive; only the order of the keystrokes changes.
 | shorthands | `x X D C s S Y`, `p` / `P`, `J`, `r`, `~`, `u` / `Ctrl-r`, `.` — `y` reaches the system clipboard, `d`/`c` fill the unnamed register only |
 | insert | `i a I A o O`; `Esc` returns to normal mode and writes the file, as everywhere else |
 | visual | `v` char-wise, `V` line-wise; motions extend, an operator acts on what is highlighted |
-| searching | `/` forward and `?` **backward** — the prompt wears the sigil it opened with, and `n` / `N` repeat along that grain. `*` / `#` take the word under the cursor either way |
+| searching | `/` forward and `?` **backward** — the prompt wears the sigil it opened with, and `n` / `N` repeat along that grain. `*` / `#` take the word under the cursor either way; `Space m` lists the other hunks mentioning it |
 
 The review verbs move behind the `Space` leader, the way the emacs
 keymap puts them behind `C-c`: `Space ⏎` accept, `Space !` flag,
@@ -321,7 +323,7 @@ command line, `C-s` the search prompt. Review verbs live behind the
 `C-c` prefix with the same letters as the helix keys — `C-c Enter`
 accept, `C-c !` / `C-c ?` flag/question, `C-c x` select hunk,
 `C-c ]`/`C-c [` hunks, `C-c p` walk filter, `C-c f` files, `C-c i`
-recent feedback — and
+recent feedback, `C-c m` the other hunks mentioning a name — and
 `C-x C-c` quits, `C-x C-s` saves (edits already write through). The
 note popup keeps its modal keys in either keymap. Popups and dialogs
 that other keymaps cancel with `C-c` cancel with `C-c C-k`, since `C-c`

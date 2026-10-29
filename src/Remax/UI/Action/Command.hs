@@ -32,6 +32,7 @@ import Remax.UI.Action.Repo qualified as Repo
 import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Action.Submit qualified as SubmitAction
 import Remax.UI.Action.Tree qualified as TreeAction
+import Remax.UI.Action.Uses qualified as Uses
 import Remax.UI.Action.Verdicts qualified as VerdictAction
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Model.Nav qualified as Nav
@@ -71,6 +72,7 @@ commandTable =
   , ("help", NoArg, "the keys, grouped (also Space ?)")
   , ("commit", NoArg, "full message of the commit under review / HEAD")
   , ("grep", ArgText, "project-wide search (picker)")
+  , ("uses", ArgText, "hunks in the change set mentioning NAME; bare :uses takes the name here")
   , ("edit", ArgPath, "$EDITOR at the cursor (or on PATH)")
   , ("set", ArgSet, "change a setting (live + persisted)")
   , ("checkout", NoArg, "switch branches (picker)")
@@ -245,6 +247,8 @@ runCommand input =
     ["commit", ref] -> PickerAction.reviewCommit ref
     ["message"] -> VerdictAction.showCommitPopup
     ("grep" : rest) -> PickerAction.openGrepPicker (T.unwords rest)
+    ["uses"] -> Uses.usesUnderCursor
+    ("uses" : rest) -> Uses.findUses (T.unwords rest)
     ["edit"] -> Editor.editCurrent
     ["edit", path] -> editPath path
     [tok] | Just n <- lineAddress tok -> Nav.gotoLine n

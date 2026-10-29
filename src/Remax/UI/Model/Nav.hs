@@ -21,6 +21,7 @@ module Remax.UI.Model.Nav
   , hunkUnderCursor
   , parkAnchor
   , jumpToAnchor
+  , parkOnLine
   , gotoLine
   , setCurrentHunkHere
   , selectCurrentHunk
@@ -405,12 +406,47 @@ jumpToAnchor = do
   st <- State.get
   case Types.stAnchor st of
     Just an ->
-      case List.findIndex ((== Types.anPath an) . Types.fvPath) (Types.stFiles st) of
-        Just f -> do
-          parkM f (maybe 0 (Types.anchorHunkIn an) (Types.safeIdx (Types.stFiles st) f))
+      case anchorTarget st an of
+        Just (f, h) -> do
+          parkM f h
           Types.setMsg "back at the hunk under review"
         Nothing -> Types.setMsg ("anchored file left the session: " <> T.pack (Types.anPath an))
     Nothing -> parkM (Types.stCurF st) (Types.stCurH st)
+
+anchorTarget :: Types.St -> Types.Anchor -> Maybe (Int, Int)
+anchorTarget st an = do
+  (f, fv) <- List.find ((== Types.anPath an) . Types.fvPath . snd) (zip [0 ..] (Types.stFiles st))
+  pure (f, Types.anchorHunkIn an fv)
+
+parkOnLine :: Types.Anchor -> Types.LineMark -> Brick.EventM Types.Name Types.St ()
+parkOnLine an mark = do
+  st <- State.get
+  case anchorTarget st an of
+    Nothing -> Types.setMsg ("no longer in the change set: " <> T.pack (Types.anPath an))
+    Just (f, h) -> do
+      parkM f h
+      parked <- State.get
+      Monad.forM_ (Types.safeIdx (Types.stFiles parked) f) $ \fv ->
+        Monad.forM_ (markedRow fv mark) (setEd f . placeAt (Types.fvEd fv) (Types.lmSpan mark))
+
+markedRow :: Types.FileView -> Types.LineMark -> Maybe Int
+markedRow fv mark =
+  fmap View.rowAt (List.find ((== Just (Types.lmKey mark)) . DiffModel.rKey . fst) (View.rowRestPoints fv))
+
+placeAt :: Modal.EdState -> Maybe (Int, Int) -> Int -> Modal.EdState
+placeAt ed found row =
+  case found of
+    Just (col, len) ->
+      ed
+        { Modal.edZipper = Z.moveCursor (row, col + max 1 len - 1) (Modal.edZipper ed)
+        , Modal.edSelAnchor = Just (row, col)
+        , Modal.edSelKind = Modal.CharSel
+        }
+    Nothing ->
+      ed
+        { Modal.edZipper = Z.moveCursor (row, 0) (Modal.edZipper ed)
+        , Modal.edSelAnchor = Nothing
+        }
 
 -- :N — park the cursor on line N of the current file, 1-based.
 -- Z.moveCursor clamps, so :0 lands on the first line and a number past

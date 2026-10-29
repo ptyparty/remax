@@ -8,6 +8,10 @@ module Remax.UI.Core.Types
   , Prompt (..)
   , PickerMode (..)
   , RangePicker (..)
+  , UsesPicker (..)
+  , UsesHit (..)
+  , UsesExtent (..)
+  , LineMark (..)
   , RangeFacts (..)
   , RangeCheck (..)
   , CommitWalk (..)
@@ -144,7 +148,26 @@ data Prompt = SearchPrompt T.Text | CmdPrompt T.Text
 -- The finder overlay: fuzzy file picking, or project-wide grep. Each
 -- display row is aligned with a jump target (file, and a 1-based line
 -- for grep hits; 0 = just open the file).
-data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRef | PickCommit | PickParent T.Text | PickRepo | PickPull | PickRange RangePicker
+data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRef | PickCommit | PickParent T.Text | PickRepo | PickPull | PickRange RangePicker | PickUses UsesPicker
+
+data UsesPicker = UsesPicker
+  { upName :: T.Text
+  , upHits :: [UsesHit]
+  , upExtent :: UsesExtent
+  }
+
+data UsesExtent = UsesComplete | UsesCapped
+
+data UsesHit = UsesHit
+  { uhRow :: T.Text
+  , uhAnchor :: Anchor
+  , uhLine :: LineMark
+  }
+
+data LineMark = LineMark
+  { lmKey :: T.Text
+  , lmSpan :: Maybe (Int, Int)
+  }
 
 data RangePicker = RangePicker
   { rpPull :: Git.PullRequest
@@ -538,6 +561,7 @@ data St = St
   , stCountedVerdicts :: Map.Map T.Text Store.Verdict
   , stCountedThreads :: Map.Map T.Text [Store.Post]
   , stHighlighting :: Maybe FilePath
+  , stFindingUses :: Maybe T.Text
   , stJobs :: IORef.IORef Int
   , stSettleBeat :: IORef.IORef Int -- frames the settle timer still owes
   , stWorkSlots :: Concurrent.QSem

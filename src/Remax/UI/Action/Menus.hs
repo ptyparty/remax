@@ -22,6 +22,7 @@ import Remax.UI.Action.PullView qualified as PullViewAction
 import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Action.Tree qualified as TreeAction
+import Remax.UI.Action.Uses qualified as Uses
 import Remax.UI.Action.Verdicts qualified as VerdictAction
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Model.Nav qualified as Nav
@@ -166,6 +167,7 @@ editingGroups mode =
           [ ("/ ? n N", "search forward / back, repeat")
           , ("* #", "the word under the cursor, either way")
           , ("\9251 /", "search the whole project")
+          , ("\9251 m", "other hunks mentioning the name here")
           ]
         )
       ]
@@ -197,6 +199,7 @@ editingGroups mode =
           [ ("C-s", "search this file")
           , ("M-x", "the command line")
           , ("\9251 /", "search the whole project")
+          , ("C-c m", "other hunks mentioning the name here")
           ]
         )
       ]
@@ -245,6 +248,7 @@ helixEditingGroups =
       [ ("/ n N", "search this file, repeat fwd / back")
       , ("*", "search for the word under the cursor")
       , ("\9251 /", "search the whole project")
+      , ("gR \9251 m", "other hunks mentioning the name here")
       ]
     )
   ]
@@ -300,6 +304,7 @@ spaceMenuEntries =
   , ("r", "revert hunk to base", VerdictAction.revertTarget)
   , ("a", "alternate file", Open.gotoAltFile)
   , ("/", "project search", PickerAction.openGrepPicker "")
+  , ("m", "hunks mentioning this name", Uses.usesUnderCursor)
   , ("c", "the commit message", VerdictAction.showCommitPopup)
   , ("o", "PR overview", pullView)
   , ("i", "recent feedback", InboxAction.openInbox)

@@ -16,6 +16,7 @@ module Remax.UI.Action.Picker
   , applyCheckout
   , openGrepPicker
   , openGrepHit
+  , openUsesPicker
   , handlePickerKey
   ) where
 
@@ -744,6 +745,29 @@ openGrepPicker query = do
           Just (Types.Picker Types.PickGrep query [] matches targets 0 Set.empty)
       }
 
+openUsesPicker :: Types.UsesPicker -> Brick.EventM Types.Name Types.St ()
+openUsesPicker up =
+  State.modify (\s -> s {Types.stPicker = Just (filterUses up (Types.Picker (Types.PickUses up) "" [] [] [] 0 Set.empty))})
+
+filterUses :: Types.UsesPicker -> Types.Picker -> Types.Picker
+filterUses up pk =
+  let
+    wanted = T.toLower (Types.pkInput pk)
+    kept =
+      filter
+        (T.isInfixOf wanted . T.toLower . Types.uhRow . snd)
+        (zip [0 ..] (Types.upHits up))
+  in
+    pk
+      { Types.pkMatches = map (Types.uhRow . snd) kept
+      , Types.pkTargets = map (\(n, hit) -> (Types.anPath (Types.uhAnchor hit), n)) kept
+      , Types.pkSel = 0
+      }
+
+goToUse :: Types.UsesPicker -> Int -> Brick.EventM Types.Name Types.St ()
+goToUse up n =
+  Monad.forM_ (Types.safeIdx (Types.upHits up) n) (\hit -> Nav.parkOnLine (Types.uhAnchor hit) (Types.uhLine hit))
+
 -- Land on a grep hit: open the file, select the match on its line, and
 -- prime n/N so the in-file search continues from there.
 openGrepHit :: FilePath -> Int -> T.Text -> Brick.EventM Types.Name Types.St ()
@@ -883,6 +907,7 @@ pickerRetype pk q =
           s {Types.stPicker = Just pk {Types.pkInput = q, Types.pkMatches = matches, Types.pkTargets = targets, Types.pkSel = 0}}
       Types.PickPull -> retypeNoted
       Types.PickRange _ -> retypeNoted
+      Types.PickUses up -> State.modify (\s -> s {Types.stPicker = Just (filterUses up pk {Types.pkInput = q})})
       _ -> State.modify (\s -> s {Types.stPicker = Just (refreshRowPicker pk {Types.pkInput = q})})
 
 pickerChoose :: Types.Picker -> (FilePath, Int) -> Brick.EventM Types.Name Types.St ()
@@ -896,6 +921,7 @@ pickerChoose pk (target, line) =
     Types.PickParent tip -> Settings.setMode (Git.AtRef (Git.RefReview {Git.rrTip = tip, Git.rrBase = T.pack target}))
     Types.PickRepo -> Repo.switchRepo target
     Types.PickPull -> Monad.forM_ (GitHub.pullNumber (T.pack target)) PullAction.openPull
+    Types.PickUses up -> goToUse up line
     _
       | line == 0 -> Open.openFilePath (T.pack target)
       | otherwise -> do
