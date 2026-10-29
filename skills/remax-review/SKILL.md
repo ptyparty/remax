@@ -73,8 +73,8 @@ empty `conversations` with a non-empty `tour_requests` or
     "moved_at": "2026-10-29 18:02:11"}],
  "tour_requests": [
    {"repo": "/path/to/repo", "view": "feature vs b9045d7",
-    "ref": "feature", "base": "b9045d7", "prompt": "schema changes first",
-    "asked_at": "2026-10-22 19:48:58"}],
+    "ref": "feature", "base": "b9045d7", "pull": null,
+    "prompt": "schema changes first", "asked_at": "2026-10-22 19:48:58"}],
  "commits": {"8b36d626c": "Lists the air carriers an integration supports"},
  "conversations": [
    {"id": "3f9c…",
@@ -404,6 +404,37 @@ already on its branch. Nothing is pushed or posted when the review
 moves. Quitting remax writes no move: the review stays where it was
 until a session moves it.
 
+## Reading a pull request
+
+Prefer local git to `gh`. A pull request remax has opened is already
+fetched: its head is `refs/remax/pull/N/head` and its base
+`refs/remax/pull/N/base`, the merge-base, so the diff between them is
+the one GitHub shows. Read it as you would any branch:
+
+```sh
+git -C "$REPO" log --reverse refs/remax/pull/N/base..refs/remax/pull/N/head
+git -C "$REPO" diff refs/remax/pull/N/base refs/remax/pull/N/head -- src/Foo.hs
+```
+
+`git show` and `git blame` work on those refs too. They are as fresh as
+the last fetch: an open session on the pull request keeps them current,
+and with none, `remax -C "$REPO" hunks --pr N` fetches the head again.
+Run that first rather than fetching or checking out the pull request
+yourself.
+
+When the session's `view` reads `PR #N edit`, the pull request is
+checked out, usually in a worktree of its own (see *When the review
+moves*), and that checkout's working tree is its head, holding commits
+and edits not pushed yet. Read that checkout, diffed against
+`refs/remax/pull/N/base`, rather than the head ref.
+
+While a session has the pull request open, its review threads and
+PR-level comments are in `remax list --json`, under conversations whose
+`pull` is `N`.
+
+Use `gh` only for what git does not hold, such as the description or a
+failing check's log, and never for the diff.
+
 ## Giving a tour
 
 When the human asks you to walk them through a change — present it,
@@ -417,13 +448,14 @@ that ask, and it wakes a `list --wait` like a flag does:
 ```json
 {"tour_requests": [
    {"repo": "/path/to/repo", "view": "feature vs b9045d7",
-    "ref": "feature", "base": "b9045d7", "prompt": "schema changes first",
-    "asked_at": "2026-10-22 03:10:41"}]}
+    "ref": "feature", "base": "b9045d7", "pull": null,
+    "prompt": "schema changes first", "asked_at": "2026-10-22 03:10:41"}]}
 ```
 
 Answer it with the tour below, passing `--ref` and `--base` exactly as
-the request gives them (both `null` means the working tree: pass no
-flags). `prompt` is their brief; follow it. Posting `tour begin` for
+the request gives them, or `--pr N` when `pull` is set (all three `null`
+means the working tree: pass no flags). `prompt` is their brief; follow
+it. Posting `tour begin` for
 that view clears the request. Spelling the commit differently — the
 branch name where the reviewer has a sha open, or a sha where they have
 the branch — still reaches them, since remax matches tours by the
@@ -438,13 +470,17 @@ entry per hunk with an `id`, `file`, `line_no` and the marked `lines`.
 With no flags it follows **whatever their open session is viewing** —
 the working tree, a `:ref`, a `:commit` — so you do not need to be told
 which commit they have up; `--ref REF [--base BASE]`, `--base REF` or
-`--pr N` names a view when nobody has one open. A pull request opened
-with `--pr N` or `:pr N` is a subject of its own: the listing's `subject`
-reads `pull/N`, and the tour stays with the pull request as its head and
-base move. Read the whole listing and decide
-an order and a sentence or two for each stop; a stop may cover several
-hunks when they are one idea (a rename and its fallout, a signature and
-its call sites).
+`--pr N` names a view when nobody has one open. Read the whole listing
+and decide an order and a sentence or two for each stop; a stop may
+cover several hunks when they are one idea (a rename and its fallout, a
+signature and its call sites).
+
+A tour of a pull request is built exactly the same way. `hunks --pr N`
+lists it, local git (see *Reading a pull request*) supplies the
+history, and `tour begin` and `tour step` take the same `--pr N`. Never
+build one from `gh pr diff`: its hunks have no ids remax accepts. The
+listing's `subject` reads `pull/N`, and the tour stays with the pull
+request as its head and base move.
 
 ```sh
 remax -C "$REPO" tour begin
