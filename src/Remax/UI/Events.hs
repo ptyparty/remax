@@ -590,7 +590,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar '/') [] -> PickerAction.openGrepPicker ""
         V.EvKey (V.KChar 'm') [] -> Uses.usesUnderCursor
         V.EvKey (V.KChar 'c') [] -> VerdictAction.showCommitPopup
-        V.EvKey (V.KChar 'o') [] -> Menus.pullView
+        V.EvKey (V.KChar 'o') [] -> PullViewAction.togglePullView
         V.EvKey (V.KChar 'i') [] -> InboxAction.openInbox
         V.EvKey (V.KChar '\'') [] -> Nav.jumpToAnchor
         V.EvKey (V.KChar '*') [] -> Search.searchWordUnderCursor

@@ -4,14 +4,11 @@
 module Remax.UI.Action.Menus
   ( helpGroups
   , spaceMenuEntries
-  , pullView
   ) where
 
 import Brick qualified as Brick
-import Control.Monad.State qualified as State
 import Data.Text qualified as T
 import Remax.Config qualified as Config
-import Remax.Git qualified as Git
 import Remax.Store qualified as Store
 import Remax.UI.Action.Editor qualified as Editor
 import Remax.UI.Action.Inbox qualified as InboxAction
@@ -253,17 +250,6 @@ helixEditingGroups =
     )
   ]
 
--- Space, then one key. This table is the only place a space key exists:
--- the infobox is rendered from it and the keystroke is dispatched through
--- it, so a key cannot be bound without being listed. :tree arrived bound
--- but invisible precisely because those used to be two lists.
-pullView :: Brick.EventM Types.Name Types.St ()
-pullView = do
-  st <- State.get
-  case Git.subjectOf (Types.stMode st) of
-    Git.Pull _ _ -> PullViewAction.togglePullView
-    _ -> Types.setMsg "not reviewing a pull request"
-
 resolveOrUnnote :: Brick.EventM Types.Name Types.St ()
 resolveOrUnnote = do
   handled <- ThreadAction.resolveKey
@@ -285,6 +271,10 @@ flagOrFlagLines = do
     ThreadAction.Handled -> pure ()
     ThreadAction.Unhandled -> NoteAction.markThenNote Store.Flagged
 
+-- Space, then one key. This table is the only place a space key exists:
+-- the infobox is rendered from it and the keystroke is dispatched through
+-- it, so a key cannot be bound without being listed. :tree arrived bound
+-- but invisible precisely because those used to be two lists.
 spaceMenuEntries :: [(T.Text, T.Text, Brick.EventM Types.Name Types.St ())]
 spaceMenuEntries =
   [ ("\9166", "accept as reviewed", VerdictAction.acceptSelection)
@@ -306,7 +296,7 @@ spaceMenuEntries =
   , ("/", "project search", PickerAction.openGrepPicker "")
   , ("m", "hunks mentioning this name", Uses.usesUnderCursor)
   , ("c", "the commit message", VerdictAction.showCommitPopup)
-  , ("o", "PR overview", pullView)
+  , ("o", "PR overview", PullViewAction.togglePullView)
   , ("i", "recent feedback", InboxAction.openInbox)
   , ("?", "keys", Types.showHelp)
   ]
