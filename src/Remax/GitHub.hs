@@ -760,12 +760,13 @@ checkoutPull root repo n = fmap (fmap (const ())) (runGh root ["pr", "checkout",
 
 data RefsMove = RefsInPlace | RefsFetched
 
-refreshPullRefs :: FilePath -> T.Text -> Int -> T.Text -> T.Text -> IO (Either GhFailure RefsMove)
-refreshPullRefs root repo n baseBranch headSha = do
-  (code, out, _) <- Process.readProcessWithExitCode "git" ["-C", root, "rev-parse", "--verify", "--quiet", T.unpack (Git.pullHeadRef n)] ""
-  case (code, T.strip (T.pack out)) of
-    (Exit.ExitSuccess, sha) | sha == headSha -> pure (Right RefsInPlace)
-    _ -> do
+refreshPullRefs :: FilePath -> T.Text -> Int -> T.Text -> T.Text -> T.Text -> IO (Either GhFailure RefsMove)
+refreshPullRefs root repo n baseBranch headSha baseSha = do
+  headNow <- Git.resolveFull root (Git.pullHeadRef n)
+  baseNow <- Git.resolveFull root (Git.pullBaseTipRef n)
+  if headNow == Just headSha && baseNow == Just baseSha
+    then pure (Right RefsInPlace)
+    else do
       remote <- remoteFor root repo
       fetched <- fetchPull root remote n baseBranch
       pure $ case fetched of
