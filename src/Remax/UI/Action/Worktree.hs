@@ -76,10 +76,10 @@ editCommit pr sha = do
   case standing of
     Git.OffBranch _ -> Types.setMsg ("this checkout is not on " <> Git.prHeadBranch pr <> " \8212 :pr edit again")
     Git.OnBranch -> do
-      dirty <- MonadIO.liftIO (Git.trackedChanges root)
-      if dirty
-        then Types.setMsg ("tracked changes in the tree \8212 commit or stash before editing commit " <> short)
-        else do
+      refused <- MonadIO.liftIO (rebaseRefusal root sha)
+      case refused of
+        Just why -> Types.setMsg why
+        Nothing -> do
           PullAction.editInPlace pr
           Types.whenWritable $ \grant -> do
             res <- MonadIO.liftIO (Git.rebaseToEdit grant root sha)
@@ -137,7 +137,17 @@ walkRefusal path standing walked =
         Git.EarlierThanStop -> Just (beforeStopMsg rb sha)
         Git.NotInRebase -> Just (notInRebaseMsg rb sha)
         _ -> Nothing
+    (Git.OnBranch, Just sha) -> rebaseRefusal path sha
     _ -> pure Nothing
+
+rebaseRefusal :: FilePath -> T.Text -> IO (Maybe T.Text)
+rebaseRefusal root sha = do
+  dirty <- Git.trackedChanges root
+  onBranch <- Git.isAncestor root sha "HEAD"
+  pure $ case (dirty, onBranch) of
+    (True, _) -> Just ("tracked changes in the tree \8212 commit or stash before editing commit " <> T.take 7 sha)
+    (_, False) -> Just ("commit " <> T.take 7 sha <> " is not on the branch here \8212 it was rewritten since the head was fetched; :pr review shows the fetched head")
+    _ -> Nothing
 
 beforeStopMsg :: Git.RebaseStatus -> T.Text -> T.Text
 beforeStopMsg rb sha = "commit " <> T.take 7 sha <> " is before the stop at " <> Git.rebaseProgress rb <> " \8212 :continue to the end or :abort! first"

@@ -191,9 +191,10 @@ setBaseRef :: T.Text -> Brick.EventM Types.Name Types.St ()
 setBaseRef base = do
   st <- State.get
   ok <- MonadIO.liftIO (Git.refExists (Types.stRoot st) base)
-  if not ok
-    then Types.setMsg ("no such ref: " <> base)
-    else setMode (Git.withBase base (Types.stMode st))
+  case Types.stMode st of
+    _ | not ok -> Types.setMsg ("no such ref: " <> base)
+    Git.AtPull pr Git.Checkout -> Types.setMsg (Git.pullLabel pr <> " edit mode diffs against the live merge-base \8212 :pr review, then :base picks a range")
+    mode -> setMode (Git.withBase base mode)
 
 subjectTip :: Types.St -> T.Text
 subjectTip st =

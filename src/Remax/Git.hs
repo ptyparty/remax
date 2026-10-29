@@ -71,6 +71,7 @@ module Remax.Git
   , rebasePlaceOf
   , rebaseToEdit
   , markTodoEdit
+  , isAncestor
   , commitBody
   , CommitUnderReview (..)
   , commitUnderReview
@@ -1012,6 +1013,12 @@ rebasePlaceOf root sha = do
         (_, _, True) -> LaterThanStop
         _ -> NotInRebase
 
+isAncestor :: FilePath -> T.Text -> T.Text -> IO Bool
+isAncestor root ancestor descendant = do
+  (code, _, _) <-
+    Process.readProcessWithExitCode "git" ["-C", root, "merge-base", "--is-ancestor", T.unpack ancestor, T.unpack descendant] ""
+  pure (code == Exit.ExitSuccess)
+
 rebaseToEdit :: Writable -> FilePath -> T.Text -> IO (Either T.Text ())
 rebaseToEdit grant root sha =
   let
@@ -1067,6 +1074,7 @@ rebaseStatus root = do
         Just dir -> do
           nextT <- readFileOr "0" (dir </> "next")
           lastT <- readFileOr "0" (dir </> "last")
+          headName <- readFileOr "" (dir </> "head-name")
           let
             num t = case reads (T.unpack (T.strip t)) of
               [(n, "")] -> n
@@ -1078,7 +1086,7 @@ rebaseStatus root = do
               , rebaseSha = ""
               , rebaseSubject = ""
               , rebaseStop = ConflictStop Nothing
-              , rebaseBranch = Nothing
+              , rebaseBranch = T.stripPrefix "refs/heads/" (T.strip headName)
               }
 
 mergeBackendStop :: FilePath -> FilePath -> IO RebaseStop
