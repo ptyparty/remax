@@ -12,6 +12,7 @@ module Remax.UI.Action.Picker
   , openRefPicker
   , openCommitPicker
   , openPullPicker
+  , openWorktreePicker
   , reviewCommit
   , applyCheckout
   , openGrepPicker
@@ -44,6 +45,7 @@ import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Action.Repo qualified as Repo
 import Remax.UI.Action.Settings qualified as Settings
+import Remax.UI.Action.Worktree qualified as Worktree
 import Remax.UI.Core.Jobs qualified as Jobs
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Widgets qualified as Widgets
@@ -639,6 +641,21 @@ reviewWord review =
     GitHub.ChangesRequested -> "changes requested"
     GitHub.ReviewRequested -> "requested"
 
+openWorktreePicker :: Types.EditEntry -> [FilePath] -> FilePath -> Brick.EventM Types.Name Types.St ()
+openWorktreePicker entry existing defaultPath = do
+  let
+    pr = Types.eePull entry
+    existingRow path = (T.pack path, [T.pack path, "on " <> Git.prHeadBranch pr, "existing worktree"])
+    rows =
+      map existingRow existing
+        ++ [ (Worktree.newWorktreeChoice defaultPath, [T.pack defaultPath, "new worktree", "default"])
+           , (Worktree.typedPathChoice, ["type a path\8230", "new worktree", "prompt, prefilled"])
+           ]
+    widths = Widgets.columnWidths [48, 20] (map snd rows)
+    shown = map (\(ref, cells) -> pickerRow ref (Widgets.columnRow widths cells) (T.unwords cells)) rows
+  State.modify $ \s ->
+    s {Types.stPicker = Just (refreshRowPicker (Types.Picker (Types.PickWorktree entry) "" shown [] [] 0 Set.empty))}
+
 openCommitPicker :: Brick.EventM Types.Name Types.St ()
 openCommitPicker = do
   st <- State.get
@@ -920,7 +937,8 @@ pickerChoose pk (target, line) =
     Types.PickCommit -> commitChoice pk (T.pack target)
     Types.PickParent tip -> Settings.setMode (Git.AtRef (Git.RefReview {Git.rrTip = tip, Git.rrBase = T.pack target}))
     Types.PickRepo -> Repo.switchRepo target
-    Types.PickPull -> Monad.forM_ (GitHub.pullNumber (T.pack target)) PullAction.openPull
+    Types.PickPull -> Monad.forM_ (GitHub.pullNumber (T.pack target)) Worktree.openPullHere
+    Types.PickWorktree entry -> Worktree.chooseWorktree entry (T.pack target)
     Types.PickUses up -> goToUse up line
     _
       | line == 0 -> Open.openFilePath (T.pack target)

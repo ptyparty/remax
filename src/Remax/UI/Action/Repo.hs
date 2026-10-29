@@ -2,7 +2,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Remax.UI.Action.Repo
-  ( switchRepo
+  ( Arrival (..)
+  , arrive
+  , switchRepo
   , rescanRepos
   , describeRepo
   ) where
@@ -14,6 +16,7 @@ import Control.Monad.State qualified as State
 import Data.Int qualified as DataInt
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Remax.Config qualified as Config
@@ -40,6 +43,7 @@ currentPlace st = do
     ( Types.stRoot st
     , Types.RepoPlace
         { Types.rpMode = Types.stMode st
+        , Types.rpTreeMode = Types.stTreeMode st
         , Types.rpFile = Types.fvPath fv
         , Types.rpHunk = Types.stCurH st
         , Types.rpWalk = Types.stWalk st
@@ -53,9 +57,20 @@ currentPlace st = do
 -- read fresh: the verdicts and threads are that repository's, the rebase
 -- state comes back out of its .git, and the buffers are re-read from
 -- disk because an agent may have been working here in the meantime.
+data Arrival = Arrival
+  { arTarget :: FilePath
+  , arMode :: Maybe Git.ReviewMode
+  , arThen :: Brick.EventM Types.Name Types.St ()
+  }
+
 switchRepo :: FilePath -> Brick.EventM Types.Name Types.St ()
-switchRepo target = do
+switchRepo target = arrive Arrival {arTarget = target, arMode = Nothing, arThen = pure ()}
+
+arrive :: Arrival -> Brick.EventM Types.Name Types.St ()
+arrive arrival = do
   st <- State.get
+  let
+    target = arTarget arrival
   if target == Types.stRoot st
     then Types.setMsg ("already in " <> T.pack (FilePath.takeFileName target))
     else
@@ -64,7 +79,7 @@ switchRepo target = do
         else do
           let
             remembered = Map.lookup target (Types.stPlaces st)
-            mode = maybe (Git.VsRef "HEAD") Types.rpMode remembered
+            mode = Maybe.fromMaybe (maybe (Git.VsRef "HEAD") Types.rpMode remembered) (arMode arrival)
             conn = Types.stConn st
             saved = case currentPlace st of
               Just (from, place) -> Map.insert from place (Types.stPlaces st)
@@ -98,8 +113,15 @@ switchRepo target = do
               Right loaded -> do
                 leaving <- State.get
                 MonadIO.liftIO (Store.finishPass conn (Types.stPassId leaving))
+                MonadIO.liftIO (Store.recordMoveBetween conn (Types.repoText leaving) (T.pack target))
                 passId <- MonadIO.liftIO (Store.beginPass conn (T.pack target) (Git.modeLabel mode))
                 arriveAt target remembered saved mode passId loaded
+                case Git.subjectOf mode of
+                  Git.Pull _ _ -> do
+                    Load.forceGitRefresh
+                    PullAction.pollPullNow
+                  _ -> pure ()
+                arThen arrival
 
 arriveAt ::
   FilePath ->
@@ -146,7 +168,8 @@ arriveAt target remembered saved mode passId loaded = do
         , Types.stMode = mode
         , Types.stTreeMode = case Git.subjectOf mode of
             Git.WorkingTree -> mode
-            _ -> Git.VsRef "HEAD"
+            _ -> maybe (Git.VsRef "HEAD") Types.rpTreeMode remembered
+        , Types.stRoots = if target `elem` Types.stRoots s then Types.stRoots s else Types.stRoots s ++ [target]
         , Types.stPlaces = saved
         , -- it listed the repository we just left; bringing it back
           -- here would offer files that are not in front of us
@@ -238,7 +261,9 @@ rescanRepos = do
     Nothing -> pure ()
     Just dir -> do
       found <- MonadIO.liftIO (Git.childRepos dir)
-      Monad.unless (found == Types.stRoots st) (State.modify (\s -> s {Types.stRoots = found}))
+      let
+        roots = found ++ filter (`notElem` found) (Types.stWorktrees st)
+      Monad.unless (roots == Types.stRoots st) (State.modify (\s -> s {Types.stRoots = roots}))
 
 -- How much of a repository is left to read, for the switcher. Knowing a
 -- repository has changes says nothing about whether they have been

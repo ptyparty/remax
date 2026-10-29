@@ -14,6 +14,11 @@ module Remax.Git
   , liveBase
   , BranchStanding (..)
   , branchStanding
+  , Worktree (..)
+  , listWorktrees
+  , worktreesOnBranch
+  , addDetachedWorktree
+  , resolveUnder
   , pullAtHead
   , pushedHeadRef
   , withBase
@@ -62,6 +67,10 @@ module Remax.Git
   , rebaseConflicted
   , rebaseProgress
   , rebaseStatus
+  , RebasePlace (..)
+  , rebasePlaceOf
+  , rebaseToEdit
+  , markTodoEdit
   , commitBody
   , CommitUnderReview (..)
   , commitUnderReview
@@ -173,6 +182,67 @@ branchStanding root pr = do
     Nothing -> do
       branch <- currentBranch root
       pure (if branch == Just (prHeadBranch pr) then OnBranch else OffBranch Nothing)
+
+data Worktree = Worktree
+  { wtPath :: FilePath
+  , wtBranch :: Maybe T.Text
+  }
+  deriving (Eq, Show)
+
+listWorktrees :: FilePath -> IO [Worktree]
+listWorktrees root = do
+  (code, out, _) <-
+    Process.readProcessWithExitCode "git" ["-C", root, "worktree", "list", "--porcelain"] ""
+  let
+    stanzas = filter (not . null) (splitBlank (T.lines (T.pack out)))
+    field key stanza = Maybe.listToMaybe (Maybe.mapMaybe (T.stripPrefix (key <> " ")) stanza)
+    one stanza = do
+      path <- field "worktree" stanza
+      Just
+        Worktree
+          { wtPath = T.unpack path
+          , wtBranch = T.stripPrefix "refs/heads/" =<< field "branch" stanza
+          }
+  pure $ case code of
+    Exit.ExitSuccess -> Maybe.mapMaybe one stanzas
+    Exit.ExitFailure _ -> []
+
+splitBlank :: [T.Text] -> [[T.Text]]
+splitBlank ls =
+  case break T.null ls of
+    (stanza, []) -> [stanza]
+    (stanza, _ : rest) -> stanza : splitBlank rest
+
+worktreesOnBranch :: FilePath -> PullRequest -> IO [FilePath]
+worktreesOnBranch root pr = do
+  found <- listWorktrees root
+  let
+    holds wt = do
+      standing <- branchStanding (wtPath wt) pr
+      pure $ case standing of
+        OffBranch _ -> []
+        _ -> [wtPath wt]
+  fmap concat (mapM holds found)
+
+addDetachedWorktree :: FilePath -> FilePath -> T.Text -> IO (Either T.Text ())
+addDetachedWorktree root path ref = do
+  (code, _, err) <-
+    Process.readProcessWithExitCode "git" ["-C", root, "worktree", "add", "--detach", path, T.unpack ref] ""
+  pure $ case code of
+    Exit.ExitSuccess -> Right ()
+    Exit.ExitFailure _ -> Left (T.strip (T.pack err))
+
+resolveUnder :: FilePath -> FilePath -> FilePath
+resolveUnder root given =
+  let
+    joined = FilePath.normalise (if FilePath.isAbsolute given then given else root </> given)
+    step acc part =
+      case part of
+        "." -> acc
+        ".." -> if length acc > 1 then init acc else acc
+        _ -> acc ++ [part]
+  in
+    FilePath.joinPath (foldl step [] (FilePath.splitDirectories joined))
 
 pullAtHead :: PullRequest -> PullRequest
 pullAtHead pr = pr {prTip = pullHeadRef (prNumber pr), prBase = pullBaseRef (prNumber pr)}
@@ -910,21 +980,69 @@ gitStatePath exists root name = do
       present <- exists path
       pure (if present then Just path else Nothing)
 
+pickOf :: T.Text -> Maybe (T.Text, T.Text)
+pickOf l =
+  case T.words l of
+    (verb : pickSha : rest)
+      | verb `elem` ["pick", "p", "edit", "e", "reword", "r", "fixup", "f", "squash", "s"] -> Just (pickSha, T.unwords rest)
+    _ -> Nothing
+
+rebasePicks :: FilePath -> IO ([(T.Text, T.Text)], [(T.Text, T.Text)])
+rebasePicks dir = do
+  done <- readFileOr "" (dir </> "done")
+  todo <- readFileOr "" (dir </> "git-rebase-todo")
+  pure (Maybe.mapMaybe pickOf (T.lines done), Maybe.mapMaybe pickOf (T.lines todo))
+
+data RebasePlace = StoppedAt | EarlierThanStop | LaterThanStop | NotInRebase
+  deriving (Eq, Show)
+
+rebasePlaceOf :: FilePath -> T.Text -> IO RebasePlace
+rebasePlaceOf root sha = do
+  mMerge <- gitStateDir root "rebase-merge"
+  case mMerge of
+    Nothing -> pure NotInRebase
+    Just dir -> do
+      (donePicks, todoPicks) <- rebasePicks dir
+      let
+        names (pickSha, _) = pickSha `T.isPrefixOf` sha || sha `T.isPrefixOf` pickSha
+      pure $ case (reverse donePicks, any names donePicks, any names todoPicks) of
+        (stopped : _, _, _) | names stopped -> StoppedAt
+        (_, True, _) -> EarlierThanStop
+        (_, _, True) -> LaterThanStop
+        _ -> NotInRebase
+
+rebaseToEdit :: Writable -> FilePath -> T.Text -> IO (Either T.Text ())
+rebaseToEdit grant root sha =
+  let
+    marker = "sed -i -E 's/^pick (" ++ T.unpack (T.take 7 sha) ++ "[0-9a-f]*) /edit \\1 /'"
+  in
+    runGitWith [("GIT_SEQUENCE_EDITOR", marker)] grant root ["rebase", "-i", T.unpack sha ++ "^"]
+
+markTodoEdit :: Writable -> FilePath -> T.Text -> IO (Either T.Text ())
+markTodoEdit _ root sha = do
+  mMerge <- gitStateDir root "rebase-merge"
+  case mMerge of
+    Nothing -> pure (Left "no rebase in progress")
+    Just dir -> do
+      let
+        file = dir </> "git-rebase-todo"
+        mark l = case pickOf l of
+          Just (pickSha, _)
+            | pickSha `T.isPrefixOf` sha || sha `T.isPrefixOf` pickSha -> "edit " <> T.unwords (drop 1 (T.words l))
+          _ -> l
+      todo <- readFileOr "" file
+      res <- IOError.tryIOError (BS.writeFile file (TE.encodeUtf8 (T.unlines (map mark (T.lines todo)))))
+      pure $ case res of
+        Left e -> Left (T.pack (show e))
+        Right () -> Right ()
+
 rebaseStatus :: FilePath -> IO (Maybe RebaseStatus)
 rebaseStatus root = do
   mMerge <- gitStateDir root "rebase-merge"
   case mMerge of
     Just dir -> do
-      done <- readFileOr "" (dir </> "done")
-      todo <- readFileOr "" (dir </> "git-rebase-todo")
+      (donePicks, todoPicks) <- rebasePicks dir
       let
-        pickWords = ["pick", "p", "edit", "e", "reword", "r", "fixup", "f", "squash", "s"]
-        pickOf l = case T.words l of
-          (verb : pickSha : rest)
-            | verb `elem` pickWords -> Just (pickSha, T.unwords rest)
-          _ -> Nothing
-        donePicks = Maybe.mapMaybe pickOf (T.lines done)
-        todoPicks = Maybe.mapMaybe pickOf (T.lines todo)
         (sha, subject) = case reverse donePicks of
           (p1 : _) -> p1
           [] -> ("", "")
@@ -1273,12 +1391,16 @@ commitAt root ref = do
 -- these run underneath a live TUI, where an editor popping up would
 -- wedge the terminal.
 runGit :: Writable -> FilePath -> [String] -> IO (Either T.Text ())
-runGit _ root args = do
+runGit = runGitWith []
+
+runGitWith :: [(String, String)] -> Writable -> FilePath -> [String] -> IO (Either T.Text ())
+runGitWith extra _ root args = do
   environment <- Env.getEnvironment
   let
+    forced = ("GIT_EDITOR", "true") : extra
     p =
       (Process.proc "git" (["-C", root] ++ args))
-        { Process.env = Just (("GIT_EDITOR", "true") : filter ((/= "GIT_EDITOR") . fst) environment)
+        { Process.env = Just (forced ++ filter ((`notElem` map fst forced) . fst) environment)
         }
   (code, _, err) <- Process.readCreateProcessWithExitCode p ""
   pure $ case code of

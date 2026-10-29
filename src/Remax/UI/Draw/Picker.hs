@@ -9,6 +9,7 @@ import Brick ((<+>))
 import Brick qualified as Brick
 import Brick.Types qualified as BrickTypes
 import Data.Text qualified as T
+import Remax.Git qualified as Git
 import Remax.UI.Action.Fuzzy qualified as Fuzzy
 import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Types qualified as Types
@@ -85,6 +86,7 @@ pickerTitle mode =
     Types.PickPull -> "open pull requests"
     Types.PickRange rp -> "review head " <> Types.rpHead rp <> " against"
     Types.PickUses up -> "hunks mentioning " <> Types.upName up
+    Types.PickWorktree entry -> "edit " <> Git.pullLabel (Types.eePull entry) <> " in"
 
 pickerHint :: Types.PickerMode -> T.Text
 pickerHint mode =
@@ -98,4 +100,5 @@ pickerHint mode =
     Types.PickPull -> "\8593\8595 moves · \9166 opens in review mode · Esc closes · :pr N skips the picker"
     Types.PickRange _ -> "\8593\8595 moves · \9166 reviews against the row · Esc keeps the base"
     Types.PickUses _ -> "\8593\8595 moves · \9166 goes to the line · ' returns to the hunk under review · Esc closes"
+    Types.PickWorktree _ -> "\8593\8595 moves · \9166 edits the pull request in this worktree, adding it when new · Esc stays read-only"
     _ -> "\8593\8595 moves · \9166 opens · Esc closes"

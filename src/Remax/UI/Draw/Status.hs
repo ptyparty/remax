@@ -32,6 +32,7 @@ statusBar st =
       (_, Just (Types.SearchPrompt input)) ->
         Brick.txt (Types.searchSigil st <> input <> "\9612")
       (_, Just (Types.CmdPrompt input)) -> Brick.txt (":" <> input <> "\9612")
+      (_, Just (Types.PathPrompt label input _)) -> Brick.txt (label <> input <> "\9612")
       (_, Nothing) -> Brick.withAttr Attrs.msgAttr (Brick.txt (Widgets.padT (Types.stMsg st)))
   in
     Brick.withDefAttr Attrs.statusAttr $

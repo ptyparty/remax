@@ -7,6 +7,7 @@ module Remax.UI.Core.Types
   , REvent (..)
   , Prompt (..)
   , PickerMode (..)
+  , EditEntry (..)
   , RangePicker (..)
   , UsesPicker (..)
   , UsesHit (..)
@@ -150,12 +151,18 @@ data REvent
   | FromJob (Brick.EventM Name St ())
 
 -- The one-line prompt at the bottom of the screen: / search or : command.
-data Prompt = SearchPrompt T.Text | CmdPrompt T.Text
+data Prompt = SearchPrompt T.Text | CmdPrompt T.Text | PathPrompt T.Text T.Text (T.Text -> Brick.EventM Name St ())
 
 -- The finder overlay: fuzzy file picking, or project-wide grep. Each
 -- display row is aligned with a jump target (file, and a 1-based line
 -- for grep hits; 0 = just open the file).
-data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRef | PickCommit | PickParent T.Text | PickRepo | PickPull | PickRange RangePicker | PickUses UsesPicker
+data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRef | PickCommit | PickParent T.Text | PickRepo | PickPull | PickRange RangePicker | PickUses UsesPicker | PickWorktree EditEntry
+
+data EditEntry = EditEntry
+  { eePull :: Git.PullRequest
+  , eeCommit :: Maybe T.Text
+  , eeThen :: Brick.EventM Name St ()
+  }
 
 data UsesPicker = UsesPicker
   { upName :: T.Text
@@ -236,6 +243,7 @@ data NotePopup = NotePopup
 -- looking and what you had asked to see.
 data RepoPlace = RepoPlace
   { rpMode :: Git.ReviewMode
+  , rpTreeMode :: Git.ReviewMode
   , rpFile :: FilePath
   , rpHunk :: Int
   , rpWalk :: WalkFilter
@@ -604,6 +612,7 @@ data St = St
   , stTree :: Maybe TreeView -- the project tree overlay, while it is open
   , stHelp :: Bool -- the keybinding cheat sheet is up
   , stRoots :: [FilePath] -- repositories this session can switch between
+  , stWorktrees :: [FilePath] -- pull request worktrees entered this session, kept in stRoots across rescans
   , stStory :: Maybe FilePath -- the folder they sit in, when this is a story
   , stPlaces :: Map.Map FilePath RepoPlace -- where you were in each
   , stPullMeta :: Maybe GitHub.PullMeta

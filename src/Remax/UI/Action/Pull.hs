@@ -15,7 +15,10 @@ module Remax.UI.Action.Pull
   , walkToCommit
   , walkRun
   , editPull
+  , editInPlace
+  , editAtRebaseStop
   , reviewPull
+  , noPullOpen
   ) where
 
 import Brick qualified as Brick
@@ -78,7 +81,7 @@ openedMessage start opened =
   in
     case start of
       GitHub.EditYourPull -> "editing " <> title
-      GitHub.ReviewPull GitHub.YourPull -> title <> " \183 :pr edit checks it out"
+      GitHub.ReviewPull GitHub.YourPull -> title <> " \183 :pr edit opens it in a worktree"
       GitHub.ReviewPull GitHub.TheirPull -> title
 
 refreshPullMeta :: Brick.EventM Types.Name Types.St ()
@@ -325,9 +328,7 @@ editPull = do
     Git.AtPull pr Git.ReadOnly -> do
       standing <- MonadIO.liftIO (Git.branchStanding (Types.stRoot st) pr)
       case standing of
-        Git.OnBranch -> do
-          Settings.setMode (Git.AtPull (Git.pullAtHead pr) Git.Checkout)
-          Types.setMsg ("editing " <> Git.pullLabel pr <> " on " <> Git.prHeadBranch pr)
+        Git.OnBranch -> editInPlace pr
         Git.RebasingBranch rb -> editAtRebaseStop pr rb
         Git.OffBranch (Just rb) ->
           Types.setMsg
@@ -339,6 +340,11 @@ editPull = do
             )
         Git.OffBranch Nothing -> checkoutPull st pr
     _ -> Types.setMsg noPullOpen
+
+editInPlace :: Git.PullRequest -> Brick.EventM Types.Name Types.St ()
+editInPlace pr = do
+  Settings.setMode (Git.AtPull (Git.pullAtHead pr) Git.Checkout)
+  Types.setMsg ("editing " <> Git.pullLabel pr <> " on " <> Git.prHeadBranch pr)
 
 editAtRebaseStop :: Git.PullRequest -> Git.RebaseStatus -> Brick.EventM Types.Name Types.St ()
 editAtRebaseStop pr rb = do
@@ -382,5 +388,5 @@ reviewPull = do
     Git.AtPull pr Git.Checkout -> do
       Settings.setMode (Git.AtPull (Git.pullAtHead pr) Git.ReadOnly)
       pollPullNow
-    Git.AtPull pr Git.ReadOnly -> Types.setMsg (Git.pullLabel pr <> " is already read-only \8212 :pr edit checks it out")
+    Git.AtPull pr Git.ReadOnly -> Types.setMsg (Git.pullLabel pr <> " is already read-only \8212 :pr edit opens it in a worktree")
     _ -> Types.setMsg noPullOpen

@@ -46,6 +46,7 @@ settingNames =
   , "split-threshold"
   , "piece-min"
   , "piece-max"
+  , "pr-worktree"
   ]
 
 settingValue :: Config.Config -> T.Text -> T.Text
@@ -62,6 +63,7 @@ settingValue cfg key =
     "split-threshold" -> Types.tshow (DiffModel.splitThreshold (Config.cfgSplit cfg))
     "piece-min" -> Types.tshow (DiffModel.pieceMin (Config.cfgSplit cfg))
     "piece-max" -> Types.tshow (DiffModel.pieceMax (Config.cfgSplit cfg))
+    "pr-worktree" -> Config.cfgPrWorktree cfg
     _ -> "?"
 
 showSettings :: Brick.EventM Types.Name Types.St ()
@@ -132,6 +134,7 @@ applySet key val = do
       withInt
         (\n -> cfg {Config.cfgSplit = splitWith (\sc -> sc {DiffModel.pieceMax = max 2 n})})
         Load.rebuildAllFiles
+    "pr-worktree" -> finish cfg {Config.cfgPrWorktree = val} (pure ())
     _ -> Types.setMsg ("unknown setting: " <> key)
 
 toggleIgnoreWs :: Brick.EventM Types.Name Types.St ()

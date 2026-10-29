@@ -360,7 +360,7 @@ stays a prefix there too.
 | `:N` | jump to line N of the current file, clamped to its ends — the cursor moves, the hunk under review and the `'` anchor don't |
 | `:edit [PATH]` | suspend into `$EDITOR` at the cursor (or on PATH) |
 | `:checkout` | switch branches — a picker over local branches in the same columns (branch, how long ago, the tip you'd land on, subject), most recently committed first with `← current` marked; `⏎` checks out. `:checkout NAME` skips the picker. Refused mid-rebase |
-| `:pr` | open a pull request of the repository this checkout belongs to — a picker over its open pull requests (number, author, title, age, CI, your review state, a `draft` mark, and `← open` on the one under review); `⏎` opens the row on its [PR view](#the-pr-view). `:pr N` skips the picker; `:pr commits` walks its commits, `:pr edit` checks it out to address its feedback and `:pr review` returns to the read-only head. See [Reviewing a pull request](#reviewing-a-pull-request) |
+| `:pr` | open a pull request of the repository this checkout belongs to — a picker over its open pull requests (number, author, title, age, CI, your review state, a `draft` mark, and `← open` on the one under review); `⏎` opens the row on its [PR view](#the-pr-view). `:pr N` skips the picker; `:pr commits` walks its commits, `:pr edit` opens it for editing in a worktree of its own and `:pr review` returns to the read-only head. See [Reviewing a pull request](#reviewing-a-pull-request) |
 | `:ready` | mark the open pull request ready for review |
 | `:draft` | convert the open pull request to a draft |
 | `:feedback` | the [recent feedback](#recent-feedback) popup, as `Space i` opens it |
@@ -407,7 +407,7 @@ from your shell and the open session tracks every stop.
 ## Reviewing a pull request
 
 `remax --pr N`, `:pr N` or a row of the `:pr` picker opens pull request N
-of the GitHub repository this checkout belongs to, on its [PR view](#the-pr-view); `Esc` goes on to the diff. Your own pull request opens in feedback mode when its branch is checked out. Every other pull request opens read-only, and on your own the status line says `:pr edit checks it out`. remax asks `gh` for
+of the GitHub repository this checkout belongs to, on its [PR view](#the-pr-view); `Esc` goes on to the diff. Your own pull request opens in feedback mode when its branch is checked out. Every other pull request opens read-only, and on your own the status line says `:pr edit opens it in a worktree`. remax asks `gh` for
 everything and keeps no token of its own: `gh repo view` names the
 repository, cached per `origin` URL and asked again when the remote
 changes or GitHub no longer knows the pull request there. The session
@@ -450,10 +450,39 @@ says so.
 `:pr edit` switches to feedback mode, for addressing the comments on your
 own pull request. Edit mode works only on the pull request's branch: on
 it, or at a stop of a rebase that is rewriting it. On the branch it
-checks nothing out, so your changes stay as they are; elsewhere it runs
-`gh pr checkout N`, which brings uncommitted changes along unless git
-refuses them, and at a stop of some other branch's rebase it refuses and
-names that branch. It then reviews the working tree against the
+checks nothing out, so your changes stay as they are. Anywhere else it
+leaves this checkout alone, its branch, uncommitted edits and rebase
+included, and edits the pull request in a git worktree of its own. The
+first time it asks where, in a picker: each worktree of the repository
+that already has the branch checked out or is rebasing it (git checks a
+branch out in one worktree at a time, so one of those is the only way to
+edit it), the default path, and `type a path…`, a prompt prefilled with
+the default. The default is `../<repo>-pr-<N>`, a sibling of the
+checkout named after the GitHub repository and the pull request, and the
+`pr-worktree` setting changes the template; a relative path resolves
+against the checkout's root. A new path is added with `git worktree
+add --detach` at the fetched head and checked out with `gh pr checkout
+N` inside it, as a job; git's or gh's refusal shows and the session stays
+read-only where it was. remax remembers the worktree for the pull
+request, so later `:pr edit`s go straight to it, also after a restart;
+one that has been removed is forgotten and the picker opens again, and
+one that has wandered onto another branch, or was left detached by a
+failed checkout, is checked out again first. remax never removes a
+worktree; `git worktree remove` does.
+
+The session then moves into the worktree as `:repo` would, remembering
+its place in the checkout it left, and the header names the worktree.
+The worktree is a repository of its own to the store: verdicts, notes
+and drafts made there are keyed by its path, and `remax list` there
+lists them. `:pr review` returns to the checkout it came from, read-only
+on the pull request at the file and hunk it left; `:mode tree` returns
+there in its working-tree mode; `:pr M` and a row of the `:pr` picker
+return there first and open the other pull request. `:ref`, `:commit`
+and `:mode head`, `unstaged` and `untracked` act inside the worktree,
+and `:repo` lists it beside the checkout for the rest of the session.
+The worktree keeps its edits. Nothing is pushed or posted to GitHub on
+the way in or out. In edit mode the session reviews the working tree
+against the
 merge-base of `HEAD` and the base branch's fetched tip, worked out again
 on every refresh, so rebasing the branch onto a newer base adds none of
 the base's changes to the diff, and the `N unpushed` count holds only
@@ -643,7 +672,17 @@ merged or closed pull request.
 `:pr commits` walks the pull request one commit at a time, each reviewed
 read-only against its parent. The git bar shows `commit 3/7`, and `]` past
 the last hunk of a commit moves to the next one, `[` before the first to
-the previous. `:base` returns to a range.
+the previous. `:base` returns to a range. `:pr edit` on commit k edits
+that commit: it brings the session to the pull request's edit checkout,
+the worktree or this checkout when it is on the branch, refuses tracked
+changes there as `:rebase` does, and starts `git rebase -i` from k's
+parent with k marked `edit`, so the session lands at a stop showing k
+alone and `:continue` folds the edits into k and replays the rest.
+While that rebase is stopped at k, `:pr edit` on a later commit marks
+it `edit` in the running rebase too, says so, and stays at k, so a
+later `:continue` stops there as well; on k itself it enters the stop;
+on an earlier commit it refuses, because git cannot rewind a running
+rebase: `:continue` to the end or `:abort!` first.
 
 ## Working with agents
 
@@ -679,6 +718,18 @@ your feedback flows back through the store:
    `Space u` dismisses a conversation without accepting anything.
 4. It fixes the code; the fixed lines automatically come back as pending
    in your session; you accept or push back.
+
+When `:pr edit` moves the session into a pull request's worktree, or
+any command moves it back, the agent has to know: it edits files and
+reads feedback at the path it was pointed at, and the worktree's work
+is keyed under the worktree's path. The move is recorded as the group's
+latest, a checkout and its pull request worktrees being one group, and
+`remax list` on any path in the group reports it, as a `review moved
+to … for PR #N` line and a `review_moves` entry in `--json`; it wakes a
+`list --wait` as a flag does, and each move replaces the last. An agent
+whose `-C` does not already cover the path follows it, as the skill
+says. Switching among the group's checkouts with `:repo` or `:open`
+records a move too; quitting records none.
 
 `skills/remax-review/SKILL.md` teaches Claude Code this protocol — copy
 or symlink it into `~/.claude/skills/` (or a workspace `.claude/skills/`)
@@ -732,7 +783,12 @@ tray = 1              # the tray starts open; Tab still toggles it
 split-threshold = 20  # hunks at or under this never split
 piece-min = 6         # smaller pieces merge forward (within a function)
 piece-max = 32        # bigger pieces keep splitting
+pr-worktree = ../<repo>-pr-<N>  # where :pr edit puts a pull request's worktree
 ```
+
+`pr-worktree` is a path template: `<repo>` is the GitHub repository's
+name and `<N>` the pull request number, and a relative path resolves
+against the checkout's root.
 
 `keys = helix` (default), `keys = vi`, or `keys = emacs` picks the
 keybinding family.

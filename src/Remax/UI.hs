@@ -260,6 +260,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stTree = Nothing
     , Types.stHelp = False
     , Types.stRoots = roots
+    , Types.stWorktrees = []
     , Types.stStory = story
     , Types.stPlaces = Map.empty
     }
