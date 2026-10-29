@@ -12,6 +12,7 @@ module Remax.UI.Model.Nav
   , parkM
   , scrollHunkIntoView
   , scrollTrayToCurrent
+  , withCursorHeld
   , RunStep (..)
   , planRun
   , takeRun
@@ -213,14 +214,7 @@ scrollHunkIntoViewOf fv = do
         -- anywhere, so the window is moved with it and written back here
         -- rather than left for the drift check to discover.
         origin = snd (View.bodyWindow screenRows st fv)
-        noteRoom = View.noteTextWidth (fst (Brick._vpSize vp)) fv
-        startIn = max 0 (start - origin)
-        -- best-effort correction for virtual note rows rendered above
-        -- the hunk (exact when the render window covers them)
-        renderStart =
-          startIn
-            + sum (map (Threads.rowLineCount st noteRoom . Anchor.conversationsAt st fv) [origin .. origin + startIn - 1])
-            + sum (map length (take (startIn + 1) (drop origin (View.shownGuideLines noteRoom st (Types.fvRows fv)))))
+        renderStart = renderedLine st vp fv origin start
         top =
           if len + 4 >= vpH
             then max 0 (renderStart - 2)
@@ -231,6 +225,58 @@ scrollHunkIntoViewOf fv = do
   -- follow in the tray too — an explicit scroll on hunk jumps only, so
   -- manual tray scrolling is never fought over
   scrollTrayToCurrent
+
+renderedLine :: Types.St -> Brick.Viewport -> Types.FileView -> Int -> Int -> Int
+renderedLine st vp fv origin out =
+  let
+    noteRoom = View.noteTextWidth (fst (Brick._vpSize vp)) fv
+    rowsIn = max 0 (out - origin)
+  in
+    -- best-effort correction for virtual note rows rendered above
+    -- the row (exact when the render window covers them)
+    rowsIn
+      + sum (map (Threads.rowLineCount st noteRoom . Anchor.conversationsAt st fv) [origin .. origin + rowsIn - 1])
+      + sum (map length (take (rowsIn + 1) (drop origin (View.shownGuideLines noteRoom st (Types.fvRows fv)))))
+
+newtype ScreenOffset = ScreenOffset {screenOffsetLines :: Int}
+
+withCursorHeld :: Brick.EventM Types.Name Types.St a -> Brick.EventM Types.Name Types.St a
+withCursorHeld action = do
+  before <- State.get
+  held <- cursorScreenOffset
+  result <- action
+  after <- State.get
+  let
+    pathOf st = fmap Types.fvPath (Types.currentFileMay st)
+  Monad.when (pathOf before == pathOf after) (Monad.mapM_ holdCursorAt held)
+  pure result
+
+cursorScreenOffset :: Brick.EventM Types.Name Types.St (Maybe ScreenOffset)
+cursorScreenOffset = do
+  st <- State.get
+  mvp <- Brick.lookupViewport Types.BodyVP
+  screenRows <- View.terminalRows
+  pure $ do
+    fv <- Types.currentFileMay st
+    vp <- mvp
+    let
+      cursorOut = fst (View.bodyWindow screenRows st fv)
+    Just (ScreenOffset (renderedLine st vp fv (Types.fvOrigin fv) cursorOut - Brick._vpTop vp))
+
+holdCursorAt :: ScreenOffset -> Brick.EventM Types.Name Types.St ()
+holdCursorAt offset = do
+  st <- State.get
+  mvp <- Brick.lookupViewport Types.BodyVP
+  screenRows <- View.terminalRows
+  case (Types.currentFileMay st, mvp) of
+    (Just fv, Just vp) -> do
+      let
+        (cursorOut, origin) = View.bodyWindow screenRows st fv
+        lastLine = max 0 (snd (Brick._vpSize vp) - 1)
+        kept = max 0 (min lastLine (screenOffsetLines offset))
+      State.modify (Verdict.updateFile (Types.stCurF st) (\f -> f {Types.fvOrigin = origin}))
+      Brick.setTop (Brick.viewportScroll Types.BodyVP) (max 0 (renderedLine st vp fv origin cursorOut - kept))
+    _ -> pure ()
 
 -- Center the tray on the current hunk's entry. Also needed whenever the
 -- entry list reshapes under the viewport (the pending filter toggling),
