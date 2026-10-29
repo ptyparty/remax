@@ -693,11 +693,13 @@ overBand f s = maybe s (\b -> setBand (Just (f b)) s) (currentBand s)
 -- in the tree is the story.
 rebaseEffMode :: Maybe Git.RebaseStatus -> Git.ReviewMode -> Git.ReviewMode
 rebaseEffMode mRebase mode =
-  case (Git.subjectOf mode, mRebase) of
-    (Git.WorkingTree, Just rs)
-      | Git.rebaseConflicted rs -> Git.VsRef "HEAD"
-      | otherwise -> Git.VsRef "HEAD^"
-    _ -> mode
+  let
+    stopped rs = if Git.rebaseConflicted rs then Git.VsRef "HEAD" else Git.VsRef "HEAD^"
+  in
+    case (Git.subjectOf mode, mRebase) of
+      (Git.WorkingTree, Just rs) -> stopped rs
+      (Git.Pull _ Git.Checkout, Just rs) -> stopped rs
+      _ -> mode
 
 data FlagRule
   = FlagsAllowed

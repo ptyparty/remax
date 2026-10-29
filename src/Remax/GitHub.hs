@@ -721,6 +721,7 @@ fetchPull root remote n baseBranch = do
     numText = T.pack (show n)
     headRef = Git.pullHeadRef n
     baseRef = Git.pullBaseRef n
+    baseTipRef = Git.pullBaseTipRef n
     git = gitIn root
   fetched <-
     git
@@ -735,7 +736,8 @@ fetchPull root remote n baseBranch = do
   case fetched of
     Left e -> pure (Left e)
     Right _ -> do
-      forked <- git ["merge-base", headRef, baseRef]
+      kept <- git ["update-ref", baseTipRef, baseRef]
+      forked <- either (pure . Left) (const (git ["merge-base", headRef, baseRef])) kept
       case forked of
         Left e -> pure (Left e)
         Right sha -> fmap (fmap (const ())) (git ["update-ref", baseRef, sha])
