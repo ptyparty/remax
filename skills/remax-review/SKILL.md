@@ -373,22 +373,31 @@ and drafts the reviewer makes there are keyed by that path, so a `list`
 on the old path never shows them, and an edit made at the old path
 lands on the wrong branch. A checkout and the pull request worktrees
 made from it are one group, and every path in the group reports the
-group's latest move, until the next replaces it.
+group's latest move, until the next replaces it. The entry is a fact
+about where the review is, not a request: it stays in every listing
+until the next move, so a move you have already followed is not
+outstanding work. A later entry with a newer `moved_at` is.
 
-What to do depends on whether your `-C` already covers `to`:
+What to do depends on whether your `-C` already covers `to`. It covers
+`to` when `-C` is `to` itself, or when `-C` is a folder and `to` is a
+directory directly under it:
 
-- **`-C` is a folder whose checkouts include `to`** (the worktree sits
+- **`-C` is a folder with `to` directly under it** (the worktree sits
   beside the story's checkouts, at the default `../<repo>-pr-<N>`):
   keep `-C`, keep the `watching` task and the state and feedback files.
   The listing spans the worktree too, and the move is reported once per
   group; find its work by `conversation.repo`, and `cd` there to edit.
   If you started `watching` or a wait before the worktree existed,
-  restart them so they take it in.
+  restart them: both read the folder's checkouts when they start, so
+  the reviewer's header in the worktree shows nobody watching, and a
+  flag filed there wakes nothing, until they are started again.
 - **Otherwise**: re-point `-C` to `to`. Stop the `watching` task and
   start it again on `to`, name new state and feedback files after `to`
   (the fingerprint is per path), start the next wait there, and edit
   files there. Do the same on the way back when a later move names the
-  original checkout.
+  original checkout. A wait on a path you return to may wake at once
+  with the move you just followed, because that path's fingerprint is
+  from before it; read the listing and wait again.
 
 A move that enters a worktree names the pull request; the worktree is
 already on its branch. Nothing is pushed or posted when the review
@@ -493,10 +502,11 @@ tip is the safe fallback.
   run `remax forget` unless the human explicitly asks.
 - Post a tour only when asked for one; `tour begin` discards the
   previous tour for that view.
-- An empty `conversations` list with empty `tour_requests` and
-  `review_moves` means no outstanding feedback. A tour request on its
-  own is work, and so is a move: follow it as *When the review moves*
-  says.
+- An empty `conversations` list with an empty `tour_requests` list
+  means no outstanding feedback, whatever `review_moves` holds: a move
+  you have followed stays listed. A tour request on its own is work,
+  and so is a move you have not followed yet: follow it as *When the
+  review moves* says.
 - Under `watch`, keep one `list --wait` in flight and start a fresh one
   each time it wakes you. With none running you are only as current as
   the last time you asked. Without `watch`, do not start one at all —
