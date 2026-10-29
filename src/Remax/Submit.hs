@@ -91,9 +91,9 @@ countsText items =
     news = length (filter isNew items)
     replies = length (filter isReply items)
     pulls = length items - news - replies
-    part n word = if n == 0 then [] else [T.pack (show n) <> " " <> word <> (if n == 1 then "" else "s")]
+    part n one many = if n == 0 then [] else [T.pack (show n) <> " " <> (if n == 1 then one else many)]
   in
-    T.intercalate " \183 " (part (min 1 news) "review" ++ part replies "reply" ++ part pulls "PR-level comment")
+    T.intercalate " \183 " (part (min 1 news) "review" "reviews" ++ part replies "reply" "replies" ++ part pulls "PR-level comment" "PR-level comments")
 
 {- | Where each item posts: inline on the head's diff, under a thread, or
 as a PR-level comment naming its file and line.
