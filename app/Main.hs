@@ -169,11 +169,12 @@ usage =
   \                                     --state FILE measures that from what\n\
   \                                     you last saw rather than from now, so\n\
   \                                     a change while you were busy is not\n\
-  \                                     missed; your own replies and edits\n\
-  \                                     do not count as a change; --awaiting\n\
-  \                                     shows only conversations waiting on\n\
-  \                                     that party, and a wait wakes only\n\
-  \                                     when one is new or changed\n\
+  \                                     missed; --awaiting shows only\n\
+  \                                     conversations waiting on that party,\n\
+  \                                     and a wait wakes only when one is new\n\
+  \                                     or changed, so with --awaiting agent\n\
+  \                                     your own replies and edits do not\n\
+  \                                     wake it\n\
   \       remax [-C DIR] reply ID TEXT   answer a conversation; shows in the review\n\
   \                                     session, and never reaches GitHub\n\
   \       remax [-C DIR] comment HUNK TEXT\n\

@@ -200,25 +200,30 @@ does something — you react to a flag the way they react to your edits,
 and neither of you has to prompt the other.
 
 Start one as soon as the one-off pass is done, and **always pass
-`--state`**:
+`--awaiting agent` and `--state`**:
 
 ```sh
 SEEN="/tmp/remax-seen$(printf %s "$REPO" | tr / -)"
 FEEDBACK="/tmp/remax-feedback$(printf %s "$REPO" | tr / -).json"
-remax -C "$REPO" list --wait --state "$SEEN" --json > "$FEEDBACK.part" &&
-  mv "$FEEDBACK.part" "$FEEDBACK"
+remax -C "$REPO" list --wait --awaiting agent --state "$SEEN" --json \
+  > "$FEEDBACK.part" && mv "$FEEDBACK.part" "$FEEDBACK"
 ```
 
 The rename keeps `$FEEDBACK` holding the last complete listing while
 the next wait runs. Reading it mid-wait gives you what you last saw
 rather than an empty file.
 
-Only the reviewer wakes a wait: a verdict, a note, a `:tour ask`, or
-a move of the review into another checkout. Your replies and edits are
-not a change to it, so you never need to wait twice to get past your
-own work. When it wakes, act on **everything** in the listing,
-`tour_requests` and `review_moves` included — a request you skip is
-already recorded as seen, and no later wait will show it again.
+Only the reviewer wakes this wait: a note, a reply in a thread, a
+GitHub post, a `:tour ask`, or a move of the review into another
+checkout. `--awaiting agent` is what keeps your own work out. Your reply
+hands its conversation to the reviewer, which drops it from the
+listing, and the wait counts only a new or changed conversation as
+news. So you never need to wait twice to get past your own work.
+Without `--awaiting agent` every change counts, and each of your
+replies wakes the wait at once. When it wakes, act on **everything**
+in the listing, `tour_requests` and `review_moves` included — a request
+you skip is already recorded as seen, and no later wait will show it
+again.
 
 The state file is where remax keeps a fingerprint of the listing you were
 last shown. Without it a wait measures change from the moment it starts,
@@ -261,18 +266,20 @@ still telling.
 Recording a verdict and writing its note are two separate events: remax
 records the verdict the instant the key is pressed, so the reviewer's
 tray and meters answer at once, while they are still typing the sentence
-saying what is wrong. A wait holds while a note is being written, so
-ordinarily you are woken once, with it:
+saying what is wrong. A verdict with no note waits on `note`, so
+`--awaiting agent` leaves it out and it does not wake the wait. Its
+note does, once written:
 
 ```json
 {"lines": [{"line": "+TWO CHANGED", "verdict": "flagged"}],
  "thread": [{"author": "reviewer", "body": "use a constant"}]}
 ```
 
-You can still meet a conversation whose `thread` is `[]` — a bare `!`
-with the note popup turned off, or one they opened and abandoned. There
-is nothing to act on. Do not guess at what they meant: say you are
-holding off, and wait again with the same `--state` file.
+A listing without `--awaiting agent` can still show a conversation
+whose `thread` is `[]` — a bare `!` with the note popup turned off, or
+one they opened and abandoned. There is nothing to act on. Do not guess
+at what they meant: say you are holding off, and wait again with the
+same `--state` file.
 
 Never answer a flag whose note you have not read. Your reply would land
 *ahead* of theirs in the thread, which reads as a non-sequitur to them.
