@@ -40,6 +40,9 @@ editPull openPicker = do
   st <- State.get
   case Types.stMode st of
     Git.AtPull pr Git.Checkout -> Types.setMsg (Git.pullLabel pr <> " is already in edit mode \8212 :pr review returns to the fetched head")
+    Git.AtPull _ Git.ReadOnly
+      | any (\label -> any (`T.isPrefixOf` label) [addingLabel, checkingOutLabel]) (Types.stBusy st) ->
+          Types.setMsg "still preparing the worktree"
     Git.AtPull pr Git.ReadOnly -> do
       let
         walked = fmap (const (Git.prTip pr)) (Types.pullCommitWalk st)
@@ -113,7 +116,8 @@ editElsewhere openPicker entry = do
     conn = Types.stConn st
   original <- MonadIO.liftIO (fmap T.unpack (Store.originalOf conn (Types.repoText st)))
   remembered <- MonadIO.liftIO (Store.pullWorktree conn (T.pack original) n)
-  present <- MonadIO.liftIO (maybe (pure False) (Directory.doesDirectoryExist . T.unpack) remembered)
+  registered <- MonadIO.liftIO (fmap (map Git.wtPath) (Git.listWorktrees original))
+  present <- MonadIO.liftIO (maybe (pure False) (stillWorktree registered . T.unpack) remembered)
   case remembered of
     Just path
       | present -> do
@@ -126,7 +130,8 @@ editElsewhere openPicker entry = do
     _ -> do
       Monad.forM_ remembered (const (MonadIO.liftIO (Store.forgetWorktree conn (T.pack original) n)))
       existing <- MonadIO.liftIO (Git.worktreesOnBranch original pr)
-      openPicker entry (filter (/= Types.stRoot st) existing) (defaultWorktreePath st original pr)
+      defaultPath <- MonadIO.liftIO (defaultWorktreePath st original pr)
+      openPicker entry (filter (/= Types.stRoot st) existing) defaultPath
 
 walkRefusal :: FilePath -> Git.BranchStanding -> Maybe T.Text -> IO (Maybe T.Text)
 walkRefusal path standing walked =
@@ -155,16 +160,35 @@ beforeStopMsg rb sha = "commit " <> T.take 7 sha <> " is before the stop at " <>
 notInRebaseMsg :: Git.RebaseStatus -> T.Text -> T.Text
 notInRebaseMsg rb sha = "commit " <> T.take 7 sha <> " is not in the rebase stopped at " <> Git.rebaseProgress rb <> " \8212 :continue to the end or :abort! first"
 
-defaultWorktreePath :: Types.St -> FilePath -> Git.PullRequest -> FilePath
-defaultWorktreePath st original pr =
+stillWorktree :: [FilePath] -> FilePath -> IO Bool
+stillWorktree registered path = do
+  there <- Directory.doesDirectoryExist path
+  if not there
+    then pure False
+    else do
+      canonical <- Directory.canonicalizePath path
+      known <- mapM Directory.canonicalizePath registered
+      pure (canonical `elem` known)
+
+addingLabel :: T.Text
+addingLabel = "adding a worktree for "
+
+checkingOutLabel :: T.Text
+checkingOutLabel = "checking out PR #"
+
+defaultWorktreePath :: Types.St -> FilePath -> Git.PullRequest -> IO FilePath
+defaultWorktreePath st original pr = do
+  home <- Directory.getHomeDirectory
   let
     repoName = snd (T.breakOnEnd "/" (Git.prRepo pr))
     filled =
       T.replace "<repo>" repoName
         . T.replace "<N>" (Types.tshow (Git.prNumber pr))
         $ Config.cfgPrWorktree (Types.stConfig st)
-  in
-    Git.resolveUnder original (T.unpack filled)
+    expanded = case T.stripPrefix "~/" filled of
+      Just rest -> T.pack home <> "/" <> rest
+      Nothing -> filled
+  pure (Git.resolveUnder original (T.unpack expanded))
 
 newWorktreeChoice :: FilePath -> T.Text
 newWorktreeChoice path = "new:" <> T.pack path
@@ -180,8 +204,8 @@ chooseWorktree entry choice =
       | choice == typedPathChoice -> do
           st <- State.get
           original <- MonadIO.liftIO (fmap T.unpack (Store.originalOf (Types.stConn st) (Types.repoText st)))
+          prefilled <- MonadIO.liftIO (fmap T.pack (defaultWorktreePath st original (Types.eePull entry)))
           let
-            prefilled = T.pack (defaultWorktreePath st original (Types.eePull entry))
             submit typed = createWorktree entry (Git.resolveUnder original (T.unpack typed))
           State.modify (\s -> s {Types.stPrompt = Just (Types.PathPrompt "worktree at " prefilled submit)})
       | T.null choice -> pure ()
@@ -194,7 +218,7 @@ createWorktree entry path = do
     pr = Types.eePull entry
     n = Git.prNumber pr
     conn = Types.stConn st
-    label = "adding a worktree for " <> Git.pullLabel pr
+    label = addingLabel <> Git.pullLabel pr
     work = do
       original <- fmap T.unpack (Store.originalOf conn (Types.repoText st))
       added <- Git.addDetachedWorktree original path (Git.pullHeadRef n)
@@ -207,7 +231,7 @@ createWorktree entry path = do
           pure (Right (fmap (const canonical) checked))
   Jobs.startJob label work $ \outcome -> do
     latest <- State.get
-    Monad.when (Types.stEpoch latest == Types.stEpoch st) $
+    Monad.when (Types.stEpoch latest == Types.stEpoch st && stillOn latest pr) $
       case outcome of
         Left err -> Jobs.jobFailed label err
         Right (Left err) -> Types.setMsg ("! git: " <> err)
@@ -219,14 +243,20 @@ checkoutInto entry path = do
   st <- State.get
   let
     pr = Types.eePull entry
-    label = "checking out " <> Git.pullLabel pr <> " in " <> T.pack (FilePath.takeFileName path)
+    label = checkingOutLabel <> Types.tshow (Git.prNumber pr) <> " in " <> T.pack (FilePath.takeFileName path)
   Jobs.startJob label (GitHub.checkoutPull path (Git.prRepo pr) (Git.prNumber pr)) $ \outcome -> do
     latest <- State.get
-    Monad.when (Types.stEpoch latest == Types.stEpoch st) $
+    Monad.when (Types.stEpoch latest == Types.stEpoch st && stillOn latest pr) $
       case outcome of
         Left err -> Jobs.jobFailed label err
         Right (Left failure) -> Types.setMsg ("! " <> GitHub.failureText failure)
         Right (Right ()) -> enterWorktree entry path
+
+stillOn :: Types.St -> Git.PullRequest -> Bool
+stillOn st pr =
+  case Types.stMode st of
+    Git.AtPull open _ -> Git.prNumber open == Git.prNumber pr
+    _ -> False
 
 enterWorktree :: Types.EditEntry -> FilePath -> Brick.EventM Types.Name Types.St ()
 enterWorktree entry path = do
