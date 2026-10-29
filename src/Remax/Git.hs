@@ -226,6 +226,7 @@ worktreesOnBranch root pr = do
 
 addDetachedWorktree :: FilePath -> FilePath -> T.Text -> IO (Either T.Text ())
 addDetachedWorktree root path ref = do
+  _ <- Process.readProcessWithExitCode "git" ["-C", root, "worktree", "prune"] ""
   (code, _, err) <-
     Process.readProcessWithExitCode "git" ["-C", root, "worktree", "add", "--detach", path, T.unpack ref] ""
   pure $ case code of

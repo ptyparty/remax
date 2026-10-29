@@ -230,8 +230,8 @@ enterWorktree entry path = do
       { Repo.arTarget = canonical
       , Repo.arMode = Just (Git.AtPull (Git.pullAtHead pr) Git.Checkout)
       , Repo.arThen = do
-          Types.eeThen entry
           Types.setMsg ("editing " <> Git.pullLabel pr <> " in " <> T.pack (FilePath.takeFileName canonical))
+          Types.eeThen entry
       }
 
 -- The checkout this session came from, when it is in one of that
@@ -246,7 +246,7 @@ reviewPull = do
   st <- State.get
   from <- cameFrom st
   case (Types.stMode st, from) of
-    (Git.AtPull pr Git.Checkout, Just original) ->
+    (Git.AtPull pr _, Just original) ->
       Repo.arrive
         Repo.Arrival
           { Repo.arTarget = original
