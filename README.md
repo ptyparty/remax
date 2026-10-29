@@ -428,8 +428,9 @@ While a pull request is open the session polls GitHub about every ten
 seconds. It asks for the pull request, its review comments, conversation,
 reviews and commits with the ETag of the previous answer, so an unchanged
 answer costs no rate limit, and asks GraphQL for the review threads,
-force-pushes and checks. When the head moves, the session fetches it again
-and re-lists the files. The bar shows `↻ 4s`, the age of the last
+force-pushes and checks. When the head or the base branch moves, or the
+pull request is retargeted, the session fetches them again and re-lists
+the files. The bar shows `↻ 4s`, the age of the last
 successful poll. A failing poll turns it to `⚠ stale 2m` with the reason.
 Each list reads every page.
 

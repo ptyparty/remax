@@ -156,7 +156,7 @@ applyPolled polled = do
       , Types.ppFailure = Nothing
       , Types.ppNow = now
       }
-  State.modify (\s -> WorkModel.withConversations s {Types.stPullMeta = Just (PullPoll.snapshotMeta snap)})
+  State.modify (\s -> WorkModel.withConversations s {Types.stPullMeta = Just (PullPoll.snapshotMeta snap), Types.stMode = retargeted snap (Types.stMode s)})
   WorkModel.placeOutdated
   st <- State.get
   toks <- MonadIO.liftIO (excerptTokens (Types.stHls st) (Types.ppExcerptToks (Types.stPullPoll st)) snap)
@@ -166,6 +166,14 @@ applyPolled polled = do
   case PullPoll.polledHead polled of
     GitHub.RefsFetched -> Load.refreshGit
     GitHub.RefsInPlace -> pure ()
+
+retargeted :: PullPoll.Snapshot -> Git.ReviewMode -> Git.ReviewMode
+retargeted snap mode =
+  case mode of
+    Git.AtPull pr editing
+      | Git.prNumber pr == PullPoll.snapshotPull snap ->
+          Git.AtPull pr {Git.prBaseBranch = PullPoll.pullHeadBaseBranch (PullPoll.snapshotHead snap)} editing
+    _ -> mode
 
 excerptTokens :: TS.HighlighterTable -> Map.Map Store.RemoteThreadId [[Highlight.Seg]] -> PullPoll.Snapshot -> IO (Map.Map Store.RemoteThreadId [[Highlight.Seg]])
 excerptTokens table known snap =

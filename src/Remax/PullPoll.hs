@@ -42,6 +42,7 @@ data Draftness = ReadyForReview | Draft
 
 data PullHead = PullHead
   { pullHeadSha :: T.Text
+  , pullHeadBaseSha :: T.Text
   , pullHeadTitle :: T.Text
   , pullHeadState :: PullState
   , pullHeadBranch :: T.Text
@@ -230,7 +231,7 @@ pollPull root pr cache = do
         Nothing -> pure (Left (GitHub.GhFailed ("unexpected answer for pull request #" <> T.pack (show (Git.prNumber pr)))))
         Just snap -> do
           moved <-
-            GitHub.refreshPullRefs root (Git.prRepo pr) (Git.prNumber pr) (pullHeadBaseBranch (snapshotHead snap)) (pullHeadSha (snapshotHead snap))
+            GitHub.refreshPullRefs root (Git.prRepo pr) (Git.prNumber pr) (pullHeadBaseBranch (snapshotHead snap)) (pullHeadSha (snapshotHead snap)) (pullHeadBaseSha (snapshotHead snap))
           case moved of
             Left failure -> pure (Left failure)
             Right refs ->
@@ -465,16 +466,17 @@ unexpected path = GitHub.GhFailed ("unexpected answer from " <> path)
 
 headJq :: T.Text
 headJq =
-  "[.head.sha, .title, .state, (.merged | tostring), .head.ref, .base.ref, .user.login\
+  "[.head.sha, .base.sha, .title, .state, (.merged | tostring), .head.ref, .base.ref, .user.login\
   \, (.body // \"\"), (.draft | tostring)] | @tsv"
 
 parseHead :: [[T.Text]] -> Maybe PullHead
 parseHead rows =
   case rows of
-    [[sha, title, state, merged, headBranch, baseBranch, author, body, draft]] ->
+    [[sha, baseSha, title, state, merged, headBranch, baseBranch, author, body, draft]] ->
       Just
         PullHead
           { pullHeadSha = sha
+          , pullHeadBaseSha = baseSha
           , pullHeadTitle = title
           , pullHeadState = case (state, merged) of
               (_, "true") -> PullMerged
