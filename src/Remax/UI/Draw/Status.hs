@@ -226,10 +226,7 @@ meterSeg st =
   let
     total = sum (map (length . Types.fvRuns) (Types.stFiles st))
     pending = sum (map Types.fvPending (Types.stFiles st))
-    inPull = case Git.subjectOf (Types.stMode st) of
-      Git.Pull {} -> True
-      _ -> False
   in
-    if total == 0 || inPull
+    if total == 0
       then Nothing
       else Just (Ink.meterW (Types.settleLevel st) (total - pending) total)
