@@ -38,9 +38,8 @@ openSubmit = do
   case (Git.subjectOf (Types.stMode st), Types.ppSnapshot (Types.stPullPoll st)) of
     (Git.Pull _ _, _) | Maybe.isJust (Types.stSending st) -> Types.setMsg "the review is still sending"
     (Git.Pull pr editing, snap) ->
-      case fmap (PullPoll.pullHeadState . PullPoll.snapshotHead) snap of
-        Just PullPoll.PullMerged -> Types.setMsg "the pull request is merged \8212 nothing to submit to"
-        Just PullPoll.PullClosed -> Types.setMsg "the pull request is closed \8212 nothing to submit to"
+      case Types.openPullState st of
+        Just ended | Just label <- GitHub.endedLabel ended -> Types.setMsg ("the pull request is " <> label <> " \8212 nothing to submit to")
         _ -> do
           let
             items = Submit.outgoing (WorkModel.remoteOf st) (Types.stWork st)

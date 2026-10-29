@@ -46,11 +46,12 @@ editPull openPicker = do
     Git.AtPull pr Git.ReadOnly -> do
       let
         walked = fmap (const (Git.prTip pr)) (Types.pullCommitWalk st)
+        edit = maybe (editHere (Git.pullAtHead pr)) (editCommit (Git.pullAtHead pr)) walked
         entry =
           Types.EditEntry
             { Types.eePull = Git.pullAtHead pr
             , Types.eeCommit = walked
-            , Types.eeThen = maybe (editHere (Git.pullAtHead pr)) (editCommit (Git.pullAtHead pr)) walked
+            , Types.eeThen = edit >> PullAction.noteEnded (Types.openPullState st)
             }
       standing <- MonadIO.liftIO (Git.branchStanding (Types.stRoot st) pr)
       case standing of

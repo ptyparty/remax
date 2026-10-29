@@ -85,6 +85,9 @@ pullBar st pr editing =
       Just GitHub.ChecksRunning -> Brick.txt "\9675 checks"
       Just GitHub.ChecksNone -> Brick.withAttr Attrs.hintAttr (Brick.txt "no checks")
       Nothing -> Brick.withAttr Attrs.hintAttr (Brick.txt "checks \8230")
+    endedSeg = case Types.openPullState st >>= GitHub.endedLabel of
+      Just label -> dot <+> Brick.withAttr Attrs.conflictAttr (Brick.txt label)
+      Nothing -> Brick.emptyWidget
     walkSeg = case Types.pullCommitWalk st of
       Just walk ->
         dot
@@ -107,6 +110,7 @@ pullBar st pr editing =
         , stopSeg
         , dot
         , Brick.withAttr Attrs.guideAttr (Brick.txt chip)
+        , endedSeg
         , dot
         , Brick.withAttr Attrs.rebaseShaAttr (Brick.txt (maybe "?" fst (Types.stHead st) <> "\8230" <> Maybe.fromMaybe "?" (Types.stBaseAt st)))
         ]
@@ -133,9 +137,9 @@ githubHalf st checksSeg =
     awaiting = case Threads.awaitingYou st of
       0 -> []
       n -> [Brick.withAttr Attrs.replyInlineAttr (Brick.txt (Types.tshow n <> " awaiting you"))]
-    merge = case fmap PullPoll.snapshotMergeable (Types.ppSnapshot (Types.stPullPoll st)) of
-      Just "MERGEABLE" -> [Brick.withAttr Attrs.headerOkAttr (Brick.txt "mergeable")]
-      Just "CONFLICTING" -> [Brick.withAttr Attrs.conflictAttr (Brick.txt "conflicts")]
+    merge = case (Types.openPullState st, fmap PullPoll.snapshotMergeable (Types.ppSnapshot (Types.stPullPoll st))) of
+      (Just GitHub.PullOpen, Just "MERGEABLE") -> [Brick.withAttr Attrs.headerOkAttr (Brick.txt "mergeable")]
+      (Just GitHub.PullOpen, Just "CONFLICTING") -> [Brick.withAttr Attrs.conflictAttr (Brick.txt "conflicts")]
       _ -> []
     fresh = case PullAction.pullFreshness st of
       Nothing -> []

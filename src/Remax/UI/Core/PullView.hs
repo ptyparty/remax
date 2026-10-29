@@ -22,6 +22,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
+import Remax.GitHub qualified as GitHub
 import Remax.Highlight qualified as Highlight
 import Remax.PullPoll qualified as PullPoll
 import Remax.SoftWrap qualified as SoftWrap
@@ -184,10 +185,11 @@ checksSummary snap =
     passed = counted PullPoll.CheckPassed
     failed = counted PullPoll.CheckFailed
     pending = counted PullPoll.CheckPending
-    mergeable = case PullPoll.snapshotMergeable snap of
-      "MERGEABLE" -> " \183 mergeable"
-      "CONFLICTING" -> " \183 conflicts"
-      _ -> ""
+    mergeable = case (GitHub.endedLabel (PullPoll.pullHeadState (PullPoll.snapshotHead snap)), PullPoll.snapshotMergeable snap) of
+      (Just label, _) -> " \183 " <> label
+      (Nothing, "MERGEABLE") -> " \183 mergeable"
+      (Nothing, "CONFLICTING") -> " \183 conflicts"
+      (Nothing, _) -> ""
     summary
       | null rows = "no checks"
       | failed > 0 = "\10007 " <> Types.tshow failed <> " failed \183 " <> Types.tshow passed <> " passed"

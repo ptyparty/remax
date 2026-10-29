@@ -19,6 +19,7 @@ module Remax.UI.Action.Pull
   , editAtRebaseStop
   , reviewPull
   , noPullOpen
+  , noteEnded
   ) where
 
 import Brick qualified as Brick
@@ -80,9 +81,20 @@ openedMessage start opened =
     title = Git.pullLabel (GitHub.openedPull opened) <> " \183 " <> GitHub.metaTitle (GitHub.openedMeta opened)
   in
     case start of
-      GitHub.EditYourPull -> "editing " <> title
+      GitHub.EditYourPull -> withEndedNote (Just (GitHub.metaState (GitHub.openedMeta opened))) ("editing " <> title)
       GitHub.ReviewPull GitHub.YourPull -> title <> " \183 :pr edit opens it in a worktree"
       GitHub.ReviewPull GitHub.TheirPull -> title
+
+withEndedNote :: Maybe GitHub.PullState -> T.Text -> T.Text
+withEndedNote state msg =
+  case state >>= GitHub.endedLabel of
+    Nothing -> msg
+    Just label
+      | T.null msg -> "the pull request is " <> label
+      | otherwise -> msg <> " \183 the pull request is " <> label
+
+noteEnded :: Maybe GitHub.PullState -> Brick.EventM Types.Name Types.St ()
+noteEnded state = State.modify (\s -> s {Types.stMsg = withEndedNote state (Types.stMsg s)})
 
 refreshPullMeta :: Brick.EventM Types.Name Types.St ()
 refreshPullMeta = do

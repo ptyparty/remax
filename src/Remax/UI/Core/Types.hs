@@ -17,6 +17,7 @@ module Remax.UI.Core.Types
   , RangeCheck (..)
   , CommitWalk (..)
   , pullCommitWalk
+  , openPullState
   , Picker (..)
   , Selector (..)
   , NotePopup (..)
@@ -663,6 +664,12 @@ pullCommitWalk st =
             commits = PullPoll.snapshotCommits snap
           i <- List.findIndex ((== Git.prTip pr) . PullPoll.pullCommitSha) commits
           Just CommitWalk {cwPull = pr, cwCommits = commits, cwIndex = i}
+    _ -> Nothing
+
+openPullState :: St -> Maybe GitHub.PullState
+openPullState st =
+  case (Git.subjectOf (stMode st), stPullMeta st) of
+    (Git.Pull pr _, Just meta) | GitHub.metaNumber meta == Git.prNumber pr -> Just (GitHub.metaState meta)
     _ -> Nothing
 
 repoText :: St -> T.Text
