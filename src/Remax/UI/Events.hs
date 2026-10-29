@@ -341,12 +341,15 @@ handlePromptKey ev prompt =
     input = case prompt of
       Types.SearchPrompt t -> t
       Types.CmdPrompt t -> t
+      Types.PathPrompt _ t _ -> t
     rewrap t = case prompt of
       Types.SearchPrompt _ -> Types.SearchPrompt t
       Types.CmdPrompt _ -> Types.CmdPrompt t
+      Types.PathPrompt label _ submit -> Types.PathPrompt label t submit
     isCmd = case prompt of
       Types.CmdPrompt _ -> True
       Types.SearchPrompt _ -> False
+      Types.PathPrompt {} -> False
   in
     case ev of
       V.EvKey V.KEsc [] ->
@@ -359,6 +362,7 @@ handlePromptKey ev prompt =
             st <- State.get
             Monad.unless (T.null t) (Search.searchStep (Types.stSearchDir st) t)
           Types.CmdPrompt t -> Command.runCommand t
+          Types.PathPrompt _ t submit -> Monad.unless (T.null (T.strip t)) (submit (T.strip t))
       V.EvKey (V.KChar '\t') [] | isCmd -> Command.promptComplete 1 input
       V.EvKey V.KBackTab [] | isCmd -> Command.promptComplete (-1) input
       V.EvKey V.KBS [] ->

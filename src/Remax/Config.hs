@@ -68,6 +68,7 @@ data Config = Config
   , cfgSettle :: Bool -- accepted lines glow briefly as their wash clears (on)
   , cfgTray :: TrayStart
   , cfgSplit :: DiffModel.SplitConfig
+  , cfgPrWorktree :: T.Text -- where :pr edit puts a pull request's worktree; <repo> and <N> are filled in
   }
 
 data TrayStart = TrayOpen | TrayClosed
@@ -85,7 +86,11 @@ defaultConfig =
     , cfgSettle = True
     , cfgTray = TrayOpen
     , cfgSplit = DiffModel.defaultSplitConfig
+    , cfgPrWorktree = defaultPrWorktree
     }
+
+defaultPrWorktree :: T.Text
+defaultPrWorktree = "../<repo>-pr-<N>"
 
 configPath :: IO FilePath
 configPath = do
@@ -199,4 +204,7 @@ fromEntries entries =
             , DiffModel.pieceMin = max 1 (getInt "piece-min" (DiffModel.pieceMin baseSplit))
             , DiffModel.pieceMax = max 2 (getInt "piece-max" (DiffModel.pieceMax baseSplit))
             }
+      , cfgPrWorktree = case lookup "pr-worktree" entries of
+          Just raw | not (T.null raw) -> raw
+          _ -> defaultPrWorktree
       }

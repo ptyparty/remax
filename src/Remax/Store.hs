@@ -58,6 +58,13 @@ module Remax.Store
   , askTour
   , tourRequests
   , clearTourRequest
+  , rememberWorktree
+  , forgetWorktree
+  , pullWorktree
+  , originalOf
+  , recordMoveBetween
+  , ReviewMove (..)
+  , reviewMoveFor
   ) where
 
 import Control.Monad qualified as Monad
@@ -188,6 +195,20 @@ openStore = do
     \  prompt TEXT NOT NULL,\
     \  asked_at TEXT NOT NULL DEFAULT (datetime('now')),\
     \  PRIMARY KEY (repo, subject))"
+  SQLite.execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS pull_worktree (\
+    \  repo TEXT NOT NULL,\
+    \  pull INTEGER NOT NULL,\
+    \  path TEXT NOT NULL,\
+    \  PRIMARY KEY (repo, pull))"
+  SQLite.execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS review_move (\
+    \  repo TEXT PRIMARY KEY,\
+    \  pull INTEGER NOT NULL,\
+    \  to_path TEXT NOT NULL,\
+    \  moved_at TEXT NOT NULL DEFAULT (datetime('now')))"
   SQLite.execute_
     conn
     "CREATE TABLE IF NOT EXISTS tour_hunk (\
@@ -454,6 +475,68 @@ tourRequests conn repo = do
 clearTourRequest :: SQLite.Connection -> T.Text -> T.Text -> IO ()
 clearTourRequest conn repo subject =
   SQLite.execute conn "DELETE FROM tour_request WHERE repo = ? AND subject = ?" (repo, subject)
+
+rememberWorktree :: SQLite.Connection -> T.Text -> Int -> T.Text -> IO ()
+rememberWorktree conn repo pull path =
+  SQLite.execute
+    conn
+    "INSERT INTO pull_worktree (repo, pull, path) VALUES (?, ?, ?)\
+    \ ON CONFLICT(repo, pull) DO UPDATE SET path = excluded.path"
+    (repo, pull, path)
+
+forgetWorktree :: SQLite.Connection -> T.Text -> Int -> IO ()
+forgetWorktree conn repo pull =
+  SQLite.execute conn "DELETE FROM pull_worktree WHERE repo = ? AND pull = ?" (repo, pull)
+
+pullWorktree :: SQLite.Connection -> T.Text -> Int -> IO (Maybe T.Text)
+pullWorktree conn repo pull = do
+  rows <-
+    SQLite.query conn "SELECT path FROM pull_worktree WHERE repo = ? AND pull = ?" (repo, pull) ::
+      IO [SQLite.Only T.Text]
+  pure (Maybe.listToMaybe (map SQLite.fromOnly rows))
+
+worktreePull :: SQLite.Connection -> T.Text -> IO (Maybe (T.Text, Int))
+worktreePull conn path = do
+  rows <-
+    SQLite.query conn "SELECT repo, pull FROM pull_worktree WHERE path = ?" (SQLite.Only path) ::
+      IO [(T.Text, Int)]
+  pure (Maybe.listToMaybe rows)
+
+originalOf :: SQLite.Connection -> T.Text -> IO T.Text
+originalOf conn path = fmap (maybe path fst) (worktreePull conn path)
+
+recordMoveBetween :: SQLite.Connection -> T.Text -> T.Text -> IO ()
+recordMoveBetween conn from to = do
+  fromGroup <- worktreePull conn from
+  toGroup <- worktreePull conn to
+  let
+    original = maybe from fst fromGroup
+    sameGroup = from /= to && maybe to fst toGroup == original
+    pull = fmap snd (case toGroup of Just _ -> toGroup; Nothing -> fromGroup)
+  case (sameGroup, pull) of
+    (True, Just n) ->
+      SQLite.execute
+        conn
+        "INSERT INTO review_move (repo, pull, to_path) VALUES (?, ?, ?)\
+        \ ON CONFLICT(repo) DO UPDATE SET pull = excluded.pull, to_path = excluded.to_path, moved_at = datetime('now')"
+        (original, n, to)
+    _ -> pure ()
+
+data ReviewMove = ReviewMove
+  { moveRepo :: T.Text
+  , movePull :: Int
+  , moveTo :: T.Text
+  , moveAt :: T.Text
+  }
+  deriving (Eq, Ord, Show)
+
+reviewMoveFor :: SQLite.Connection -> T.Text -> IO (Maybe ReviewMove)
+reviewMoveFor conn path = do
+  original <- originalOf conn path
+  rows <-
+    SQLite.query conn "SELECT repo, pull, to_path, moved_at FROM review_move WHERE repo = ?" (SQLite.Only original) ::
+      IO [(T.Text, Int, T.Text, T.Text)]
+  pure (fmap (\(r, n, to, at) -> ReviewMove {moveRepo = r, movePull = n, moveTo = to, moveAt = at}) (Maybe.listToMaybe rows))
 
 loadVerdicts :: SQLite.Connection -> T.Text -> IO (Map.Map T.Text Verdict)
 loadVerdicts conn repo = do

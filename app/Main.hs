@@ -655,9 +655,14 @@ list options = do
     digest = do
       listed <- mapM (Feedback.listFor conn) roots
       asked <- mapM (\r -> fmap (map ((,) r)) (Store.tourRequests conn (T.pack r))) roots
+      moved <- reviewMoves conn roots
       pure
         . Set.map Key.sha256Hex
-        $ Set.union (Set.fromList (concatMap (Feedback.digestOf party) listed)) (requestDigest party (concat asked))
+        . Set.unions
+        $ [ Set.fromList (concatMap (Feedback.digestOf party) listed)
+          , requestDigest party (concat asked)
+          , Set.fromList (map moveJson (filter (const (moveWanted party)) moved))
+          ]
     news before now =
       case party of
         Nothing -> now /= before
@@ -718,6 +723,7 @@ list options = do
   here <- Directory.getCurrentDirectory
   listed <- mapM (\r -> fmap ((,) r) (Feedback.listFor conn r)) roots
   asked <- mapM (\r -> fmap (map ((,) r)) (Store.tourRequests conn (T.pack r))) roots
+  moved <- fmap (filter (const (moveWanted party))) (reviewMoves conn roots)
   let
     asJson = fmt == ListJson
     wanted l = maybe True (== Feedback.listedParty l) party
@@ -728,8 +734,18 @@ list options = do
       [only] -> only
       _ -> here
   if asJson
-    then TIO.putStrLn (listJson (T.pack scope) shown requests)
+    then TIO.putStrLn (listJson (T.pack scope) shown requests moved)
     else do
+      Monad.forM_ moved $ \m ->
+        TIO.putStrLn
+          ( "review moved to "
+              <> Store.moveTo m
+              <> " for PR #"
+              <> T.pack (show (Store.movePull m))
+              <> " ("
+              <> Store.moveAt m
+              <> ")"
+          )
       Monad.forM_ requests $ \(repo, request) ->
         TIO.putStrLn
           ( "tour requested for "
@@ -741,7 +757,7 @@ list options = do
               <> ")"
           )
       if null nonEmpty
-        then Monad.when (null requests) . putStrLn $
+        then Monad.when (null requests && null moved) . putStrLn $
           case party of
             Nothing -> "No conversations recorded for this repository."
             Just who -> "No conversations awaiting " ++ T.unpack (Feedback.partyText who) ++ "."
@@ -755,11 +771,31 @@ list options = do
 -- A tour request is the reviewer asking the agent for something, so it
 -- is news for an agent and for anyone listing everything.
 requestWanted :: Maybe Feedback.Party -> Store.TourRequest -> Bool
-requestWanted party _ =
+requestWanted party _ = moveWanted party
+
+moveWanted :: Maybe Feedback.Party -> Bool
+moveWanted party =
   case party of
     Nothing -> True
     Just Feedback.AwaitingAgent -> True
     Just _ -> False
+
+-- The latest move of each review group among these checkouts: a group
+-- is a checkout and the pull request worktrees made from it, and every
+-- member reports the same move.
+reviewMoves :: SQLite.Connection -> [FilePath] -> IO [Store.ReviewMove]
+reviewMoves conn roots = do
+  found <- mapM (Store.reviewMoveFor conn . T.pack) roots
+  pure (List.nub (Maybe.catMaybes found))
+
+moveJson :: Store.ReviewMove -> T.Text
+moveJson m =
+  jsonObject
+    [ ("repo", jsonString (Store.moveRepo m))
+    , ("pull", T.pack (show (Store.movePull m)))
+    , ("to", jsonString (Store.moveTo m))
+    , ("moved_at", jsonString (Store.moveAt m))
+    ]
 
 requestDigest :: Maybe Feedback.Party -> [(FilePath, Store.TourRequest)] -> Set.Set T.Text
 requestDigest party asked =
@@ -875,10 +911,11 @@ comment args = do
 
 -- JSON output ------------------------------------------------------------------
 
-listJson :: T.Text -> [(FilePath, [Feedback.Listed])] -> [(FilePath, Store.TourRequest)] -> T.Text
-listJson scope listed requests =
+listJson :: T.Text -> [(FilePath, [Feedback.Listed])] -> [(FilePath, Store.TourRequest)] -> [Store.ReviewMove] -> T.Text
+listJson scope listed requests moved =
   jsonObject
     [ ("repo", jsonString scope)
+    , ("review_moves", jsonArray (map moveJson moved))
     , ("tour_requests", jsonArray (map (uncurry requestJson) requests))
     , ("conversations", jsonArray (map (Json.encode . Feedback.listedJson) (concatMap snd listed)))
     ]

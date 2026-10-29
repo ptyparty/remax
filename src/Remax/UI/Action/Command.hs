@@ -34,6 +34,7 @@ import Remax.UI.Action.Submit qualified as SubmitAction
 import Remax.UI.Action.Tree qualified as TreeAction
 import Remax.UI.Action.Uses qualified as Uses
 import Remax.UI.Action.Verdicts qualified as VerdictAction
+import Remax.UI.Action.Worktree qualified as Worktree
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Model.Nav qualified as Nav
 import System.FilePath ((</>))
@@ -76,7 +77,7 @@ commandTable =
   , ("edit", ArgPath, "$EDITOR at the cursor (or on PATH)")
   , ("set", ArgSet, "change a setting (live + persisted)")
   , ("checkout", NoArg, "switch branches (picker)")
-  , ("pr", ArgPull, "open pull request N on its page, in edit mode if it is yours and checked out; bare :pr picks one; :pr commits walks its commits; :pr edit checks it out, :pr review returns")
+  , ("pr", ArgPull, "open pull request N on its page, in edit mode if it is yours and checked out; bare :pr picks one; :pr commits walks its commits; :pr edit opens it in a worktree of its own, :pr review returns")
   , ("submit", NoArg, "send every pending comment and reply to GitHub as one review")
   , ("feedback", NoArg, "recent conversations, newest first; \9166 goes to one (also Space i)")
   , ("ready", NoArg, "mark the pull request ready for review")
@@ -89,7 +90,7 @@ modeCommands =
   [ ("head", Settings.setMode (Git.VsRef "HEAD"))
   , ("unstaged", Settings.setMode Git.VsIndex)
   , ("untracked", Settings.setMode Git.Untracked)
-  , ("tree", Settings.returnToTree)
+  , ("tree", Worktree.returnToTree)
   ]
 
 modeNames :: [T.Text]
@@ -203,13 +204,13 @@ runCommand input =
     ["checkout", branch] -> PickerAction.applyCheckout branch
     ["pr"] -> PickerAction.openPullPicker
     ["pr", "commits"] -> PullAction.startCommitWalk
-    ["pr", "edit"] -> PullAction.editPull
+    ["pr", "edit"] -> Worktree.editPull PickerAction.openWorktreePicker
     ["submit"] -> SubmitAction.openSubmit
     ["feedback"] -> InboxAction.openInbox
     ["ready"] -> PullViewAction.markReady
     ["draft"] -> PullViewAction.markDraft
-    ["pr", "review"] -> PullAction.reviewPull
-    ["pr", n] | Just k <- GitHub.pullNumber n -> PullAction.openPull k
+    ["pr", "review"] -> Worktree.reviewPull
+    ["pr", n] | Just k <- GitHub.pullNumber n -> Worktree.openPullHere k
     ["base", "branch"] -> Settings.setBaseBranch
     ["branch"] -> Settings.setBaseBranch
     ["base", ref] -> Settings.setBaseRef ref

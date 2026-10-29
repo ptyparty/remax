@@ -57,15 +57,20 @@ remax -C /path/to/repo list --awaiting agent --json
 
 This prints what is waiting on you (run it from anywhere — `-C` points
 at the target). Drop `--awaiting agent` to see every conversation,
-including ones you have answered and ones with no note yet. **Two kinds
-of thing can be waiting**: `tour_requests`, where the reviewer asked
-you for a guided tour of the view they have open (see *Giving a tour*),
-and `conversations`, each the lines a note was written across and the
-thread about them. An empty `conversations` with a non-empty
-`tour_requests` is work. Shape:
+including ones you have answered and ones with no note yet. **Three
+kinds of thing can be waiting**: `review_moves`, where the review has
+moved into another checkout (see *When the review moves*),
+`tour_requests`, where the reviewer asked you for a guided tour of the
+view they have open (see *Giving a tour*), and `conversations`, each
+the lines a note was written across and the thread about them. An
+empty `conversations` with a non-empty `tour_requests` or
+`review_moves` is work. Shape:
 
 ```json
 {"repo": "/path/to/repo",
+ "review_moves": [
+   {"repo": "/path/to/repo", "pull": 482, "to": "/path/to/repo-pr-482",
+    "moved_at": "2026-10-29 18:02:11"}],
  "tour_requests": [
    {"repo": "/path/to/repo", "view": "feature vs b9045d7",
     "ref": "feature", "base": "b9045d7", "prompt": "schema changes first",
@@ -208,12 +213,12 @@ The rename keeps `$FEEDBACK` holding the last complete listing while
 the next wait runs. Reading it mid-wait gives you what you last saw
 rather than an empty file.
 
-Only the reviewer wakes a wait: a verdict, a note, or a `:tour ask`.
-Your replies and edits are not a change to it, so you never need to
-wait twice to get past your own work. When it wakes, act on
-**everything** in the listing, `tour_requests` included — a request
-you skip is already recorded as seen, and no later wait will show it
-again.
+Only the reviewer wakes a wait: a verdict, a note, a `:tour ask`, or
+a move of the review into another checkout. Your replies and edits are
+not a change to it, so you never need to wait twice to get past your
+own work. When it wakes, act on **everything** in the listing,
+`tour_requests` and `review_moves` included — a request you skip is
+already recorded as seen, and no later wait will show it again.
 
 The state file is where remax keeps a fingerprint of the listing you were
 last shown. Without it a wait measures change from the moment it starts,
@@ -352,9 +357,43 @@ as on a new note.
 
 ## Addressing feedback on the reviewer's own pull request
 
-`:pr edit` checks the reviewer's pull request out, and the session's
-`view` reads `PR #N edit`. The files are the working tree, so fix them as
-for any flag.
+`:pr edit` opens the reviewer's pull request for editing, and the
+session's `view` reads `PR #N edit`. The files are the working tree, so
+fix them as for any flag. Unless the checkout was already on the pull
+request's branch, the session moves into a git worktree of its own for
+that pull request, and tells you so; see the next section.
+
+## When the review moves
+
+A `review_moves` entry says the reviewer's session has moved from the
+checkout you are watching into another one, or back: `to` is the
+checkout the review is in now, `pull` the pull request whose worktree
+it entered or left, and `repo` the main checkout. The verdicts, notes
+and drafts the reviewer makes there are keyed by that path, so a `list`
+on the old path never shows them, and an edit made at the old path
+lands on the wrong branch. A checkout and the pull request worktrees
+made from it are one group, and every path in the group reports the
+group's latest move, until the next replaces it.
+
+What to do depends on whether your `-C` already covers `to`:
+
+- **`-C` is a folder whose checkouts include `to`** (the worktree sits
+  beside the story's checkouts, at the default `../<repo>-pr-<N>`):
+  keep `-C`, keep the `watching` task and the state and feedback files.
+  The listing spans the worktree too, and the move is reported once per
+  group; find its work by `conversation.repo`, and `cd` there to edit.
+  If you started `watching` or a wait before the worktree existed,
+  restart them so they take it in.
+- **Otherwise**: re-point `-C` to `to`. Stop the `watching` task and
+  start it again on `to`, name new state and feedback files after `to`
+  (the fingerprint is per path), start the next wait there, and edit
+  files there. Do the same on the way back when a later move names the
+  original checkout.
+
+A move that enters a worktree names the pull request; the worktree is
+already on its branch. Nothing is pushed or posted when the review
+moves. Quitting remax writes no move: the review stays where it was
+until a session moves it.
 
 ## Giving a tour
 
@@ -454,8 +493,10 @@ tip is the safe fallback.
   run `remax forget` unless the human explicitly asks.
 - Post a tour only when asked for one; `tour begin` discards the
   previous tour for that view.
-- An empty `conversations` list with an empty `tour_requests` list
-  means no outstanding feedback. A tour request on its own is work.
+- An empty `conversations` list with empty `tour_requests` and
+  `review_moves` means no outstanding feedback. A tour request on its
+  own is work, and so is a move: follow it as *When the review moves*
+  says.
 - Under `watch`, keep one `list --wait` in flight and start a fresh one
   each time it wakes you. With none running you are only as current as
   the last time you asked. Without `watch`, do not start one at all —

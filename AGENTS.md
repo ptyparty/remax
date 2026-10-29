@@ -48,7 +48,8 @@ imports its internals. The order within a tree is convention.
    writes), `Cite`, `Conversation`, `Verdicts`, `Rebase`, `Notes`, `Settings`,
    `Submit` (the :submit dialog, after `Open`), `PullView` (the PR view,
    after `Open`),
-   `Pull`, `Fuzzy`, `Repo`, `Open`, `Picker`, `Search`, `Uses` (the hunks mentioning a
+   `Pull`, `Fuzzy`, `Repo`, `Open`, `Worktree` (edit mode's checkout and
+   the moves in and out of it), `Picker`, `Search`, `Uses` (the hunks mentioning a
    name), `Tree`, `Files`,
    `TreeKeys`, `Editor`, `Command`, `Menus`.
 4. `Draw` — one module per surface, composed by `Remax.UI.Draw`.
