@@ -807,21 +807,24 @@ requestFlags request =
   case Git.modeFromText (Store.requestMode request) of
     Just (Git.AtRef rr) -> "--ref " <> Git.rrTip rr <> " --base " <> Git.rrBase rr
     Just (Git.VsRef ref) -> "--base " <> ref
+    Just (Git.AtPull pr _) -> "--pr " <> T.pack (show (Git.prNumber pr))
     _ -> "working tree"
 
 requestJson :: FilePath -> Store.TourRequest -> T.Text
 requestJson repo request =
   let
-    (ref, base) = case Git.modeFromText (Store.requestMode request) of
-      Just (Git.AtRef rr) -> (jsonString (Git.rrTip rr), jsonString (Git.rrBase rr))
-      Just (Git.VsRef r) -> ("null", jsonString r)
-      _ -> ("null", "null")
+    (ref, base, pull) = case Git.modeFromText (Store.requestMode request) of
+      Just (Git.AtRef rr) -> (jsonString (Git.rrTip rr), jsonString (Git.rrBase rr), "null")
+      Just (Git.VsRef r) -> ("null", jsonString r, "null")
+      Just (Git.AtPull pr _) -> ("null", "null", T.pack (show (Git.prNumber pr)))
+      _ -> ("null", "null", "null")
   in
     jsonObject
       [ ("repo", jsonString (T.pack repo))
       , ("view", jsonString (maybe (Store.requestMode request) Git.modeLabel (Git.modeFromText (Store.requestMode request))))
       , ("ref", ref)
       , ("base", base)
+      , ("pull", pull)
       , ("prompt", jsonString (Store.requestPrompt request))
       , ("asked_at", jsonString (Store.requestAskedAt request))
       ]
