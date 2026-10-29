@@ -69,6 +69,7 @@ data Startup = Startup
   , suJobs :: IORef.IORef Int
   , suSettleBeat :: IORef.IORef Int
   , suSlots :: Concurrent.QSem
+  , suOriginal :: FilePath
   }
 
 runReview :: Git.ReviewMode -> Maybe GitHub.PullMeta -> FilePath -> [FilePath] -> Maybe FilePath -> IO ()
@@ -117,6 +118,7 @@ loadStartup mode root = do
   jobs <- IORef.newIORef (0 :: Int)
   settleBeat <- IORef.newIORef (0 :: Int)
   slots <- Concurrent.newQSem 2
+  original <- fmap T.unpack (Store.originalOf conn (T.pack root))
   pure
     Startup
       { suConn = conn
@@ -137,6 +139,7 @@ loadStartup mode root = do
       , suJobs = jobs
       , suSettleBeat = settleBeat
       , suSlots = slots
+      , suOriginal = original
       }
 
 treeModeOf :: Git.ReviewMode -> Git.ReviewMode
@@ -259,8 +262,8 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stHead = suHead startup
     , Types.stTree = Nothing
     , Types.stHelp = False
-    , Types.stRoots = roots
-    , Types.stWorktrees = []
+    , Types.stRoots = if suOriginal startup `elem` roots then roots else suOriginal startup : roots
+    , Types.stWorktrees = if suOriginal startup == root then [] else [root]
     , Types.stStory = story
     , Types.stPlaces = Map.empty
     }
