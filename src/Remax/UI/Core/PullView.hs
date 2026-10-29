@@ -3,7 +3,6 @@
 module Remax.UI.Core.PullView
   ( Row (..)
   , Gutter (..)
-  , Stop (..)
   , selectedStop
   , timeline
   , stops
@@ -38,25 +37,17 @@ post or commit it belongs to when the cursor can land on it.
 data Row = Row
   { rowGutter :: Gutter
   , rowSegs :: [Markdown.Segment]
-  , rowStop :: Maybe Stop
+  , rowStop :: Maybe Types.Stop
   , rowFill :: Maybe Markdown.Row
   }
 
 data Gutter = Dot | Pending | Rail | Branch | Blank
 
-data Stop
-  = PostStop Conv.ConversationId Int
-  | CommitStop T.Text
-  deriving (Eq)
-
-selectedStop :: Types.St -> Maybe Stop
-selectedStop st =
-  case (Types.stBand st, Types.stPullView st >>= Types.pvCommit) of
-    (Just band, _) -> Just (PostStop (Types.bandConv band) (Types.bandPost band))
-    (Nothing, commit) -> fmap CommitStop commit
+selectedStop :: Types.St -> Maybe Types.Stop
+selectedStop st = Types.stPullView st >>= Types.pvStop
 
 -- | Every post and commit the cursor may visit, in timeline order.
-stops :: Types.St -> Int -> [Stop]
+stops :: Types.St -> Int -> [Types.Stop]
 stops st width =
   let
     once acc stop = case acc of
@@ -271,7 +262,7 @@ commitRows :: Types.St -> Int -> PullPoll.PullCommit -> [Row]
 commitRows st width commit =
   let
     sha = PullPoll.pullCommitSha commit
-    stop = CommitStop sha
+    stop = Types.CommitStop sha
     body = PullPoll.pullCommitBody commit
     opened = Set.member sha (Types.stOpenCommits st)
     folded = if T.null body || opened then [] else [Markdown.Segment Attrs.hintAttr " \8230" Nothing]
@@ -297,7 +288,7 @@ commitRows st width commit =
   in
     subject : message ++ strip
 
-keyStrip :: Stop -> T.Text -> Row
+keyStrip :: Types.Stop -> T.Text -> Row
 keyStrip stop keys = Row Rail [Markdown.Segment Attrs.hintAttr ("  \9584 " <> keys) Nothing] (Just stop) Nothing
 
 {- | A post's body under its dot, with its reactions and, when the band
@@ -309,7 +300,7 @@ postBody st width cid i post =
     rendered = Markdown.render (Threads.detailsFold st cid i) (width - 6) (Conv.postBody post)
     at = case Conv.postState post of
       Conv.Local _ -> Nothing
-      _ -> Just (PostStop cid i)
+      _ -> Just (Types.PostStop cid i)
     body = map (\r -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Markdown.rowSegments r) at (Just r)) rendered
     reactions = case Conv.postReactions post of
       [] -> []
@@ -319,14 +310,14 @@ postBody st width cid i post =
 
 stripRow :: Types.St -> Conv.ConversationId -> Int -> Conv.Post -> [Row]
 stripRow st cid i post =
-  case Types.stBand st of
+  case Types.currentBand st of
     Just band
       | Types.bandConv band == cid && Types.bandPost band == i ->
           let
             venue = maybe Conv.PullComments Conv.convVenue (Conv.conversationFor cid (Types.stConversations st))
             keys = Config.cfgKeys (Types.stConfig st)
           in
-            [keyStrip (PostStop cid i) (Threads.postKeys keys (Types.flagRule st) venue post)]
+            [keyStrip (Types.PostStop cid i) (Threads.postKeys keys (Types.flagRule st) venue post)]
     _ -> []
 
 {- | A review thread under the review that started it: its place and
@@ -345,11 +336,11 @@ threadRows st width conv =
         [ Markdown.Segment markAttr (" " <> mark) Nothing
         , Markdown.Segment Attrs.hintAttr (" \183 " <> placeOf st conv <> " \183 " <> Types.tshow (length (Conv.convPosts conv)) <> " comments \183 za opens") Nothing
         ]
-        (Just (PostStop cid 0))
+        (Just (Types.PostStop cid 0))
         Nothing
     foldedStrip = maybe [] (stripRow st cid 0) (Maybe.listToMaybe (Conv.convPosts conv))
     rangeLines = map excerptRow (rangeOf st conv)
-    logRows = map (\tl -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Threads.tlSegs tl) (fmap (PostStop cid) (Threads.tlPost tl)) Nothing) (threadLog st width conv)
+    logRows = map (\tl -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Threads.tlSegs tl) (fmap (Types.PostStop cid) (Threads.tlPost tl)) Nothing) (threadLog st width conv)
   in
     if folded
       then foldedLine : foldedStrip ++ [blank]
@@ -363,7 +354,7 @@ conversationRows st width conv =
       Conv.LocalOnly _ -> (" \9550 ", "note to the agent")
       _ -> (" \8618 ", Threads.threadState st conv)
     header = Row Branch [Markdown.Segment Attrs.hintAttr lead Nothing, Markdown.Segment Attrs.trayFileAttr (placeOf st conv) Nothing, Markdown.Segment Attrs.hintAttr (" \183 " <> state) Nothing] Nothing Nothing
-    logRows = map (\tl -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Threads.tlSegs tl) (fmap (PostStop cid) (Threads.tlPost tl)) Nothing) (threadLog st width conv)
+    logRows = map (\tl -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Threads.tlSegs tl) (fmap (Types.PostStop cid) (Threads.tlPost tl)) Nothing) (threadLog st width conv)
     postRows (i, post) = dotRow st post Nothing ++ postBody st width cid i post ++ [blank]
   in
     case Conv.convAnchor conv of

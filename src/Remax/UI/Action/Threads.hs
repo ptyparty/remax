@@ -11,6 +11,7 @@ module Remax.UI.Action.Threads
   , leaveBand
   , Handled (..)
   , replyKey
+  , replyToPost
   , askKey
   , flagKey
   , commentKey
@@ -100,7 +101,7 @@ cursorRow fv = View.cursorDisplayRow (Types.fvRows fv) (fst (Modal.cursorRC (Typ
 
 bandPost :: Types.St -> Maybe (Conv.Conversation, Int, Conv.Post)
 bandPost st = do
-  band <- Types.stBand st
+  band <- Types.currentBand st
   conv <- Conv.conversationFor (Types.bandConv band) (Types.stConversations st)
   post <- Types.safeIdx (Conv.convPosts conv) (Types.bandPost band)
   Just (conv, Types.bandPost band, post)
@@ -133,7 +134,7 @@ enterThread = do
   st <- State.get
   case belowLine (lineStops st) of
     (first : _) -> do
-      State.modify (\s -> s {Types.stBand = Just first})
+      State.modify (Types.setBand (Just first))
       pure Handled
     [] -> pure Unhandled
 
@@ -144,7 +145,7 @@ climbInto :: Brick.EventM Types.Name Types.St () -> Brick.EventM Types.Name Type
 climbInto move = do
   st <- State.get
   case reverse (aboveLine (lineStops st)) of
-    (nearest : _) -> State.modify (\s -> s {Types.stBand = Just nearest})
+    (nearest : _) -> State.modify (Types.setBand (Just nearest))
     [] -> arriveBy Up move
 
 data Heading = Up | Down
@@ -165,7 +166,7 @@ arriveBy heading move = do
       Up -> reverse (belowLine stops)
       Down -> aboveLine stops
   Monad.when (arrived == Just True) $
-    State.modify (\s -> s {Types.stBand = Maybe.listToMaybe facing})
+    State.modify (Types.setBand (Maybe.listToMaybe facing))
 
 {- | Step the band by one post in drawing order, through the posts above
 the line, the line itself, and the posts below it; past either end the
@@ -177,12 +178,12 @@ moveBand d = do
   let
     stops = lineStops st
     walk = map Just (aboveLine stops) ++ [Nothing] ++ map Just (belowLine stops)
-    here = Types.stBand st >>= \b -> List.elemIndex (Just b {Types.bandDeleting = False}) walk
+    here = Types.currentBand st >>= \b -> List.elemIndex (Just b {Types.bandDeleting = False}) walk
   case here of
     Nothing -> leaveBand
     Just i ->
       case Types.safeIdx walk (i + d) of
-        Just next | i + d >= 0 -> State.modify (\s -> s {Types.stBand = next})
+        Just next | i + d >= 0 -> State.modify (Types.setBand next)
         _ -> do
           leaveBand
           case Types.currentFileMay st of
@@ -193,7 +194,7 @@ moveBand d = do
             Nothing -> pure ()
 
 leaveBand :: Brick.EventM Types.Name Types.St ()
-leaveBand = State.modify (\s -> s {Types.stBand = Nothing})
+leaveBand = State.modify (Types.setBand Nothing)
 
 -- | The GitHub threads under the cursor's line, oldest first.
 lineThreads :: Types.St -> [Conv.Conversation]
@@ -229,13 +230,7 @@ replyKey :: Brick.EventM Types.Name Types.St Handled
 replyKey = do
   st <- State.get
   case bandPost st of
-    Just (conv, _, post) ->
-      case Conv.postState post of
-        Conv.Posted cid _ _ ->
-          case Conv.convVenue conv of
-            Conv.ReviewThread {} -> openWorkPopup conv (Types.ReplyTo (Conv.convTarget conv) (repliedAuthor conv (Just post))) ""
-            _ -> quoteReply conv cid post
-        _ -> pure Handled
+    Just (conv, _, post) -> replyToPost conv post
     Nothing ->
       case lineThreads st of
         [] -> pure Unhandled
@@ -243,6 +238,15 @@ replyKey = do
           handled <- openWorkPopup conv (Types.ReplyTo (Conv.convTarget conv) (repliedAuthor conv Nothing)) ""
           offerThreads threads
           pure handled
+
+replyToPost :: Conv.Conversation -> Conv.Post -> Brick.EventM Types.Name Types.St Handled
+replyToPost conv post =
+  case Conv.postState post of
+    Conv.Posted cid _ _ ->
+      case Conv.convVenue conv of
+        Conv.ReviewThread {} -> openWorkPopup conv (Types.ReplyTo (Conv.convTarget conv) (repliedAuthor conv (Just post))) ""
+        _ -> quoteReply conv cid post
+    _ -> pure Handled
 
 offerThreads :: [Conv.Conversation] -> Brick.EventM Types.Name Types.St ()
 offerThreads threads =
@@ -407,13 +411,9 @@ toggleFoldOf conv =
     Conv.ReviewThread (Just tid) _ ->
       State.modify $ \s ->
         let
-          folding = not (Threads.isFolded s conv)
-          band = case (folding, Types.stPullView s) of
-            (True, Just _) -> Just (Types.Band (Conv.convId conv) 0 False)
-            (True, Nothing) -> Nothing
-            (False, _) -> Types.stBand s
+          flipped = s {Types.stFoldFlipped = toggleMember tid (Types.stFoldFlipped s)}
         in
-          s {Types.stFoldFlipped = toggleMember tid (Types.stFoldFlipped s), Types.stBand = band}
+          if Threads.isFolded s conv then flipped else Types.setBand (bandOnThread conv s) flipped
     _ -> Types.setMsg "only a thread on GitHub folds"
 
 toggleFoldAtBand :: Brick.EventM Types.Name Types.St ()
@@ -636,11 +636,10 @@ resolveConversation conv = do
     _ -> pure Unhandled
 
 keepBandOnThread :: Conv.Conversation -> Brick.EventM Types.Name Types.St ()
-keepBandOnThread conv = do
-  st <- State.get
-  case Types.stPullView st of
-    Just _ -> State.modify (\s -> s {Types.stBand = Just (Types.Band (Conv.convId conv) 0 False)})
-    Nothing -> leaveBand
+keepBandOnThread conv = State.modify (\s -> Types.setBand (bandOnThread conv s) s)
+
+bandOnThread :: Conv.Conversation -> Types.St -> Maybe Types.Band
+bandOnThread conv st = Types.Band (Conv.convId conv) 0 False <$ Types.stPullView st
 
 editPostedKey :: Brick.EventM Types.Name Types.St Handled
 editPostedKey = do
@@ -703,7 +702,7 @@ post of the conversation it went to.
 reloadAndBand :: Maybe Conv.ConversationId -> Brick.EventM Types.Name Types.St ()
 reloadAndBand cid = do
   WorkModel.reloadWork
-  maybe (State.modify (\s -> s {Types.stBand = Nothing})) bandNewest cid
+  maybe leaveBand bandNewest cid
 
 bandNewest :: Conv.ConversationId -> Brick.EventM Types.Name Types.St ()
 bandNewest cid = do
@@ -713,4 +712,4 @@ bandNewest cid = do
       conv <- Conv.conversationFor cid (Types.stConversations st)
       i <- Maybe.listToMaybe (reverse (Threads.bandIndexes st conv))
       Just (Types.Band cid i False)
-  State.modify (\s -> s {Types.stBand = newest})
+  State.modify (Types.setBand newest)

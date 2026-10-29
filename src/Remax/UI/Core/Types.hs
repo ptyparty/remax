@@ -44,6 +44,8 @@ module Remax.UI.Core.Types
   , ReactionPicker (..)
   , SubmitDialog (..)
   , PullView (..)
+  , emptyPullView
+  , Stop (..)
   , SubmitFocus (..)
   , Inbox (..)
   , InboxFocus (..)
@@ -55,6 +57,10 @@ module Remax.UI.Core.Types
   , repoText
   , currentFile
   , currentFileMay
+  , currentBand
+  , setBand
+  , overBand
+  , setStop
   , rebaseEffMode
   , effectiveMode
   , FlagRule (..)
@@ -401,10 +407,19 @@ data Inbox = Inbox
 data InboxFocus = InboxList | InboxFiltering
   deriving (Eq)
 
--- | The PR view is up; the band says which post is selected, or pvCommit which commit.
+-- | The PR view is up; pvStop says which post or commit is selected.
 data PullView = PullView
-  { pvCommit :: Maybe T.Text
+  { pvStop :: Maybe Stop
+  , pvDeleting :: Bool
   }
+  deriving (Eq)
+
+emptyPullView :: PullView
+emptyPullView = PullView {pvStop = Nothing, pvDeleting = False}
+
+data Stop
+  = PostStop Conv.ConversationId Int
+  | CommitStop T.Text
   deriving (Eq)
 
 -- | The eight reactions offered on one posted comment.
@@ -527,7 +542,7 @@ data St = St
   , stWork :: Conv.OwnWork
   , stConversations :: [Conv.Conversation]
   , stOutdated :: Map.Map Conv.ConversationId Outdated -- where a conversation whose lines left the file draws now
-  , stBand :: Maybe Band -- the post the keys act on, when the cursor has entered a thread
+  , stBand :: Maybe Band -- the post the keys act on, when the cursor has entered a thread in the diff
   , stFoldFlipped :: Set.Set Store.RemoteThreadId -- threads za opened or folded against their default
   , stOpenDetails :: Set.Set (Conv.ConversationId, Int) -- posts whose details blocks za opened
   , stOpenCommits :: Set.Set T.Text
@@ -649,6 +664,28 @@ currentFile st = stFiles st !! stCurF st
 
 currentFileMay :: St -> Maybe FileView
 currentFileMay st = safeIdx (stFiles st) (stCurF st)
+
+currentBand :: St -> Maybe Band
+currentBand st =
+  case stPullView st of
+    Just pv -> case pvStop pv of
+      Just (PostStop cid i) -> Just (Band cid i (pvDeleting pv))
+      _ -> Nothing
+    Nothing -> stBand st
+
+setBand :: Maybe Band -> St -> St
+setBand band s =
+  case (stPullView s, band) of
+    (Just _, Just b) -> s {stPullView = Just PullView {pvStop = Just (PostStop (bandConv b) (bandPost b)), pvDeleting = bandDeleting b}}
+    (Just PullView {pvStop = Just (PostStop _ _)}, Nothing) -> setStop Nothing s
+    (Just _, Nothing) -> s
+    (Nothing, _) -> s {stBand = band}
+
+setStop :: Maybe Stop -> St -> St
+setStop stop s = s {stPullView = emptyPullView {pvStop = stop} <$ stPullView s}
+
+overBand :: (Band -> Band) -> St -> St
+overBand f s = maybe s (\b -> setBand (Just (f b)) s) (currentBand s)
 
 -- The base the session actually diffs against right now: mid-rebase the
 -- stopped commit is under review (its parent is the base) — except a
@@ -814,7 +851,7 @@ cancelKeyText keys =
     _ -> "C-c"
 
 showPullView :: St -> St
-showPullView s = s {stPullView = Just PullView {pvCommit = Nothing}, stBand = Nothing, stVi = Vi.viIdle}
+showPullView s = s {stPullView = Just emptyPullView, stBand = Nothing, stVi = Vi.viIdle}
 
 hidePullView :: St -> St
 hidePullView s = s {stPullView = Nothing, stBand = Nothing}

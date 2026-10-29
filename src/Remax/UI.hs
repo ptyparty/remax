@@ -205,7 +205,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stSubmit = Nothing
     , Types.stSending = Nothing
     , Types.stInbox = Nothing
-    , Types.stPullView = fmap (const Types.PullView {Types.pvCommit = Nothing}) pullMeta
+    , Types.stPullView = fmap (const Types.emptyPullView) pullMeta
     , Types.stNow = suNow startup
     , Types.stConversations = Conv.conversations Conv.emptyRemote (suWork startup)
     , Types.stOutdated = Map.empty
