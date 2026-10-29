@@ -11,6 +11,7 @@ module Remax.UI.Model.Work
   ) where
 
 import Brick qualified as Brick
+import Control.Applicative ((<|>))
 import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
 import Data.List qualified as List
@@ -39,7 +40,12 @@ scopeFor root mode =
     }
 
 scopeOf :: Types.St -> WorkStore.Scope
-scopeOf st = scopeFor (Types.stRoot st) (Types.stMode st)
+scopeOf st =
+  let
+    scope = scopeFor (Types.stRoot st) (Types.stMode st)
+    held = fmap PullPoll.snapshotPull (Types.ppSnapshot (Types.stPullPoll st))
+  in
+    scope {WorkStore.scopePull = WorkStore.scopePull scope <|> held}
 
 loadFor :: SQLite.Connection -> FilePath -> Git.ReviewMode -> IO Conv.OwnWork
 loadFor conn root mode = WorkStore.loadWork conn (scopeFor root mode)

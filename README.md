@@ -55,6 +55,7 @@ remax watching        # hold a mark in the session's header for as long as this
                       #   it is blocked on you, gone seconds after it dies
 remax reply ID TEXT   # agent posts in a conversation; shows live in the session
 remax comment HUNK TEXT  # agent proposes a GitHub comment you take with Enter
+remax move ID --pr N  # agent files a draft comment under pull request N
 remax -C DIR ...      # any of the above, as if started in DIR
 ```
 
@@ -657,7 +658,11 @@ your feedback flows back through the store:
    you. `remax comment HUNK TEXT` proposes a new GitHub comment on a hunk
    and `remax comment --revise ID TEXT` proposes text for a
    conversation; you take either with `⏎`, and only then does it wait
-   for `:submit`.
+   for `:submit`. Each command says where its post landed: `repo-wide`
+   for a note, `on PR #N` for anything bound for GitHub. When a pull
+   request is closed and reopened under a new number,
+   `remax move ID --pr N` files a draft and every post on it under the
+   new one.
    The thread is ordered and two-way: `?` on the noted line answers
    their post, and it appends as your follow-up. **Accepting the lines resolves the
    whole conversation** — the thread clears when you mark them
@@ -752,6 +757,28 @@ lines dimmed.
 Verdicts live in `~/.local/state/remax/review.db` (sqlite): `line_verdict`
 rows (key, file, line text, verdict, pass) plus a `pass` table recording
 when each review ran and what scope it covered.
+
+### Where a conversation lives
+
+Every post lands where its conversation lives, whoever writes it and
+whatever view they are in:
+
+- **Notes** (`!`, `?`, and an agent's reply to a verdict with no note
+  yet) are repo-wide, like verdicts. They draw in every view that holds
+  their lines, and as outdated where the lines are gone.
+- **GitHub threads, PR-level comments and reviews** live on their pull
+  request. `:mode tree` keeps the last pull request's threads on screen,
+  and a reply or a `?` written there still goes to that pull request.
+- **Drafts** (`@`, a PR-level comment, `remax comment HUNK`) belong to
+  the pull request they were written for: the one open, or the one last
+  open in the session. A draft written with no pull request in view
+  belongs to none and shows in every pull request until it is submitted
+  or an agent moves it with `remax move ID --pr N`.
+
+A view loads the repo-wide notes and the work of its pull request: the
+one it reviews, or after `:mode tree` and friends, the one last open.
+`remax list --json` gives each conversation's `pull`: `null` for a
+repo-wide note or a draft that belongs to no pull request.
 
 ## Filesystem awareness
 

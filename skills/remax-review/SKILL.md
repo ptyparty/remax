@@ -82,7 +82,8 @@ thread about them. An empty `conversations` with a non-empty
                {"author": "agent", "body": "done — switched to mapMaybe"}],
     "awaiting": "reviewer",
     "lines_in_file": "none",
-    "updated_at": "2026-08-23 19:23:51"}]}
+    "updated_at": "2026-08-23 19:23:51",
+    "pull": null}]}
 ```
 
 ### Each line's marker says which side it is
@@ -158,6 +159,13 @@ which one it landed in.
   reviewer spoke last, so act on it. `"reviewer"`: your post is the last
   word, so leave it unless they answer. `"note"`: a verdict with no note
   yet — see *A conversation with no note yet*.
+- `pull` — where the conversation lives: the pull request number for a
+  GitHub thread, PR-level comment, review or draft. `null` on a note means
+  repo-wide: it shows in every view that has its lines. `null` on a draft
+  means it was written with no pull request in view; see *Drafting review
+  comments*. Every
+  post on a conversation, yours and the reviewer's, lands where the
+  conversation lives, whatever view either of you is in.
 - `lines_in_file` — whether the conversation's `+` and unchanged lines
   still stand together in the working file, spaced as their `line_no`s
   were: `"all"`, `"some"` or `"none"`. The block may have moved up or
@@ -303,7 +311,9 @@ you're in a conversation with the human. The thread is ordered: the
 reviewer may answer your post with another of theirs, so re-check
 `list --json` for posts newer than yours instead of assuming your
 answer was the last word. Accepting the hunk (or resolving the note)
-closes the whole conversation.
+closes the whole conversation. The output says where the post landed,
+`repo-wide` for a note or `on PR #N` for anything bound for GitHub. A
+reply to a verdict with no note yet starts a repo-wide note.
 
 ## Drafting review comments
 
@@ -319,6 +329,21 @@ records a proposal on a conversation by its `id`: text for a reply, or
 for a draft of theirs. Nothing happens until the reviewer takes it with
 Enter, which makes it their own pending text, and a new proposal
 replaces the old. Draft or revise only when asked to.
+
+A draft belongs to the pull request it was written for, and the output
+names it with the draft's id: `comment 3f9c… proposed on src/Foo.hs:42 on
+PR #482`. A draft written with no pull request in view belongs to none
+and shows in every pull request until it is submitted or moved. When a
+pull request is closed and reopened under a new number, its drafts stay
+with the old one; move each draft, with every post on it, when the
+reviewer asks:
+
+```sh
+remax -C /path/to/repo move DRAFT_ID --pr 512
+```
+
+Only drafts move. A GitHub thread, PR-level comment or review lives on
+the pull request GitHub keeps it on, and a note is repo-wide.
 
 The session writes each poll of the pull request to a cache file that
 `list` reads, so GitHub threads appear in the listing while a session

@@ -222,8 +222,13 @@ openStore = do
     conn
     "UPDATE work SET pull =\
     \  (SELECT w.pull FROM work w WHERE w.repo = work.repo AND w.target_kind = work.target_kind\
-    \   AND w.target_id = work.target_id AND w.pull IS NOT NULL LIMIT 1)\
-    \ WHERE pull IS NULL AND target_kind IN ('thread', 'comment')"
+    \   AND w.target_id = work.target_id AND w.pull IS NOT NULL ORDER BY w.id LIMIT 1)\
+    \ WHERE target_kind IN ('thread', 'comment', 'new') AND pull IS NOT\
+    \  (SELECT w.pull FROM work w WHERE w.repo = work.repo AND w.target_kind = work.target_kind\
+    \   AND w.target_id = work.target_id AND w.pull IS NOT NULL ORDER BY w.id LIMIT 1)"
+  SQLite.execute_
+    conn
+    "UPDATE work SET pull = NULL WHERE target_kind = 'note' AND pull IS NOT NULL"
   SQLite.execute_
     conn
     "UPDATE work SET kind = 'proposed' WHERE kind = 'pending' AND author LIKE 'agent:%' AND target_kind = 'new'"

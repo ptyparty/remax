@@ -11,6 +11,7 @@ module Remax.Feedback
   , digestOf
   , Reply (..)
   , replyTo
+  , Drafted (..)
   , commentOnHunk
   , proposeOn
   , listedJson
@@ -57,6 +58,7 @@ data Listed = Listed
   , listedUpdatedAt :: T.Text
   , listedTarget :: Maybe Conv.Target
   , listedVerdictKeys :: [Store.LineKey]
+  , listedScope :: WorkStore.ConversationScope
   }
   deriving (Eq, Show)
 
@@ -106,7 +108,9 @@ listScoped conn root = do
     (pull, remote) = case cached of
       Just c -> (Just (RemoteCache.cachedPull c), RemoteCache.cachedRemote c)
       Nothing -> (Nothing, Conv.emptyRemote)
-  own <- WorkStore.loadWork conn WorkStore.Scope {WorkStore.scopeRepo = repo, WorkStore.scopePull = pull}
+  let
+    checkout = WorkStore.Scope {WorkStore.scopeRepo = repo, WorkStore.scopePull = pull}
+  own <- WorkStore.loadWork conn checkout
   rows <- Store.punchRows conn repo
   let
     convs = filter speaks (Conv.conversations remote own)
@@ -114,8 +118,9 @@ listScoped conn root = do
       Conv.ReviewSummary _ state -> state /= "COMMENTED" || any (not . T.null . T.strip . Conv.markdownText . Conv.postBody) (Conv.convPosts conv)
       _ -> True
   texts <- positionTexts root pull convs
+  scopes <- mapM (WorkStore.conversationScope conn checkout . Conv.convTarget) convs
   let
-    listedConvs = map (fromConversation root rows texts) convs
+    listedConvs = zipWith (fromConversation root rows texts) scopes convs
     covered = Map.fromList (map (\k -> (k, ())) (concatMap listedVerdictKeys listedConvs))
     bare = filter (\r -> Map.notMember (Store.punchKey r) covered) rows
     bareGroups = Map.fromListWith (flip (++)) (map (\r -> ((Store.punchFile r, Store.punchCommitSha r), [r])) bare)
@@ -136,8 +141,8 @@ positionTexts root pull convs =
           _ -> Nothing
       pure (Map.fromList (Maybe.catMaybes found))
 
-fromConversation :: FilePath -> [Store.PunchRow] -> Map.Map (Conv.Side, T.Text) [T.Text] -> Conv.Conversation -> Listed
-fromConversation root rows texts conv =
+fromConversation :: FilePath -> [Store.PunchRow] -> Map.Map (Conv.Side, T.Text) [T.Text] -> WorkStore.ConversationScope -> Conv.Conversation -> Listed
+fromConversation root rows texts scope conv =
   let
     textAt pos n = Maybe.fromMaybe "" (Maybe.listToMaybe (drop (n - 1) (Map.findWithDefault [] (Conv.posSide pos, Conv.posPath pos) texts)))
     verdictOf k = Maybe.listToMaybe (map Store.punchVerdict (filter ((== k) . Store.punchKey) rows))
@@ -175,6 +180,7 @@ fromConversation root rows texts conv =
       , listedUpdatedAt = updated
       , listedTarget = Just (Conv.convTarget conv)
       , listedVerdictKeys = keys
+      , listedScope = scope
       }
 
 postTime :: Conv.Post -> Maybe T.Text
@@ -203,6 +209,7 @@ bareListed root rows =
       , listedUpdatedAt = maximum ("" : map Store.punchAt rows)
       , listedTarget = Nothing
       , listedVerdictKeys = map Store.punchKey rows
+      , listedScope = WorkStore.RepoWide
       }
 
 {- | What a wait watches: each conversation's newest post, so a new one
@@ -219,7 +226,7 @@ digestOf party listed =
   in
     map line (filter wanted listed)
 
-data Reply = Replied Int | NoSuchConversation
+data Reply = Replied Int WorkStore.ConversationScope | NoSuchConversation
 
 {- | The agent's local post on a conversation named by its id. A verdict
 with no note yet takes a fresh note on its lines.
@@ -237,15 +244,16 @@ replyTo conn root target text = do
       case listedTarget l of
         Just t -> do
           _ <- WorkStore.addAside conn scope t (Conv.Agent agentName) body
-          pure (Replied (max 1 (length (listedLines l))))
+          fmap (Replied (max 1 (length (listedLines l)))) (WorkStore.conversationScope conn scope t)
         Nothing ->
           case (listedFile l, NEL.nonEmpty (Maybe.mapMaybe spanLine (zip (listedVerdictKeys l) (listedLines l)))) of
             (Just file, Just spanLines) -> do
               let
                 verdict = Maybe.fromMaybe Store.Questioned (Maybe.listToMaybe (Maybe.mapMaybe listedLineVerdict (listedLines l)))
                 lineSpan = Conv.LineSpan {Conv.spanPath = file, Conv.spanSide = Conv.HeadSide, Conv.spanLines = spanLines, Conv.spanAt = fmap Conv.CommitSha (listedCommit l)}
-              _ <- WorkStore.addAside conn scope (Conv.OnLinesOnly (Conv.LocalId target) lineSpan verdict) (Conv.Agent agentName) body
-              pure (Replied (length (listedLines l)))
+                note = Conv.OnLinesOnly (Conv.LocalId target) lineSpan verdict
+              _ <- WorkStore.addAside conn scope note (Conv.Agent agentName) body
+              fmap (Replied (length (listedLines l))) (WorkStore.conversationScope conn scope note)
             _ -> pure NoSuchConversation
 
 spanLine :: (Store.LineKey, ListedLine) -> Maybe Conv.SpanLine
@@ -256,7 +264,9 @@ spanLine (key, line) = do
 {- | A comment the agent proposes on a hunk, which the reviewer takes as
 their own before it can be submitted.
 -}
-commentOnHunk :: SQLite.Connection -> FilePath -> Maybe Int -> Hunks.Hunk -> T.Text -> IO Conv.LocalId
+data Drafted = Drafted Conv.LocalId WorkStore.ConversationScope | EmptyHunk
+
+commentOnHunk :: SQLite.Connection -> FilePath -> Maybe Int -> Hunks.Hunk -> T.Text -> IO Drafted
 commentOnHunk conn root pull hunk text = do
   let
     repo = T.pack root
@@ -272,12 +282,13 @@ commentOnHunk conn root pull hunk text = do
     spanLines = zipWith (\n (k, l) -> Conv.SpanLine (Store.LineKey k) (lineNo n) l) numbers (zip (Hunks.hunkKeys hunk) (Hunks.hunkLines hunk))
   lid <- WorkStore.newLocalId repo (map Store.LineKey (Hunks.hunkKeys hunk))
   case NEL.nonEmpty spanLines of
-    Nothing -> pure lid
+    Nothing -> pure EmptyHunk
     Just ne -> do
       let
         lineSpan = Conv.LineSpan {Conv.spanPath = T.pack (Hunks.hunkFile hunk), Conv.spanSide = side, Conv.spanLines = ne, Conv.spanAt = Nothing}
-      _ <- WorkStore.setProposal conn scope (Conv.NewThread lid (Conv.OnLines lineSpan)) agentName (Conv.Markdown text)
-      pure lid
+        draft = Conv.NewThread lid (Conv.OnLines lineSpan)
+      _ <- WorkStore.setProposal conn scope draft agentName (Conv.Markdown text)
+      fmap (Drafted lid) (WorkStore.conversationScope conn scope draft)
 
 -- | The agent's proposed text on a conversation; the next replaces it.
 proposeOn :: SQLite.Connection -> FilePath -> T.Text -> T.Text -> IO Reply
@@ -285,11 +296,12 @@ proposeOn conn root target text = do
   (pull, listed) <- listScoped conn root
   let
     scope = WorkStore.Scope {WorkStore.scopeRepo = T.pack root, WorkStore.scopePull = pull}
-  case List.find ((== target) . listedId) listed >>= listedTarget of
-    Nothing -> pure NoSuchConversation
-    Just t -> do
-      _ <- WorkStore.setProposal conn scope t agentName (Conv.Markdown text)
-      pure (Replied 1)
+  case List.find ((== target) . listedId) listed of
+    Just l
+      | Just t <- listedTarget l -> do
+          _ <- WorkStore.setProposal conn scope t agentName (Conv.Markdown text)
+          fmap (Replied 1) (WorkStore.conversationScope conn scope t)
+    _ -> pure NoSuchConversation
 
 listedJson :: Listed -> Json.Json
 listedJson l =
@@ -318,6 +330,7 @@ listedJson l =
       , ("thread", Json.JArray (map postJson (listedPosts l)))
       , ("awaiting", str (partyText (listedParty l)))
       , ("updated_at", str (listedUpdatedAt l))
+      , ("pull", maybe Json.JNull (Json.JNumber . T.pack . show) (WorkStore.scopeColumn (listedScope l)))
       ]
 
 authorWord :: Conv.Author -> T.Text

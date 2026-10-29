@@ -55,6 +55,7 @@ data Cmd
   | List ListOptions
   | Reply T.Text T.Text
   | Comment CommentArgs
+  | Move T.Text Int
   | Attend
   | Hunks [String]
   | TourBegin [String]
@@ -114,6 +115,7 @@ main = do
         List options -> list options
         Reply target text -> reply target text
         Comment commentArgs -> comment commentArgs
+        Move target pull -> move target pull
         Attend -> attend
         Hunks rest -> hunks rest
         TourBegin rest -> tourBegin rest
@@ -180,6 +182,9 @@ usage =
   \       remax [-C DIR] comment --revise ID TEXT\n\
   \                                     propose text for a conversation; the\n\
   \                                     reviewer takes it with Enter\n\
+  \       remax [-C DIR] move ID --pr N  file a draft comment and every post on\n\
+  \                                     it under pull request N, such as after\n\
+  \                                     its PR was reopened under a new number\n\
   \       remax [-C DIR] watching       say an agent is on this review, until\n\
   \                                     stopped; the session shows it in its\n\
   \                                     header, working or waiting\n\
@@ -231,6 +236,9 @@ parseArgs args0 =
         ("comment" : "--revise" : target : rest)
           | not (null rest) ->
               Right (mDir, Comment (Revise (T.pack target) (T.pack (unwords rest))))
+        ["move", target, "--pr", n]
+          | Just pull <- GitHub.pullNumber (T.pack n) ->
+              Right (mDir, Move (T.pack target) pull)
         ("comment" : hunkId : rest)
           | not (null rest) ->
               Right (mDir, Comment (Draft (T.pack hunkId) (T.pack (unwords rest))))
@@ -793,18 +801,34 @@ reply target text = do
   attached <- mapM (\r -> fmap ((,) r) (Feedback.replyTo conn r target text)) roots
   let
     replied (repo, outcome) = case outcome of
-      Feedback.Replied n -> Just (repo, n)
+      Feedback.Replied n landing -> Just (repo, n, landing)
       Feedback.NoSuchConversation -> Nothing
   case Maybe.mapMaybe replied attached of
     [] -> Exit.die "No such conversation recorded for this repository."
     hits ->
-      Monad.forM_ hits $ \(repo, n) ->
+      Monad.forM_ hits $ \(repo, n, landing) ->
         putStrLn
           ( "reply attached to "
               ++ show n
-              ++ " line(s)"
+              ++ " line(s) "
+              ++ scopeWords landing
               ++ (if length roots > 1 then " in " ++ FilePath.takeFileName repo else "")
           )
+
+scopeWords :: WorkStore.ConversationScope -> String
+scopeWords landing =
+  case landing of
+    WorkStore.RepoWide -> "repo-wide"
+    WorkStore.InPull n -> "on PR #" ++ show n
+
+move :: T.Text -> Int -> IO ()
+move target pull = do
+  roots <- targetRepos
+  conn <- Store.openStore
+  outcomes <- mapM (\r -> WorkStore.moveDraft conn (T.pack r) (Conv.LocalId target) pull) roots
+  if WorkStore.Moved `elem` outcomes
+    then putStrLn ("draft moved to PR #" ++ show pull)
+    else Exit.die "No such draft comment recorded for this repository; only drafts move."
 
 -- A comment the agent drafts for the reviewer on a hunk, or new text it
 -- proposes for a conversation; neither reaches GitHub until the
@@ -815,14 +839,14 @@ comment args = do
   conn <- Store.openStore
   case args of
     Revise target text -> do
-      outcomes <- mapM (\r -> fmap ((,) r) (Feedback.proposeOn conn r target text)) roots
+      outcomes <- mapM (\r -> Feedback.proposeOn conn r target text) roots
       let
-        proposed (repo, outcome) = case outcome of
-          Feedback.Replied _ -> Just repo
+        proposed outcome = case outcome of
+          Feedback.Replied _ landing -> Just landing
           Feedback.NoSuchConversation -> Nothing
       case Maybe.mapMaybe proposed outcomes of
         [] -> Exit.die "No such conversation recorded for this repository."
-        _ -> putStrLn "proposal recorded; the reviewer takes it with Enter"
+        (landing : _) -> putStrLn ("proposal recorded " ++ scopeWords landing ++ "; the reviewer takes it with Enter")
     Draft hunkId text -> do
       cfg <- Config.loadConfig
       found <- Monad.forM roots $ \root -> do
@@ -833,8 +857,21 @@ comment args = do
         [] -> Exit.die "No such hunk in the view; remax hunks lists them."
         ((root, h) : _) -> do
           cached <- RemoteCache.readRemote (T.pack root)
-          Monad.void (Feedback.commentOnHunk conn root (fmap RemoteCache.cachedPull cached) h text)
-          putStrLn ("comment proposed on " ++ Hunks.hunkFile h ++ ":" ++ show (Hunks.hunkLine h) ++ "; the reviewer takes it with Enter")
+          drafted <- Feedback.commentOnHunk conn root (fmap RemoteCache.cachedPull cached) h text
+          case drafted of
+            Feedback.EmptyHunk -> Exit.die "That hunk has no lines to comment on."
+            Feedback.Drafted lid landing ->
+              putStrLn
+                ( "comment "
+                    ++ T.unpack (Conv.localIdToText lid)
+                    ++ " proposed on "
+                    ++ Hunks.hunkFile h
+                    ++ ":"
+                    ++ show (Hunks.hunkLine h)
+                    ++ " "
+                    ++ scopeWords landing
+                    ++ "; the reviewer takes it with Enter"
+                )
 
 -- JSON output ------------------------------------------------------------------
 
@@ -857,6 +894,8 @@ printListed described =
           <> Feedback.listedUpdatedAt l
           <> ", awaiting "
           <> Feedback.partyText (Feedback.listedParty l)
+          <> ", "
+          <> T.pack (scopeWords (Feedback.listedScope l))
           <> ")"
       )
     Monad.forM_ (Feedback.listedLines l) $ \line ->

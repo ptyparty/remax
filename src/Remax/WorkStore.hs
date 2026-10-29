@@ -2,6 +2,11 @@
 
 module Remax.WorkStore
   ( Scope (..)
+  , ConversationScope (..)
+  , conversationScope
+  , scopeColumn
+  , MoveOutcome (..)
+  , moveDraft
   , loadWork
   , addPending
   , addAside
@@ -37,6 +42,42 @@ data Scope = Scope
   { scopeRepo :: T.Text
   , scopePull :: Maybe Int
   }
+
+data ConversationScope = RepoWide | InPull Int
+  deriving (Eq, Show)
+
+conversationScope :: SQLite.Connection -> Scope -> Conv.Target -> IO ConversationScope
+conversationScope conn context target =
+  case target of
+    Conv.OnLinesOnly {} -> pure RepoWide
+    _ -> do
+      let
+        (tkind, tid) = targetColumns target
+      rows <-
+        SQLite.query
+          conn
+          "SELECT pull FROM work WHERE repo = ? AND target_kind = ? AND target_id = ? ORDER BY id LIMIT 1"
+          (scopeRepo context, tkind, tid) ::
+          IO [SQLite.Only (Maybe Int)]
+      pure (maybe RepoWide InPull (maybe (scopePull context) SQLite.fromOnly (Maybe.listToMaybe rows)))
+
+scopeColumn :: ConversationScope -> Maybe Int
+scopeColumn s =
+  case s of
+    RepoWide -> Nothing
+    InPull n -> Just n
+
+data MoveOutcome = Moved | NoSuchDraft
+  deriving (Eq, Show)
+
+moveDraft :: SQLite.Connection -> T.Text -> Conv.LocalId -> Int -> IO MoveOutcome
+moveDraft conn repo lid pull = do
+  SQLite.execute
+    conn
+    "UPDATE work SET pull = ? WHERE repo = ? AND target_kind = 'new' AND target_id = ?"
+    (pull, repo, Conv.localIdToText lid)
+  moved <- SQLite.changes conn
+  pure (if moved > 0 then Moved else NoSuchDraft)
 
 loadWork :: SQLite.Connection -> Scope -> IO Conv.OwnWork
 loadWork conn scope = do
@@ -232,11 +273,12 @@ insertWork conn scope target kind author body cid =
     ensureTarget conn scope target
     let
       (tkind, tid) = targetColumns target
+    landing <- conversationScope conn scope target
     SQLite.execute
       conn
       "INSERT INTO work (repo, pull, target_kind, target_id, kind, author, body, comment_id)\
       \ VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-      (scopeRepo scope, scopePull scope, tkind, tid, kind, Conv.authorText author, Conv.markdownText body, fmap Store.commentIdToInt64 cid)
+      (scopeRepo scope, scopeColumn landing, tkind, tid, kind, Conv.authorText author, Conv.markdownText body, fmap Store.commentIdToInt64 cid)
     fmap (Conv.StoredWork . fromIntegral) (SQLite.lastInsertRowId conn)
 
 addPending :: SQLite.Connection -> Scope -> Conv.Target -> Conv.Author -> Conv.Markdown -> IO Conv.WorkId
