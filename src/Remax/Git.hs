@@ -15,7 +15,9 @@ module Remax.Git
   , BranchStanding (..)
   , branchStanding
   , Worktree (..)
+  , WorktreeState (..)
   , listWorktrees
+  , liveWorktrees
   , worktreesOnBranch
   , addDetachedWorktree
   , resolveUnder
@@ -187,8 +189,15 @@ branchStanding root pr = do
 data Worktree = Worktree
   { wtPath :: FilePath
   , wtBranch :: Maybe T.Text
+  , wtState :: WorktreeState
   }
   deriving (Eq, Show)
+
+data WorktreeState = WorktreeLive | WorktreePrunable
+  deriving (Eq, Show)
+
+liveWorktrees :: FilePath -> IO [Worktree]
+liveWorktrees root = fmap (filter ((== WorktreeLive) . wtState)) (listWorktrees root)
 
 listWorktrees :: FilePath -> IO [Worktree]
 listWorktrees root = do
@@ -203,6 +212,7 @@ listWorktrees root = do
         Worktree
           { wtPath = T.unpack path
           , wtBranch = T.stripPrefix "refs/heads/" =<< field "branch" stanza
+          , wtState = if any (T.isPrefixOf "prunable") stanza then WorktreePrunable else WorktreeLive
           }
   pure $ case code of
     Exit.ExitSuccess -> Maybe.mapMaybe one stanzas
@@ -216,7 +226,7 @@ splitBlank ls =
 
 worktreesOnBranch :: FilePath -> PullRequest -> IO [FilePath]
 worktreesOnBranch root pr = do
-  found <- listWorktrees root
+  found <- liveWorktrees root
   let
     holds wt = do
       standing <- branchStanding (wtPath wt) pr

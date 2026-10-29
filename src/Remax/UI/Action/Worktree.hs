@@ -116,7 +116,7 @@ editElsewhere openPicker entry = do
     conn = Types.stConn st
   original <- MonadIO.liftIO (fmap T.unpack (Store.originalOf conn (Types.repoText st)))
   remembered <- MonadIO.liftIO (Store.pullWorktree conn (T.pack original) n)
-  registered <- MonadIO.liftIO (fmap (map Git.wtPath) (Git.listWorktrees original))
+  registered <- MonadIO.liftIO (fmap (map Git.wtPath) (Git.liveWorktrees original))
   present <- MonadIO.liftIO (maybe (pure False) (stillWorktree registered . T.unpack) remembered)
   case remembered of
     Just path
