@@ -327,12 +327,11 @@ rebuildWith i ed = do
 data Reloaded
   = ReloadVanished
   | ReloadUnchanged
-  | ReloadReady Types.FileView Int
+  | ReloadReady Types.FileView (Int -> Int)
 
 data ReloadPlan = ReloadPlan
   { rlPath :: FilePath
   , rlOldLines :: [T.Text]
-  , rlCursor :: (Int, Int)
   , rlBase :: [T.Text]
   , rlEpoch :: Int
   }
@@ -359,7 +358,6 @@ reloadWorking rel st =
               ReloadPlan
                 { rlPath = rel
                 , rlOldLines = Modal.bufferLines (Types.fvEd fv)
-                , rlCursor = Modal.cursorRC (Types.fvEd fv)
                 , rlBase = Types.fvBase fv
                 , rlEpoch = Types.stEpoch st
                 }
@@ -373,7 +371,6 @@ reloadWork st fv plan = do
   let
     path = Types.stRoot st </> rlPath plan
     oldLs = rlOldLines plan
-    (row, col) = rlCursor plan
   got <- Exception.try (TIO.readFile path) :: IO (Either Exception.IOException T.Text)
   case got of
     Left _ -> pure ReloadVanished
@@ -383,13 +380,9 @@ reloadWork st fv plan = do
           let
             diskLs = T.lines diskTxt
           stamped <- Exception.try (Directory.getModificationTime path) :: IO (Either Exception.IOException Clock.UTCTime)
-          newRow <- mapRowThroughEdit oldLs diskLs row
-          let
-            newCol = min col (T.length (Maybe.fromMaybe "" (Types.safeIdx diskLs newRow)))
-            fresh = Modal.newEdState newRow diskLs
-            placed = fresh {Modal.edZipper = Z.moveCursor (newRow, newCol) (Modal.edZipper fresh)}
-          (rebuilt, _) <- rebuildFV (Types.stConfig st) (Types.repoText st) fv {Types.fvEd = placed}
-          pure (ReloadReady rebuilt {Types.fvMtime = either (const Nothing) Just stamped} newRow)
+          mapRow <- rowsThroughEdit oldLs diskLs
+          (rebuilt, _) <- rebuildFV (Types.stConfig st) (Types.repoText st) fv {Types.fvEd = Modal.newEdState 0 diskLs}
+          pure (ReloadReady rebuilt {Types.fvMtime = either (const Nothing) Just stamped} mapRow)
 
 finishReload :: ReloadPlan -> Either T.Text Reloaded -> Brick.EventM Types.Name Types.St ()
 finishReload plan outcome = do
@@ -406,47 +399,25 @@ finishReload plan outcome = do
       (Right ReloadVanished, _) -> refreshGit
       (Right ReloadUnchanged, _) -> pure ()
       (Right (ReloadReady _ _), Nothing) -> pure ()
-      (Right (ReloadReady rebuilt newRow), Just (i, current))
+      (Right (ReloadReady rebuilt mapRow), Just (i, current))
         | Modal.edMode (Types.fvEd current) == Modal.Insert ->
             Types.setMsg ("\9888 " <> T.pack rel <> " changed on disk; Esc applies your edit over it")
         | Modal.bufferLines (Types.fvEd current) /= rlOldLines plan || Types.fvBase current /= rlBase plan ->
             reloadFromDisk rel
-        | otherwise -> installReload plan i current rebuilt newRow
+        | otherwise -> installReload plan i (rebuilt {Types.fvEd = carryEditor mapRow (Types.fvEd current) (Types.fvEd rebuilt)})
     Monad.when again (reloadFromDisk rel)
 
-installReload :: ReloadPlan -> Int -> Types.FileView -> Types.FileView -> Int -> Brick.EventM Types.Name Types.St ()
-installReload plan i current rebuilt newRow = do
+installReload :: ReloadPlan -> Int -> Types.FileView -> Brick.EventM Types.Name Types.St ()
+installReload plan i installed = do
   latest <- State.get
-  -- remember which screen row the cursor sat on, so the
-  -- view doesn't jump when lines shift above it
-  mvp <- Brick.lookupViewport Types.BodyVP
-  screenRows <- View.terminalRows
   let
-    (liveRow, liveCol) = Modal.cursorRC (Types.fvEd current)
-    moved = (liveRow, liveCol) /= rlCursor plan
-    landing =
-      if moved
-        then min liveRow (max 0 (Modal.bufferLineCount (Types.fvEd rebuilt) - 1))
-        else newRow
-    installed =
-      if moved
-        then rebuilt {Types.fvEd = placeCursor (landing, liveCol) (Types.fvEd rebuilt)}
-        else rebuilt
-    oldOut = View.cursorDisplayRow (Types.fvRows current) liveRow
-    screenOff = case mvp of
-      Just vp -> max 0 (oldOut - Brick._vpTop vp)
-      Nothing -> 0
-    oldCur = if i == Types.stCurF latest then Nav.currentRunOf latest i else Nothing
-  State.modify (Verdict.updateFile i (const installed))
-  WorkModel.placeOutdated
-  Monad.when (i == Types.stCurF latest) $
-    State.modify (\s -> s {Types.stCurH = Nav.matchRun oldCur (Types.fvRuns installed)})
-  reloaded <- State.get
-  let
-    newOut = View.cursorDisplayRow (Types.fvRows installed) landing
-    origin = snd (View.bodyWindow screenRows reloaded installed)
-  State.modify (Verdict.updateFile i (\f -> f {Types.fvOrigin = origin}))
-  Brick.setTop (Brick.viewportScroll Types.BodyVP) (max 0 (newOut - origin - screenOff))
+    isCurrent = i == Types.stCurF latest
+    oldCur = if isCurrent then Nav.currentRunOf latest i else Nothing
+  (if isCurrent then Nav.withCursorHeld else id) $ do
+    State.modify (Verdict.updateFile i (const installed))
+    WorkModel.placeOutdated
+    Monad.when isCurrent $
+      State.modify (\s -> s {Types.stCurH = Nav.matchRun oldCur (Types.fvRuns installed)})
   Types.setMsg ("\8635 reloaded " <> T.pack (rlPath plan))
 
 pollSubject :: Brick.EventM Types.Name Types.St ()
@@ -493,29 +464,30 @@ pollCurrentFile st =
 -- when lines shift, and lands on the nearest surviving line when its own
 -- line was edited away. Best effort — a degraded (budget-blown) diff
 -- falls back toward the top.
-mapRowThroughEdit :: [T.Text] -> [T.Text] -> Int -> IO Int
-mapRowThroughEdit oldLs newLs target = do
+rowsThroughEdit :: [T.Text] -> [T.Text] -> IO (Int -> Int)
+rowsThroughEdit oldLs newLs = do
   -- tracking where a line went, not what counts as a change: spacing
   -- is part of the line's identity here whatever the setting says
   (rows, _) <- diffIO DiffModel.WhitespaceMatters oldLs newLs
   let
-    clamp r = max 0 (min r (length newLs - 1))
+    !lastRow = max 0 (length newLs - 1)
+    clamp r = max 0 (min r lastRow)
     bufferRowOf (_, mnr, _) = mnr
     nextSurviving rest lastNew =
       case Maybe.mapMaybe bufferRowOf rest of
         (nr : _) -> nr
-        [] -> Maybe.fromMaybe (max 0 (length newLs - 1)) lastNew
-    go _ lastNew [] = Maybe.fromMaybe 0 lastNew
-    go o lastNew ((m, mnr, _) : rest) =
+        [] -> Maybe.fromMaybe lastRow lastNew
+    go _ _ lastNew [] = Maybe.fromMaybe 0 lastNew
+    go target o lastNew ((m, mnr, _) : rest) =
       case m of
-        '+' -> go o (mnr <|> lastNew) rest
+        '+' -> go target o (mnr <|> lastNew) rest
         _ ->
           if o == target
             then case mnr of
               Just nr -> nr
               Nothing -> nextSurviving rest lastNew
-            else go (o + 1) (mnr <|> lastNew) rest
-  pure (clamp (go (0 :: Int) Nothing rows))
+            else go target (o + 1) (mnr <|> lastNew) rest
+  pure (\target -> clamp (go target (0 :: Int) Nothing rows))
 
 -- Something moved in .git: re-list the change set, refresh bases that
 -- changed, add new files, drop vanished ones. Throttled, since rebases
@@ -525,7 +497,7 @@ mapRowThroughEdit oldLs newLs target = do
 data Refreshed
   = Dropped
   | Unchanged FilePath
-  | Replaced Types.FileView
+  | Replaced Types.FileView (Int -> Int)
 
 data Refresh = Refresh
   { rfRebase :: Maybe Git.RebaseStatus
@@ -604,7 +576,7 @@ refreshOne st mode existing name =
 reloadOne :: Types.St -> Git.ReviewMode -> FilePath -> IO Refreshed
 reloadOne st mode name =
   fmap
-    (maybe Dropped (Replaced . Verdict.recountIn st))
+    (maybe Dropped (\fv -> Replaced (Verdict.recountIn st fv) id))
     (loadOne (Types.stConfig st) (Types.stHls st) mode (Types.stRoot st) name)
 
 refreshWorking :: Types.St -> Git.ReviewMode -> FilePath -> Types.FileView -> IO Refreshed
@@ -623,7 +595,7 @@ refreshWorking st mode name fv = do
         then pure (Unchanged name)
         else do
           (rebuilt, _) <- rebuildFV (Types.stConfig st) (Types.repoText st) fv {Types.fvBase = base}
-          pure (Replaced (Verdict.recountIn st rebuilt))
+          pure (Replaced (Verdict.recountIn st rebuilt) id)
 
 refreshAtRef :: Types.St -> Git.ReviewMode -> T.Text -> FilePath -> Types.FileView -> IO Refreshed
 refreshAtRef st mode tip name fv = do
@@ -636,7 +608,11 @@ refreshAtRef st mode tip name fv = do
       _ -> Nothing
   if now == shown && base == Types.fvBase fv
     then pure (Unchanged name)
-    else reloadOne st mode name
+    else do
+      refreshed <- reloadOne st mode name
+      case (refreshed, shown, now) of
+        (Replaced fresh _, Just oldLs, Just newLs) -> fmap (Replaced fresh) (rowsThroughEdit oldLs newLs)
+        _ -> pure refreshed
 
 -- hand-opened files stay in the session even when the change set
 -- doesn't claim them; once git stops seeing a difference (say the
@@ -653,7 +629,7 @@ refreshOpened st mode existing path =
       if base == buf && Types.fvBase fv /= buf
         then do
           (rebuilt, _) <- rebuildFV (Types.stConfig st) (Types.repoText st) fv {Types.fvBase = buf}
-          pure (Replaced (Verdict.recountIn st rebuilt))
+          pure (Replaced (Verdict.recountIn st rebuilt) id)
         else pure (Unchanged path)
 
 applyRefresh :: Int -> Either T.Text Refresh -> Brick.EventM Types.Name Types.St ()
@@ -670,7 +646,11 @@ applyRefresh epoch outcome = do
       refreshGit
 
 installRefresh :: Types.St -> Refresh -> Brick.EventM Types.Name Types.St ()
-installRefresh before refresh = do
+installRefresh before refresh =
+  (if currentReplaced before refresh then Nav.withCursorHeld else id) (installRefreshed before refresh)
+
+installRefreshed :: Types.St -> Refresh -> Brick.EventM Types.Name Types.St ()
+installRefreshed before refresh = do
   let
     gitMoved =
       rfHead refresh /= Types.stHead before
@@ -691,7 +671,7 @@ installRefresh before refresh = do
     resolve r = case r of
       Dropped -> Nothing
       Unchanged path -> Map.lookup path current
-      Replaced fv -> Just (Verdict.recountIn latest (mergeLive source current fv))
+      Replaced fv mapRow -> Just (Verdict.recountIn latest (mergeLive source current mapRow fv))
     remaining = Maybe.mapMaybe resolve (rfResults refresh)
   Monad.forM_ remaining (MonadIO.liftIO . Types.stWatch latest . Types.fileDir (Types.stRoot latest) . Types.fvPath)
   Monad.when gitMoved (MonadIO.liftIO (Watch.watchTracked (Types.stWatch latest) (Types.stRoot latest)))
@@ -702,8 +682,17 @@ installRefresh before refresh = do
   Monad.when (Types.stWalk settled == Types.WalkTour && not (null (Types.stTour settled)) && null (Tour.tourOrder settled)) $
     State.modify (\s -> s {Types.stWalk = Types.WalkPending, Types.stMsg = "the tour's hunks left the view \8212 walking pending hunks"})
 
-mergeLive :: Git.FileSource -> Map.Map FilePath Types.FileView -> Types.FileView -> Types.FileView
-mergeLive source current fv =
+currentReplaced :: Types.St -> Refresh -> Bool
+currentReplaced before refresh =
+  let
+    replaces fv r = case r of
+      Replaced fresh _ -> Types.fvPath fresh == Types.fvPath fv
+      _ -> False
+  in
+    maybe False (\fv -> any (replaces fv) (rfResults refresh)) (Types.currentFileMay before)
+
+mergeLive :: Git.FileSource -> Map.Map FilePath Types.FileView -> (Int -> Int) -> Types.FileView -> Types.FileView
+mergeLive source current mapRow fv =
   case Map.lookup (Types.fvPath fv) current of
     Nothing -> fv
     Just live
@@ -712,18 +701,33 @@ mergeLive source current fv =
       | otherwise ->
           case source of
             Git.FromWorkingTree -> live {Types.fvBase = Types.fvBase fv, Types.fvStale = True}
-            Git.FromRef _ -> fv {Types.fvEd = cursorCarried live fv, Types.fvOrigin = Types.fvOrigin live}
-
-cursorCarried :: Types.FileView -> Types.FileView -> Modal.EdState
-cursorCarried live fresh = placeCursor (Modal.cursorRC (Types.fvEd live)) (Types.fvEd fresh)
+            Git.FromRef _ -> fv {Types.fvEd = carryEditor mapRow (Types.fvEd live) (Types.fvEd fv), Types.fvOrigin = Types.fvOrigin live}
 
 placeCursor :: (Int, Int) -> Modal.EdState -> Modal.EdState
-placeCursor (row, col) ed =
+placeCursor pos ed =
+  ed {Modal.edZipper = Z.moveCursor (clampPosition ed pos) (Modal.edZipper ed)}
+
+clampPosition :: Modal.EdState -> (Int, Int) -> (Int, Int)
+clampPosition ed (row, col) =
   let
     landing = max 0 (min row (Modal.bufferLineCount ed - 1))
     width = maybe 0 T.length (Types.safeIdx (Modal.bufferLines ed) landing)
   in
-    ed {Modal.edZipper = Z.moveCursor (landing, max 0 (min col width)) (Modal.edZipper ed)}
+    (landing, max 0 (min col width))
+
+carryEditor :: (Int -> Int) -> Modal.EdState -> Modal.EdState -> Modal.EdState
+carryEditor mapRow old fresh =
+  let
+    through (row, col) = (mapRow row, col)
+    !anchor = case Modal.edSelAnchor old of
+      Nothing -> Nothing
+      Just pos -> let !(r, c) = clampPosition fresh (through pos) in Just (r, c)
+  in
+    (placeCursor (through (Modal.cursorRC old)) fresh)
+      { Modal.edSelAnchor = anchor
+      , Modal.edSelKind = Modal.edSelKind old
+      , Modal.edExtend = Modal.edExtend old
+      }
 
 applyChangeSet :: [Types.FileView] -> Brick.EventM Types.Name Types.St ()
 applyChangeSet remaining = do
