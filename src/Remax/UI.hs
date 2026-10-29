@@ -231,6 +231,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stCountedVerdicts = suVerdicts startup
     , Types.stCountedThreads = suThreads startup
     , Types.stHighlighting = Nothing
+    , Types.stFindingUses = Nothing
     , Types.stJobs = suJobs startup
     , Types.stSettleBeat = suSettleBeat startup
     , Types.stWorkSlots = suSlots startup

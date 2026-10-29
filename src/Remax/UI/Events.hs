@@ -40,6 +40,7 @@ import Remax.UI.Action.Submit qualified as SubmitAction
 import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Action.Tree qualified as TreeAction
 import Remax.UI.Action.TreeKeys qualified as TreeKeys
+import Remax.UI.Action.Uses qualified as Uses
 import Remax.UI.Action.Verdicts qualified as VerdictAction
 import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
@@ -585,6 +586,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'v') [] -> VerdictAction.revertTarget
         V.EvKey (V.KChar 'a') [] -> Open.gotoAltFile
         V.EvKey (V.KChar '/') [] -> PickerAction.openGrepPicker ""
+        V.EvKey (V.KChar 'm') [] -> Uses.usesUnderCursor
         V.EvKey (V.KChar 'c') [] -> VerdictAction.showCommitPopup
         V.EvKey (V.KChar 'o') [] -> Menus.pullView
         V.EvKey (V.KChar 'i') [] -> InboxAction.openInbox
@@ -666,6 +668,7 @@ helixGoKey c =
     'r' -> Just PickerAction.openRepoPicker
     'n' -> Just (Open.switchFile 1)
     'p' -> Just (Open.switchFile (-1))
+    'R' -> Just Uses.usesUnderCursor
     _ -> Nothing
 
 helixNormalKey :: Int -> Types.FileView -> Modal.EdState -> V.Event -> Brick.EventM Types.Name Types.St ()

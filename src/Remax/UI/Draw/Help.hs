@@ -105,6 +105,7 @@ pendingMenu label =
             , ("n", "next file")
             , ("p", "previous file")
             , ("r", "another repository")
+            , ("R", "hunks mentioning this name")
             ]
           )
       "m" -> Just ("match", fromMatch)

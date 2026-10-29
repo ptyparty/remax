@@ -44,6 +44,7 @@ pickerMatchRow pk boxWidth (i, display) =
     shownText = T.take (boxWidth - 4) display
     content = case Types.pkMode pk of
       Types.PickGrep -> Fuzzy.highlightInfix (Types.pkInput pk) shownText
+      Types.PickUses _ -> Fuzzy.highlightInfix (Types.pkInput pk) shownText
       _ -> Fuzzy.highlightSubseq (Types.pkInput pk) shownText
     line = Brick.padRight Brick.Max (Brick.txt " " <+> content)
   in
@@ -61,6 +62,13 @@ pickerCounter :: Types.Picker -> T.Text
 pickerCounter pk =
   case Types.pkMode pk of
     Types.PickGrep -> Types.tshow (length (Types.pkMatches pk)) <> " hits"
+    Types.PickUses up ->
+      let
+        more = case Types.upExtent up of
+          Types.UsesComplete -> ""
+          Types.UsesCapped -> "+, the first shown"
+      in
+        Types.tshow (length (Types.pkMatches pk)) <> "/" <> Types.tshow (length (Types.upHits up)) <> more
     _ -> Types.tshow (length (Types.pkMatches pk)) <> "/" <> Types.tshow (length (Types.pkAll pk))
 
 pickerTitle :: Types.PickerMode -> T.Text
@@ -76,6 +84,7 @@ pickerTitle mode =
     Types.PickGrep -> "grep"
     Types.PickPull -> "open pull requests"
     Types.PickRange rp -> "review head " <> Types.rpHead rp <> " against"
+    Types.PickUses up -> "hunks mentioning " <> Types.upName up
 
 pickerHint :: Types.PickerMode -> T.Text
 pickerHint mode =
@@ -88,4 +97,5 @@ pickerHint mode =
     Types.PickRepo -> "\8593\8595 moves · \9166 switches to this repository · Esc closes"
     Types.PickPull -> "\8593\8595 moves · \9166 opens in review mode · Esc closes · :pr N skips the picker"
     Types.PickRange _ -> "\8593\8595 moves · \9166 reviews against the row · Esc keeps the base"
+    Types.PickUses _ -> "\8593\8595 moves · \9166 goes to the line · ' returns to the hunk under review · Esc closes"
     _ -> "\8593\8595 moves · \9166 opens · Esc closes"

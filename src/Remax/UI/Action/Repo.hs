@@ -130,6 +130,7 @@ arriveAt target remembered saved mode passId loaded = do
         , Types.stGitQueued = False
         , Types.stReloading = Map.empty
         , Types.stHighlighting = Nothing
+        , Types.stFindingUses = Nothing
         , Types.stFiles = files
         , Types.stVerdicts = verdicts
         , Types.stThreads = threads

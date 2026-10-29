@@ -7,6 +7,8 @@ module Remax.UI.Action.Search
   , openSearchPrompt
   , searchRepeat
   , searchStep
+  , wordUnderCursor
+  , isIdentChar
   ) where
 
 import Brick qualified as Brick
@@ -34,8 +36,16 @@ searchWordBackward = searchWordDir (-1)
 searchWordDir :: Int -> Brick.EventM Types.Name Types.St ()
 searchWordDir dir = do
   st <- State.get
+  case wordUnderCursor (Types.fvEd (Types.currentFile st)) of
+    Nothing -> State.modify (\s -> s {Types.stMsg = "no word under cursor"})
+    Just needle -> do
+      State.modify
+        (\s -> s {Types.stLastSearch = needle, Types.stGrepNav = Nothing, Types.stSearchDir = dir})
+      searchStep dir needle
+
+wordUnderCursor :: Modal.EdState -> Maybe T.Text
+wordUnderCursor ed =
   let
-    ed = Types.fvEd (Types.currentFile st)
     ls = Modal.bufferLines ed
     rowText r = Maybe.fromMaybe "" (Types.safeIdx ls r)
     -- only a deliberate v-extend selection overrides the cursor word;
@@ -50,7 +60,6 @@ searchWordDir dir = do
             l = rowText lr
           in
             Just (T.take (hc + 1 - lc) (T.drop lc l))
-    isIdent ch = Char.isAlphaNum ch || ch == '_' || ch == '\''
     wordNeedle =
       let
         (row, col) = Modal.cursorRC ed
@@ -58,26 +67,25 @@ searchWordDir dir = do
         -- on punctuation, scan forward to the next word on the line
         -- (vim's * does the same) rather than giving up
         effCol =
-          if col < T.length l && isIdent (T.index l col)
+          if col < T.length l && isIdentChar (T.index l col)
             then Just col
-            else fmap (col +) (T.findIndex isIdent (T.drop col l))
+            else fmap (col +) (T.findIndex isIdentChar (T.drop col l))
       in
         case effCol of
           Nothing -> Nothing
           Just c ->
             let
               start =
-                T.length (T.dropWhileEnd isIdent (T.take c l))
+                T.length (T.dropWhileEnd isIdentChar (T.take c l))
               len =
-                T.length (T.takeWhile isIdent (T.drop start l))
+                T.length (T.takeWhile isIdentChar (T.drop start l))
             in
               Just (T.take len (T.drop start l))
-  case selectionNeedle <|> wordNeedle of
-    Nothing -> State.modify (\s -> s {Types.stMsg = "no word under cursor"})
-    Just needle -> do
-      State.modify
-        (\s -> s {Types.stLastSearch = needle, Types.stGrepNav = Nothing, Types.stSearchDir = dir})
-      searchStep dir needle
+  in
+    selectionNeedle <|> wordNeedle
+
+isIdentChar :: Char -> Bool
+isIdentChar ch = Char.isAlphaNum ch || ch == '_' || ch == '\''
 
 -- `/` searches forward and vi's `?` backward; the prompt wears whichever
 -- sigil opened it, and n/N repeat along that grain rather than always

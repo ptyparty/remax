@@ -159,6 +159,7 @@ executable remax
       Remax.UI.Action.Threads
       Remax.UI.Action.Tree
       Remax.UI.Action.TreeKeys
+      Remax.UI.Action.Uses
       Remax.UI.Action.Verdicts
       Remax.UI.Core.Anchor
       Remax.UI.Core.Attrs
