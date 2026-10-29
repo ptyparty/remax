@@ -10,6 +10,10 @@ module Remax.Git
   , pullLocal
   , pullHeadRef
   , pullBaseRef
+  , pullBaseTipRef
+  , liveBase
+  , BranchStanding (..)
+  , branchStanding
   , pullAtHead
   , pushedHeadRef
   , withBase
@@ -136,6 +140,39 @@ pullHeadRef n = "refs/remax/pull/" <> T.pack (show n) <> "/head"
 
 pullBaseRef :: Int -> T.Text
 pullBaseRef n = "refs/remax/pull/" <> T.pack (show n) <> "/base"
+
+pullBaseTipRef :: Int -> T.Text
+pullBaseTipRef n = "refs/remax/pull/" <> T.pack (show n) <> "/base-tip"
+
+liveBase :: FilePath -> PullRequest -> IO (Maybe T.Text)
+liveBase root pr = do
+  let
+    n = prNumber pr
+  haveTip <- refExists root (pullBaseTipRef n)
+  let
+    against = if haveTip then pullBaseTipRef n else pullBaseRef n
+  (code, out, _) <-
+    Process.readProcessWithExitCode "git" ["-C", root, "merge-base", "HEAD", T.unpack against] ""
+  pure $ case (code, T.strip (T.pack out)) of
+    (Exit.ExitSuccess, sha) | not (T.null sha) -> Just sha
+    _ -> Nothing
+
+data BranchStanding
+  = OnBranch
+  | RebasingBranch RebaseStatus
+  | OffBranch (Maybe RebaseStatus)
+  deriving (Eq, Show)
+
+branchStanding :: FilePath -> PullRequest -> IO BranchStanding
+branchStanding root pr = do
+  rebase <- rebaseStatus root
+  case rebase of
+    Just rb
+      | rebaseBranch rb == Just (prHeadBranch pr) -> pure (RebasingBranch rb)
+      | otherwise -> pure (OffBranch (Just rb))
+    Nothing -> do
+      branch <- currentBranch root
+      pure (if branch == Just (prHeadBranch pr) then OnBranch else OffBranch Nothing)
 
 pullAtHead :: PullRequest -> PullRequest
 pullAtHead pr = pr {prTip = pullHeadRef (prNumber pr), prBase = pullBaseRef (prNumber pr)}
@@ -751,10 +788,15 @@ data PullLocal = PullLocal
 pullLocal :: FilePath -> PullRequest -> IO PullLocal
 pullLocal root pr = do
   dirty <- trackedChanges root
+  let
+    n = prNumber pr
+  haveTip <- refExists root (pullBaseTipRef n)
   (code, out, _) <-
     Process.readProcessWithExitCode
       "git"
-      ["-C", root, "rev-list", "--count", T.unpack (pullHeadRef (prNumber pr)) ++ "..HEAD"]
+      ( ["-C", root, "rev-list", "--count", "HEAD", "^" ++ T.unpack (pullHeadRef n)]
+          ++ ["^" ++ T.unpack (pullBaseTipRef n) | haveTip]
+      )
       ""
   pure
     PullLocal
@@ -825,6 +867,7 @@ data RebaseStatus = RebaseStatus
   , rebaseSha :: T.Text -- short sha of the stopped commit ("" when unknown)
   , rebaseSubject :: T.Text
   , rebaseStop :: RebaseStop
+  , rebaseBranch :: Maybe T.Text
   }
   deriving (Eq, Show)
 
@@ -886,6 +929,7 @@ rebaseStatus root = do
           (p1 : _) -> p1
           [] -> ("", "")
       stop <- mergeBackendStop root dir
+      headName <- readFileOr "" (dir </> "head-name")
       pure . Just $
         RebaseStatus
           { rebaseStep = length donePicks
@@ -893,6 +937,7 @@ rebaseStatus root = do
           , rebaseSha = sha
           , rebaseSubject = subject
           , rebaseStop = stop
+          , rebaseBranch = T.stripPrefix "refs/heads/" (T.strip headName)
           }
     Nothing -> do
       -- the am-based backend (git rebase --apply, git am): no todo, just
@@ -914,6 +959,7 @@ rebaseStatus root = do
               , rebaseSha = ""
               , rebaseSubject = ""
               , rebaseStop = ConflictStop Nothing
+              , rebaseBranch = Nothing
               }
 
 mergeBackendStop :: FilePath -> FilePath -> IO RebaseStop

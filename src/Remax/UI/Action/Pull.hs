@@ -322,9 +322,22 @@ editPull = do
   st <- State.get
   case Types.stMode st of
     Git.AtPull pr Git.Checkout -> Types.setMsg (Git.pullLabel pr <> " is already in edit mode \8212 :pr review returns to the fetched head")
-    Git.AtPull pr Git.ReadOnly
-      | Just rb <- Types.stRebase st -> editAtRebaseStop pr rb
-      | otherwise -> checkoutPull st pr
+    Git.AtPull pr Git.ReadOnly -> do
+      standing <- MonadIO.liftIO (Git.branchStanding (Types.stRoot st) pr)
+      case standing of
+        Git.OnBranch -> do
+          Settings.setMode (Git.AtPull (Git.pullAtHead pr) Git.Checkout)
+          Types.setMsg ("editing " <> Git.pullLabel pr <> " on " <> Git.prHeadBranch pr)
+        Git.RebasingBranch rb -> editAtRebaseStop pr rb
+        Git.OffBranch (Just rb) ->
+          Types.setMsg
+            ( "this checkout is rebasing "
+                <> Maybe.fromMaybe "a detached HEAD" (Git.rebaseBranch rb)
+                <> ", not "
+                <> Git.prHeadBranch pr
+                <> " \8212 :continue or :abort! first"
+            )
+        Git.OffBranch Nothing -> checkoutPull st pr
     _ -> Types.setMsg noPullOpen
 
 editAtRebaseStop :: Git.PullRequest -> Git.RebaseStatus -> Brick.EventM Types.Name Types.St ()

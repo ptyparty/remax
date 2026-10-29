@@ -448,18 +448,27 @@ the pull request: a range that drops its stops walks pending hunks and
 says so.
 
 `:pr edit` switches to feedback mode, for addressing the comments on your
-own pull request. On the pull request's branch it checks nothing out, so
-your changes stay as they are; elsewhere it runs `gh pr checkout N`, which
-brings uncommitted changes along unless git refuses them. It then reviews
-the working tree against the pull request's base. Mid-rebase it checks nothing out: it reviews the
-working tree at the current stop against the pull request's base, the git
-bar shows the stop, and `:continue` folds the edits into the stopped
-commit as it does in any rebase. Open each pull request of a stack in
-turn this way to address its feedback in the commit it belongs to.
-The git bar's chip reads `edit`. The files
-are editable, and `!` and `?` mean what they do anywhere else. A tour
-stays with the pull request across both modes. `:pr review` returns to
-the read-only head as fetched.
+own pull request. Edit mode works only on the pull request's branch: on
+it, or at a stop of a rebase that is rewriting it. On the branch it
+checks nothing out, so your changes stay as they are; elsewhere it runs
+`gh pr checkout N`, which brings uncommitted changes along unless git
+refuses them, and at a stop of some other branch's rebase it refuses and
+names that branch. It then reviews the working tree against the
+merge-base of `HEAD` and the base branch's fetched tip, worked out again
+on every refresh, so rebasing the branch onto a newer base adds none of
+the base's changes to the diff, and the `N unpushed` count holds only
+commits on neither the fetched head nor the base. When a refresh finds
+the tree has left the branch, after `:checkout` or a checkout from a
+shell, the session drops back to read-only and says so. At a stop of
+the branch's own rebase it shows the stopped commit alone, as the
+working tree does at a stop: the git bar keeps the pull request's bar
+with `⟳ stop k/n`, the unpushed count is hidden until the rebase ends,
+and `:continue` folds the edits into the stopped commit as it does in
+any rebase. Open each pull request of a stack in turn this way to
+address its feedback in the commit it belongs to. The git bar's chip
+reads `edit`. The files are editable, and `!` and `?` mean what they do
+anywhere else. A tour stays with the pull request across both modes.
+`:pr review` returns to the read-only head as fetched.
 
 ### GitHub threads in the body
 

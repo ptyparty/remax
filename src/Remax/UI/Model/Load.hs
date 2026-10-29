@@ -500,7 +500,9 @@ data Refreshed
   | Replaced Types.FileView (Int -> Int)
 
 data Refresh = Refresh
-  { rfRebase :: Maybe Git.RebaseStatus
+  { rfMode :: Git.ReviewMode
+  , rfNotice :: Maybe T.Text
+  , rfRebase :: Maybe Git.RebaseStatus
   , rfBranch :: Maybe T.Text
   , rfHead :: Maybe (T.Text, T.Text)
   , rfBaseAt :: Maybe T.Text
@@ -534,10 +536,11 @@ refreshWork st = do
     root = Types.stRoot st
     existing = Map.fromList (map (\fv -> (Types.fvPath fv, fv)) (Types.stFiles st))
   rebaseNow <- Git.rebaseStatus root
+  (modeNow, notice) <- editModeNow root (Types.stMode st)
   let
-    mode = Types.rebaseEffMode rebaseNow (Types.stMode st)
+    mode = Types.rebaseEffMode rebaseNow modeNow
   (branchNow, headNow) <- Git.subjectPlace mode root
-  baseAt <- case Git.subjectOf mode of
+  baseAt <- case Git.subjectOf modeNow of
     Git.Pull pr _ -> fmap (fmap fst) (Git.commitAt root (Git.prBase pr))
     _ -> pure Nothing
   local <- case Git.subjectOf mode of
@@ -562,7 +565,23 @@ refreshWork st = do
       (Git.reviewFiles mode (Config.cfgUntracked (Types.stConfig st)) root)
   refreshed <- Jobs.forBounded 8 guarded names
   extras <- Monad.forM (filter (`notElem` names) (Set.toList (Types.stOpened st))) (refreshOpened st mode existing)
-  pure (Refresh rebaseNow branchNow headNow baseAt local (refreshed ++ extras))
+  pure (Refresh modeNow notice rebaseNow branchNow headNow baseAt local (refreshed ++ extras))
+
+editModeNow :: FilePath -> Git.ReviewMode -> IO (Git.ReviewMode, Maybe T.Text)
+editModeNow root mode =
+  case mode of
+    Git.AtPull pr Git.Checkout -> do
+      standing <- Git.branchStanding root pr
+      case standing of
+        Git.OffBranch _ ->
+          pure
+            ( Git.AtPull (Git.pullAtHead pr) Git.ReadOnly
+            , Just ("the tree left " <> Git.prHeadBranch pr <> " \8212 " <> Git.pullLabel pr <> " is read-only again; :pr edit resumes")
+            )
+        _ -> do
+          base <- Git.liveBase root pr
+          pure (Git.AtPull pr {Git.prBase = Maybe.fromMaybe (Git.prBase pr) base} Git.Checkout, Nothing)
+    _ -> pure (mode, Nothing)
 
 refreshOne :: Types.St -> Git.ReviewMode -> Map.Map FilePath Types.FileView -> FilePath -> IO Refreshed
 refreshOne st mode existing name =
@@ -656,9 +675,16 @@ installRefreshed before refresh = do
       rfHead refresh /= Types.stHead before
         || rfBranch refresh /= Types.stBranch before
         || rfRebase refresh /= Types.stRebase before
+    modeMoved = rfMode refresh /= Types.stMode before
+    subjectMoved = Git.sourceOf (rfMode refresh) /= Git.sourceOf (Types.stMode before)
+  Monad.when modeMoved $
+    MonadIO.liftIO (Tour.recordView (Types.stConn before) (Types.stRoot before) (Types.rebaseEffMode (rfRebase refresh) (rfMode refresh)))
   State.modify $ \s ->
     s
-      { Types.stRebase = rfRebase refresh
+      { Types.stMode = rfMode refresh
+      , Types.stOpened = if subjectMoved then Set.empty else Types.stOpened s
+      , Types.stMsg = Maybe.fromMaybe (Types.stMsg s) (rfNotice refresh)
+      , Types.stRebase = rfRebase refresh
       , Types.stBranch = rfBranch refresh
       , Types.stHead = rfHead refresh
       , Types.stBaseAt = rfBaseAt refresh
