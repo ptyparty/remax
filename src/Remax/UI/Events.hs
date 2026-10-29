@@ -423,7 +423,7 @@ handleModalKey ev = do
       Config.KeysEmacs -> handleEmacsKey i ed ev
       Config.KeysVi -> handleViKey i ed ev
       Config.KeysHelix -> handleHelixKey i fv ed ev
-  case Types.stBand st of
+  case Types.currentBand st of
     Just band | Modal.edMode ed == Modal.Normal && Maybe.isNothing (Types.stEmacsPrefix st) -> handleBandKey keys band ev dispatch
     _
       | Types.stZPending st -> do
@@ -438,7 +438,7 @@ handleModalKey ev = do
 handleBandKey :: Config.KeyMode -> Types.Band -> V.Event -> Brick.EventM Types.Name Types.St () -> Brick.EventM Types.Name Types.St ()
 handleBandKey keys band ev dispatch = do
   zPending <- State.gets Types.stZPending
-  State.modify (\s -> s {Types.stBand = Just band {Types.bandDeleting = False}, Types.stZPending = False})
+  State.modify (\s -> (Types.overBand (\b -> b {Types.bandDeleting = False}) s) {Types.stZPending = False})
   let
     plain = keys /= Config.KeysEmacs
     acted act = do
@@ -467,7 +467,7 @@ handleBandKey keys band ev dispatch = do
     V.EvKey V.KEnter [] | plain -> acted ThreadAction.takeKey
     V.EvKey (V.KChar 'd') []
       | plain && Types.bandDeleting band -> acted ThreadAction.discardKey
-      | plain -> State.modify (\s -> s {Types.stBand = Just band {Types.bandDeleting = True}})
+      | plain -> State.modify (Types.overBand (\b -> b {Types.bandDeleting = True}))
     V.EvKey (V.KChar 'z') [] | plain -> State.modify (\s -> s {Types.stZPending = True})
     V.EvKey (V.KChar 'a') [] | plain && zPending -> ThreadAction.toggleFoldAtBand
     V.EvKey (V.KChar 'c') [V.MCtrl] | not plain -> State.modify (\s -> s {Types.stEmacsPrefix = Just 'c'})
@@ -541,7 +541,7 @@ handleEmacsPrefixed pfx ev = do
   st <- State.get
   let
     onPost act fallback =
-      if Maybe.isJust (Types.stBand st)
+      if Maybe.isJust (Types.currentBand st)
         then do
           handled <- act
           case handled of
@@ -557,7 +557,7 @@ handleEmacsPrefixed pfx ev = do
     _ ->
       case ev of
         V.EvKey V.KEnter []
-          | Maybe.isJust (Types.stBand st) -> actOr ThreadAction.takeKey (pure ())
+          | Maybe.isJust (Types.currentBand st) -> actOr ThreadAction.takeKey (pure ())
           | otherwise -> VerdictAction.acceptSelection
         V.EvKey (V.KChar 'c') [V.MCtrl] -> actOr ThreadAction.takeKey (pure ())
         V.EvKey (V.KChar '!') [] -> onPost ThreadAction.flagKey (NoteAction.markThenNote Store.Flagged)

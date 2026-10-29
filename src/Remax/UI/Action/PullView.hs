@@ -79,8 +79,8 @@ handlePullViewKey ev = do
       case handled of
         ThreadAction.Handled -> pure ()
         ThreadAction.Unhandled -> Types.setMsg "not on this post"
-    deleting = maybe False Types.bandDeleting (Types.stBand st)
-  State.modify (\s -> s {Types.stBand = fmap (\b -> b {Types.bandDeleting = False}) (Types.stBand s)})
+    deleting = maybe False Types.bandDeleting (Types.currentBand st)
+  State.modify (Types.overBand (\b -> b {Types.bandDeleting = False}))
   case ev of
     V.EvKey V.KEsc [] -> closePullView
     V.EvKey (V.KChar 'c') [V.MCtrl] | not plain -> State.modify (\s -> s {Types.stEmacsPrefix = Just 'c'})
@@ -107,7 +107,7 @@ handlePullViewKey ev = do
           foldHere
     V.EvKey (V.KChar 'd') []
       | plain && deleting -> acted ThreadAction.discardKey
-      | plain -> State.modify (\s -> s {Types.stBand = fmap (\b -> b {Types.bandDeleting = True}) (Types.stBand s)})
+      | plain -> State.modify (Types.overBand (\b -> b {Types.bandDeleting = True}))
     V.EvKey V.KEnter [] -> enterKey
     V.EvKey (V.KChar ' ') [] | plain -> State.modify (\s -> s {Types.stSpace = True})
     V.EvKey (V.KChar ':') [] | plain -> pure ()
@@ -123,23 +123,13 @@ moveStop d = do
     next = case here of
       Just i -> Types.safeIdx all_ (max 0 (min (length all_ - 1) (i + d)))
       Nothing -> if d > 0 then Types.safeIdx all_ 0 else Types.safeIdx all_ (length all_ - 1)
-  State.modify (selectStop next)
+  State.modify (Types.setStop next)
 
-selectStop :: Maybe PullView.Stop -> Types.St -> Types.St
-selectStop stop s =
-  let
-    (band, commit) = case stop of
-      Just (PullView.PostStop cid i) -> (Just (Types.Band cid i False), Nothing)
-      Just (PullView.CommitStop sha) -> (Nothing, Just sha)
-      Nothing -> (Nothing, Nothing)
-  in
-    s {Types.stBand = band, Types.stPullView = fmap (\pv -> pv {Types.pvCommit = commit}) (Types.stPullView s)}
-
-stopConv :: PullView.Stop -> Maybe Conv.ConversationId
+stopConv :: Types.Stop -> Maybe Conv.ConversationId
 stopConv stop =
   case stop of
-    PullView.PostStop cid _ -> Just cid
-    PullView.CommitStop _ -> Nothing
+    Types.PostStop cid _ -> Just cid
+    Types.CommitStop _ -> Nothing
 
 {- | Moves to the newest post of the next thread awaiting your answer,
 wrapping around the timeline.
@@ -162,7 +152,7 @@ jumpAwaiting d = do
       Nothing -> if d > 0 then Maybe.listToMaybe candidates else Maybe.listToMaybe (reverse candidates)
       Just _ -> if d > 0 then Maybe.listToMaybe (after ++ before) else Maybe.listToMaybe (reverse before ++ reverse after)
   case target of
-    Just b -> State.modify (selectStop (Just b))
+    Just b -> State.modify (Types.setStop (Just b))
     Nothing ->
       if null newest
         then Types.setMsg "no thread awaits you"
@@ -209,7 +199,7 @@ foldHere :: Brick.EventM Types.Name Types.St ()
 foldHere = do
   st <- State.get
   case (PullView.selectedStop st, ThreadAction.bandPost st) of
-    (Just (PullView.CommitStop sha), _) -> toggleMessage st sha
+    (Just (Types.CommitStop sha), _) -> toggleMessage st sha
     (_, Just _) -> ThreadAction.toggleFoldAtBand
     _ -> Types.setMsg "j onto a thread's post or a commit first"
 
@@ -230,7 +220,7 @@ enterKey :: Brick.EventM Types.Name Types.St ()
 enterKey = do
   st <- State.get
   case (PullView.selectedStop st, ThreadAction.bandPost st) of
-    (Just (PullView.CommitStop sha), _) -> PullAction.walkToCommit sha
+    (Just (Types.CommitStop sha), _) -> PullAction.walkToCommit sha
     (_, Just (conv, _, post)) ->
       case (Conv.postState post, Conv.convAnchor conv) of
         (Conv.Proposal _ _, _) -> Monad.void ThreadAction.takeKey

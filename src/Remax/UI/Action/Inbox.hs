@@ -23,6 +23,7 @@ import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Core.Inbox qualified as Inbox
 import Remax.UI.Core.PullView qualified as PullView
+import Remax.UI.Core.Threads qualified as Threads
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.View qualified as View
 import Remax.UI.Model.Nav qualified as Nav
@@ -165,19 +166,12 @@ nearestHunk st row = do
 replyTo :: Conv.Conversation -> Brick.EventM Types.Name Types.St ()
 replyTo conv =
   let
-    posted (i, post) = case Conv.postState post of
-      Conv.Posted {} -> Just i
-      _ -> Nothing
-    newestPosted = Maybe.listToMaybe (reverse (Maybe.mapMaybe posted (zip [0 ..] (Conv.convPosts conv))))
+    newestPosted = List.find Threads.isPosted (reverse (Conv.convPosts conv))
   in
     case (Conv.convVenue conv, newestPosted) of
       (Conv.LocalOnly _, _) -> Types.setMsg "a note is talk with the agent \183 \9166 goes to its lines"
       (_, Nothing) -> Types.setMsg "nothing posted to reply to yet"
-      (_, Just i) -> do
-        before <- State.gets Types.stBand
-        State.modify (\s -> s {Types.stBand = Just (Types.Band (Conv.convId conv) i False)})
-        Monad.void ThreadAction.replyKey
-        State.modify (\s -> s {Types.stBand = before})
+      (_, Just post) -> Monad.void (ThreadAction.replyToPost conv post)
 
 filterKey :: V.Event -> Types.Inbox -> Brick.EventM Types.Name Types.St ()
 filterKey ev inbox =

@@ -18,6 +18,7 @@ module Remax.UI.Core.Threads
   , awaitsYou
   , proposedComments
   , isProposal
+  , isPosted
   , anchorPlace
   , takenAs
   , authorName
@@ -109,7 +110,7 @@ postLines st width conv =
       Conv.LocalOnly _ -> True
       _ -> False
     keys = Config.cfgKeys (Types.stConfig st)
-    selected = case Types.stBand st of
+    selected = case Types.currentBand st of
       Just band | Types.bandConv band == cid -> Just (Types.bandPost band)
       _ -> Nothing
     column = authorColumn posts

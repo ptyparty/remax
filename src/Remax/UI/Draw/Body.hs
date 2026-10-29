@@ -217,7 +217,7 @@ rowImages paneWidth st fv pens numW hOff item =
         , rpVerdict = verdict
         , rpMark = riMark item
         }
-    selectedPost = case Types.stBand st of
+    selectedPost = case Types.currentBand st of
       Just band -> Just (Types.bandConv band, Types.bandPost band)
       Nothing -> Nothing
     -- reviewed lines keep their full syntax colors; the gutter dot
