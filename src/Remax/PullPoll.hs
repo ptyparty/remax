@@ -77,12 +77,16 @@ data ReviewSummary = ReviewSummary
 data PullCommit = PullCommit
   { pullCommitSha :: T.Text
   , pullCommitSubject :: T.Text
+  , pullCommitBody :: T.Text
   , pullCommitDate :: T.Text
+  , pullCommitCommittedAt :: T.Text
+  , pullCommitAuthor :: T.Text
   }
   deriving (Eq, Show)
 
 data ForcePush = ForcePush
-  { forcePushAt :: T.Text
+  { forcePushActor :: T.Text
+  , forcePushAt :: T.Text
   , forcePushBefore :: T.Text
   , forcePushAfter :: T.Text
   }
@@ -581,12 +585,23 @@ reviewRow cells =
     _ -> Nothing
 
 commitJq :: T.Text
-commitJq = ".[] | [.sha, (.commit.message | split(\"\\n\") | .[0]), (.commit.author.date // \"\")] | @tsv"
+commitJq =
+  ".[] | (.commit.message | split(\"\\n\")) as $m | [.sha, $m[0], ($m[1:] | join(\"\\n\"))\
+  \, (.commit.author.date // \"\"), (.commit.committer.date // \"\"), (.author.login // .commit.author.name // \"\")] | @tsv"
 
 commitRow :: [T.Text] -> Maybe PullCommit
 commitRow cells =
   case cells of
-    [sha, subject, date] -> Just PullCommit {pullCommitSha = sha, pullCommitSubject = subject, pullCommitDate = date}
+    [sha, subject, body, date, committedAt, author] ->
+      Just
+        PullCommit
+          { pullCommitSha = sha
+          , pullCommitSubject = subject
+          , pullCommitBody = T.stripEnd (T.dropWhile (== '\n') body)
+          , pullCommitDate = date
+          , pullCommitCommittedAt = committedAt
+          , pullCommitAuthor = author
+          }
     _ -> Nothing
 
 readId :: T.Text -> Maybe DataInt.Int64
@@ -622,7 +637,7 @@ graphQuery =
     <> reactionsSelection
     <> " } }\
        \ timelineItems(itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT], last: 50) { nodes {\
-       \ ... on HeadRefForcePushedEvent { createdAt beforeCommit { oid } afterCommit { oid } } } }\
+       \ ... on HeadRefForcePushedEvent { actor { login } createdAt beforeCommit { oid } afterCommit { oid } } } }\
        \ mergeable labels(first: 20) { nodes { name } }\
        \ commits(last: 1) { nodes { commit { oid statusCheckRollup { state\
        \ contexts(first: 100) { nodes { __typename ... on CheckRun { name conclusion status } ... on StatusContext { context state } } } } } } } } } }"
@@ -653,7 +668,7 @@ graphJq =
     <> threadsJq "$p.reviewThreads"
     <> " + "
     <> reactionsJq "$p.comments"
-    <> " + [$p.timelineItems.nodes[] | [\"F\", (.createdAt // \"\"), (.beforeCommit.oid // \"\"), (.afterCommit.oid // \"\")]]\
+    <> " + [$p.timelineItems.nodes[] | [\"F\", (.actor.login // \"\"), (.createdAt // \"\"), (.beforeCommit.oid // \"\"), (.afterCommit.oid // \"\")]]\
        \ + [$p.commits.nodes[] | [\"C\", .commit.oid, (.commit.statusCheckRollup.state // \"\")]]\
        \ + [[\"M\", ($p.mergeable // \"\")]]\
        \ + [$p.labels.nodes[] | [\"L\", .name]]\
@@ -712,7 +727,7 @@ graphAnswer raw =
             }
       _ -> Nothing
     forcePush cells = case cells of
-      ["F", at, before, after] -> Just ForcePush {forcePushAt = at, forcePushBefore = before, forcePushAfter = after}
+      ["F", actor, at, before, after] -> Just ForcePush {forcePushActor = actor, forcePushAt = at, forcePushBefore = before, forcePushAfter = after}
       _ -> Nothing
     checks cells = case cells of
       ["C", _, state] -> Just (GitHub.checksFromRollup state)

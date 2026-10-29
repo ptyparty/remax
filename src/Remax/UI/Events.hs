@@ -569,7 +569,9 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'r') [] -> onPost ThreadAction.replyKey VerdictAction.clearVerdictBySelection
         V.EvKey (V.KChar 'R') [] -> VerdictAction.clearVerdictBySelection
         V.EvKey (V.KChar 'd') [] -> onPost ThreadAction.discardKey (pure ())
-        V.EvKey (V.KChar 'z') [] -> ThreadAction.toggleFoldAtBand
+        V.EvKey (V.KChar 'z') []
+          | Maybe.isJust (Types.stPullView st) -> PullViewAction.foldHere
+          | otherwise -> ThreadAction.toggleFoldAtBand
         V.EvKey (V.KChar '+') [] -> onPost ThreadAction.reactKey (pure ())
         V.EvKey (V.KChar 'y') [] -> onPost ThreadAction.copyKey (pure ())
         V.EvKey (V.KChar ']') []

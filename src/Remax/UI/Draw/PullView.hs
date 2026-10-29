@@ -21,8 +21,8 @@ pullViewBody st =
       let
         width = max 40 (BrickTypes.availWidth ctx - 6)
         rows = PullView.timeline st width
-        selected = fmap (\b -> (Types.bandConv b, Types.bandPost b)) (Types.stBand st)
-        bandedAt i r = selected /= Nothing && PullView.rowPost r == selected && i >= (0 :: Int)
+        selected = PullView.selectedStop st
+        bandedAt i r = selected /= Nothing && PullView.rowStop r == selected && i >= (0 :: Int)
         drawn = zipWith (\i r -> rowWidget (bandedAt i r) r) [0 ..] rows ++ [Brick.txt " "]
         bandedRows = map fst (filter (uncurry bandedAt) (zip [0 ..] rows))
         shown = case bandedRows of

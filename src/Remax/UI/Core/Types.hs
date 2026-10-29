@@ -400,8 +400,10 @@ data Inbox = Inbox
 data InboxFocus = InboxList | InboxFiltering
   deriving (Eq)
 
--- | The PR view is up; the band says which post is selected.
+-- | The PR view is up; the band says which post is selected, or pvCommit which commit.
 data PullView = PullView
+  { pvCommit :: Maybe T.Text
+  }
   deriving (Eq)
 
 -- | The eight reactions offered on one posted comment.
@@ -527,6 +529,7 @@ data St = St
   , stBand :: Maybe Band -- the post the keys act on, when the cursor has entered a thread
   , stFoldFlipped :: Set.Set Store.RemoteThreadId -- threads za opened or folded against their default
   , stOpenDetails :: Set.Set (Conv.ConversationId, Int) -- posts whose details blocks za opened
+  , stOpenCommits :: Set.Set T.Text
   , stConfirm :: Maybe Confirm
   , stCiting :: Maybe CitePicker -- the commit picker a popup opened with C-g
   , stZPending :: Bool -- a z waiting for its a, to fold
@@ -810,7 +813,7 @@ cancelKeyText keys =
     _ -> "C-c"
 
 showPullView :: St -> St
-showPullView s = s {stPullView = Just PullView, stBand = Nothing, stVi = Vi.viIdle}
+showPullView s = s {stPullView = Just PullView {pvCommit = Nothing}, stBand = Nothing, stVi = Vi.viIdle}
 
 setMsg :: T.Text -> Brick.EventM Name St ()
 setMsg t = State.modify (\s -> s {stMsg = t})

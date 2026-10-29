@@ -12,6 +12,7 @@ module Remax.UI.Action.Pull
   , reviewHeadAgainst
   , reviewPushedHead
   , startCommitWalk
+  , walkToCommit
   , walkRun
   , editPull
   , reviewPull
@@ -21,6 +22,7 @@ import Brick qualified as Brick
 import Control.Monad qualified as Monad
 import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
+import Data.List qualified as List
 import Data.List.NonEmpty qualified as NEL
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
@@ -248,14 +250,26 @@ reviewPushedHead sha = do
     _ -> Types.setMsg noPullOpen
 
 startCommitWalk :: Brick.EventM Types.Name Types.St ()
-startCommitWalk = do
+startCommitWalk = walkFrom (const (Just 0))
+
+walkToCommit :: T.Text -> Brick.EventM Types.Name Types.St ()
+walkToCommit sha = walkFrom (List.findIndex ((== sha) . PullPoll.pullCommitSha))
+
+walkFrom :: ([PullPoll.PullCommit] -> Maybe Int) -> Brick.EventM Types.Name Types.St ()
+walkFrom pick = do
   st <- State.get
   case (Types.stMode st, Types.ppSnapshot (Types.stPullPoll st)) of
     (Git.AtPull pr Git.ReadOnly, Just snap)
       | PullPoll.snapshotPull snap == Git.prNumber pr ->
-          case PullPoll.snapshotCommits snap of
-            [] -> Types.setMsg ("PR #" <> Types.tshow (Git.prNumber pr) <> " has no commits")
-            commits -> walkTo Types.CommitWalk {Types.cwPull = pr, Types.cwCommits = commits, Types.cwIndex = 0}
+          let
+            commits = PullPoll.snapshotCommits snap
+          in
+            case pick commits of
+              _ | null commits -> Types.setMsg ("PR #" <> Types.tshow (Git.prNumber pr) <> " has no commits")
+              Nothing -> Types.setMsg ("that commit is no longer on PR #" <> Types.tshow (Git.prNumber pr))
+              Just i -> do
+                State.modify (\s -> s {Types.stPullView = Nothing, Types.stBand = Nothing})
+                walkTo Types.CommitWalk {Types.cwPull = pr, Types.cwCommits = commits, Types.cwIndex = i}
     (Git.AtPull _ Git.ReadOnly, _) -> Types.setMsg "the PR's commits are still loading from GitHub \8212 :pr commits again in a moment"
     (Git.AtPull _ Git.Checkout, _) -> Types.setMsg "the commit walk is read-only \8212 :pr review returns to the fetched head"
     _ -> Types.setMsg noPullOpen

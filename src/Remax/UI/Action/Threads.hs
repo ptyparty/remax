@@ -31,6 +31,7 @@ module Remax.UI.Action.Threads
   , openWorkPopupAt
   , toggleFoldOf
   , toggleFoldAtBand
+  , toggleMember
   , switchAction
   , saveWork
   , reloadAndBand

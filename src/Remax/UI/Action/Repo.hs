@@ -167,6 +167,7 @@ arriveAt target remembered saved mode passId loaded = do
         , Types.stBand = Nothing
         , Types.stFoldFlipped = Set.empty
         , Types.stOpenDetails = Set.empty
+        , Types.stOpenCommits = Set.empty
         , Types.stConfirm = Nothing
         , Types.stCiting = Nothing
         , Types.stReacting = Nothing
