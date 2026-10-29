@@ -673,7 +673,8 @@ merged or closed pull request.
 `:pr commits` walks the pull request one commit at a time, each reviewed
 read-only against its parent. The git bar shows `commit 3/7`, and `]` past
 the last hunk of a commit moves to the next one, `[` before the first to
-the previous. `:base` returns to a range. `:pr edit` on commit k edits
+the previous. `:base` returns to a range. The walk is read-only, so from
+edit mode `:pr review` first. `:pr edit` on commit k edits
 that commit: it brings the session to the pull request's edit checkout,
 the worktree or this checkout when it is on the branch, refuses tracked
 changes there as `:rebase` does, and starts `git rebase -i` from k's

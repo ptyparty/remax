@@ -97,7 +97,7 @@ pullBar st pr editing =
         dot
           <+> Brick.withAttr
             (if Git.rebaseConflicted rb then Attrs.conflictAttr else Attrs.headerAttr)
-            (Brick.txt ("\10227 stop " <> Git.rebaseProgress rb))
+            (Brick.txt ("\10227 stop " <> Git.rebaseProgress rb <> (if Git.rebaseConflicted rb then " \183 conflict" else "")))
       _ -> Brick.emptyWidget
   in
     Brick.withDefAttr Attrs.headerRebaseAttr . Brick.padRight Brick.Max $
