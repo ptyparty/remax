@@ -742,15 +742,16 @@ applyCheckout branch
       st <- State.get
       if Just branch == Types.stBranch st
         then Types.setMsg ("already on " <> branch)
-        else if Maybe.isJust (Types.stRebase st)
-          then Types.setMsg "mid-rebase \8212 :continue or :abort! before switching branches"
-          else do
-          res <- MonadIO.liftIO (Git.runGit grant (Types.stRoot st) ["checkout", T.unpack branch])
-          case res of
-            Left e -> Types.setMsg e
-            Right () -> do
-              Load.forceGitRefresh
-              Types.setMsg ("checked out " <> branch)
+        else
+          if Maybe.isJust (Types.stRebase st)
+            then Types.setMsg "mid-rebase \8212 :continue or :abort! before switching branches"
+            else do
+              res <- MonadIO.liftIO (Git.runGit grant (Types.stRoot st) ["checkout", T.unpack branch])
+              case res of
+                Left e -> Types.setMsg e
+                Right () -> do
+                  Load.forceGitRefresh
+                  Types.setMsg ("checked out " <> branch)
 
 -- Project-wide search: git grep behind the same overlay, Enter jumping
 -- straight to the hit.
