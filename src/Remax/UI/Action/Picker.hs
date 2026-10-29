@@ -651,7 +651,7 @@ openWorktreePicker entry existing defaultPath = do
         ++ [ (Worktree.newWorktreeChoice defaultPath, [T.pack defaultPath, "new worktree", "default"])
            , (Worktree.typedPathChoice, ["type a path\8230", "new worktree", "prompt, prefilled"])
            ]
-    widths = Widgets.columnWidths [48, 20] (map snd rows)
+    widths = Widgets.columnWidths [96, 20] (map snd rows)
     shown = map (\(ref, cells) -> pickerRow ref (Widgets.columnRow widths cells) (T.unwords cells)) rows
   State.modify $ \s ->
     s {Types.stPicker = Just (refreshRowPicker (Types.Picker (Types.PickWorktree entry) "" shown [] [] 0 Set.empty))}
