@@ -6,7 +6,6 @@ module Remax.PullPoll
   , pollCachePull
   , Snapshot (..)
   , PullHead (..)
-  , PullState (..)
   , Draftness (..)
   , ConversationComment (..)
   , ReviewSummary (..)
@@ -34,9 +33,6 @@ import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.Store qualified as Store
 
-data PullState = PullOpen | PullClosed | PullMerged
-  deriving (Eq, Show)
-
 data Draftness = ReadyForReview | Draft
   deriving (Eq, Show)
 
@@ -44,7 +40,7 @@ data PullHead = PullHead
   { pullHeadSha :: T.Text
   , pullHeadBaseSha :: T.Text
   , pullHeadTitle :: T.Text
-  , pullHeadState :: PullState
+  , pullHeadState :: GitHub.PullState
   , pullHeadBranch :: T.Text
   , pullHeadBaseBranch :: T.Text
   , pullHeadAuthor :: T.Text
@@ -125,19 +121,12 @@ snapshotMeta snap =
     GitHub.PullMeta
       { GitHub.metaNumber = snapshotPull snap
       , GitHub.metaTitle = pullHeadTitle h
-      , GitHub.metaState = pullStateText (pullHeadState h)
+      , GitHub.metaState = pullHeadState h
       , GitHub.metaHeadBranch = pullHeadBranch h
       , GitHub.metaBaseBranch = pullHeadBaseBranch h
       , GitHub.metaAuthor = pullHeadAuthor h
       , GitHub.metaChecks = snapshotChecks snap
       }
-
-pullStateText :: PullState -> T.Text
-pullStateText s =
-  case s of
-    PullOpen -> "OPEN"
-    PullClosed -> "CLOSED"
-    PullMerged -> "MERGED"
 
 data ReviewComment = ReviewComment
   { reviewCommentId :: Store.CommentId
@@ -479,9 +468,9 @@ parseHead rows =
           , pullHeadBaseSha = baseSha
           , pullHeadTitle = title
           , pullHeadState = case (state, merged) of
-              (_, "true") -> PullMerged
-              ("closed", _) -> PullClosed
-              _ -> PullOpen
+              (_, "true") -> GitHub.PullMerged
+              ("closed", _) -> GitHub.PullClosed
+              _ -> GitHub.PullOpen
           , pullHeadBranch = headBranch
           , pullHeadBaseBranch = baseBranch
           , pullHeadAuthor = author

@@ -18,6 +18,8 @@ module Remax.GitHub
   , ReviewState (..)
   , PullRow (..)
   , listPulls
+  , PullState (..)
+  , endedLabel
   , PullMeta (..)
   , viewPull
   , Opened (..)
@@ -584,10 +586,20 @@ tsvField =
   in
     T.pack . go . T.unpack
 
+data PullState = PullOpen | PullClosed | PullMerged
+  deriving (Eq, Show)
+
+endedLabel :: PullState -> Maybe T.Text
+endedLabel state =
+  case state of
+    PullOpen -> Nothing
+    PullClosed -> Just "closed"
+    PullMerged -> Just "merged"
+
 data PullMeta = PullMeta
   { metaNumber :: Int
   , metaTitle :: T.Text
-  , metaState :: T.Text
+  , metaState :: PullState
   , metaHeadBranch :: T.Text
   , metaBaseBranch :: T.Text
   , metaAuthor :: T.Text
@@ -619,7 +631,10 @@ viewPull root repo n = do
         PullMeta
           { metaNumber = n
           , metaTitle = unescapeTsv title
-          , metaState = state
+          , metaState = case state of
+              "MERGED" -> PullMerged
+              "CLOSED" -> PullClosed
+              _ -> PullOpen
           , metaHeadBranch = headBranch
           , metaBaseBranch = baseBranch
           , metaAuthor = author
