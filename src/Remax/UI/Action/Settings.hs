@@ -164,8 +164,7 @@ installMode st mode = do
   MonadIO.liftIO (Tour.recordView (Types.stConn st) (Types.stRoot st) (Types.rebaseEffMode (Types.stRebase st) mode))
   tour <- MonadIO.liftIO (Tour.loadTourFor (Types.stConn st) (Types.stRoot st) (Types.rebaseEffMode (Types.stRebase st) mode))
   State.modify $ \s ->
-    Tour.installTour
-      tour
+    Types.hidePullView . Tour.installTour tour $
       s
         { Types.stMode = mode
         , Types.stTreeMode = treeMode

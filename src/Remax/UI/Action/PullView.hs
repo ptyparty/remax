@@ -50,7 +50,7 @@ togglePullView = do
     Nothing -> openPullView
 
 closePullView :: Brick.EventM Types.Name Types.St ()
-closePullView = State.modify (\s -> s {Types.stPullView = Nothing, Types.stBand = Nothing})
+closePullView = State.modify Types.hidePullView
 
 {- | The timeline's text width: the terminal less the tray and the
 gutter, the same number the draw wraps with.

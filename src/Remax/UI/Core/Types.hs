@@ -77,6 +77,7 @@ module Remax.UI.Core.Types
   , VerdictScope (..)
   , setMsg
   , showPullView
+  , hidePullView
   , Chord (..)
   , readChord
   , cancelKeyText
@@ -814,6 +815,9 @@ cancelKeyText keys =
 
 showPullView :: St -> St
 showPullView s = s {stPullView = Just PullView {pvCommit = Nothing}, stBand = Nothing, stVi = Vi.viIdle}
+
+hidePullView :: St -> St
+hidePullView s = s {stPullView = Nothing, stBand = Nothing}
 
 setMsg :: T.Text -> Brick.EventM Name St ()
 setMsg t = State.modify (\s -> s {stMsg = t})
