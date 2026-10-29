@@ -5,6 +5,7 @@ module Remax.Conversation
   , AgentName (..)
   , Author (..)
   , authorText
+  , remoteAuthor
   , parseAuthor
   , Markdown (..)
   , Side (..)
@@ -89,6 +90,9 @@ authorText a =
     Viewer -> "viewer"
     Person (Login l) -> "person:" <> l
     Agent (AgentName n) -> "agent:" <> n
+
+remoteAuthor :: Maybe Login -> Login -> Author
+remoteAuthor viewer login = if viewer == Just login then Viewer else Person login
 
 parseAuthor :: T.Text -> Author
 parseAuthor t
@@ -482,7 +486,7 @@ remotePost :: Maybe Login -> Map.Map Store.CommentId Markdown -> RemoteComment -
 remotePost viewer edits c =
   let
     cid = remoteCommentId c
-    author = if viewer == Just (remoteCommentAuthor c) then Viewer else Person (remoteCommentAuthor c)
+    author = remoteAuthor viewer (remoteCommentAuthor c)
     edited =
       if remoteCommentUpdatedAt c /= remoteCommentCreatedAt c
         then Just (remoteCommentUpdatedAt c)
@@ -550,7 +554,7 @@ pullConversation own remote =
     viewer = remoteViewer remote
     posted c =
       let
-        author = if viewer == Just (pullCommentAuthor c) then Viewer else Person (pullCommentAuthor c)
+        author = remoteAuthor viewer (pullCommentAuthor c)
         edited =
           if pullCommentUpdatedAt c /= pullCommentCreatedAt c
             then Just (pullCommentUpdatedAt c)
@@ -592,7 +596,7 @@ reviewConversation viewer r =
     , convTarget = NewThread (LocalId "pull") OnPull
     , convPosts =
         [ Post
-            { postAuthor = if viewer == Just (remoteReviewAuthor r) then Viewer else Person (remoteReviewAuthor r)
+            { postAuthor = remoteAuthor viewer (remoteReviewAuthor r)
             , postBody = remoteReviewBody r
             , postState = Posted (Store.CommentId (Store.reviewIdToInt64 (remoteReviewId r))) (remoteReviewSubmittedAt r) Nothing
             , postReactions = []

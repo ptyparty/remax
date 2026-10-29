@@ -570,20 +570,20 @@ state`, its diff lines as a highlighted code block with their signs and
 line numbers, taken from GitHub so they read the same whatever is
 checked out, and its log as the body draws
 it. `za` folds a thread to one line and opens it again; resolved
-threads start folded. Your drafts
+threads start folded. Commits join the timeline at their commit dates: consecutive commits by one author sit under `● author · age · added N commits`, one row each with the short SHA and subject, and `…` after a subject marks a message folded away. A force-push reads `● author · age · force-pushed old → new`. Your drafts
 on the pull request follow the posted entries as `◌ you · draft · sends
 with :submit`, then `◌ you · pending review` holds your line comments
 and the agent's proposed ones as threads, like a posted review. Pending
 replies sit inside their threads, and the last line
 counts `drafts · N to send · :submit sends`.
 
-`j`/`k` move by post, including posts inside threads, and the selected
+`j`/`k` move by post and commit, including posts inside threads, and the selected
 post wears its key strip: `r` replies (on a PR-level comment or a
 review summary, a quote-reply as a new PR-level comment), `?` asks, `+`
 reacts (not on a review summary, which GitHub gives no reactions), `y`
 copies the link, `Space u` resolves or unresolves a thread, `e` and `dd` act on your pending text, and
 `⏎` takes a proposal or, on a thread's posted comment, opens its lines
-in the diff, or the nearest line when they have left the file. `]` and `[` jump to the newest post of the next or previous thread awaiting you, wrapping around the timeline (`C-c ]` and `C-c [` in Emacs keys), and a proposed comment counts as awaiting you. Your pending comments and the agent's proposed ones follow the timeline. `@` drafts a PR-level comment.
+in the diff, or the nearest line when they have left the file. `]` and `[` jump to the newest post of the next or previous thread awaiting you, wrapping around the timeline (`C-c ]` and `C-c [` in Emacs keys), and a proposed comment counts as awaiting you. Your pending comments and the agent's proposed ones follow the timeline. `@` drafts a PR-level comment. On a commit, `za` (`C-c z` in Emacs keys) shows or hides its message, and `⏎` opens the commit in the diff as `:pr commits` would.
 
 ### Recent feedback
 

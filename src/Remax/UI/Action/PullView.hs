@@ -11,6 +11,7 @@ module Remax.UI.Action.PullView
   , viewWidth
   , markReady
   , markDraft
+  , foldHere
   ) where
 
 import Brick qualified as Brick
@@ -27,6 +28,7 @@ import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.PullPoll qualified as PullPoll
 import Remax.UI.Action.Inbox qualified as InboxAction
+import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Action.Threads qualified as ThreadAction
 import Remax.UI.Core.PullView qualified as PullView
 import Remax.UI.Core.Threads qualified as Threads
@@ -117,11 +119,27 @@ moveStop d = do
   st <- State.get
   let
     all_ = PullView.stops st width
-    here = Types.stBand st >>= \b -> List.elemIndex b {Types.bandDeleting = False} all_
+    here = PullView.selectedStop st >>= (`List.elemIndex` all_)
     next = case here of
       Just i -> Types.safeIdx all_ (max 0 (min (length all_ - 1) (i + d)))
       Nothing -> if d > 0 then Types.safeIdx all_ 0 else Types.safeIdx all_ (length all_ - 1)
-  State.modify (\s -> s {Types.stBand = next})
+  State.modify (selectStop next)
+
+selectStop :: Maybe PullView.Stop -> Types.St -> Types.St
+selectStop stop s =
+  let
+    (band, commit) = case stop of
+      Just (PullView.PostStop cid i) -> (Just (Types.Band cid i False), Nothing)
+      Just (PullView.CommitStop sha) -> (Nothing, Just sha)
+      Nothing -> (Nothing, Nothing)
+  in
+    s {Types.stBand = band, Types.stPullView = fmap (\pv -> pv {Types.pvCommit = commit}) (Types.stPullView s)}
+
+stopConv :: PullView.Stop -> Maybe Conv.ConversationId
+stopConv stop =
+  case stop of
+    PullView.PostStop cid _ -> Just cid
+    PullView.CommitStop _ -> Nothing
 
 {- | Moves to the newest post of the next thread awaiting your answer,
 wrapping around the timeline.
@@ -132,19 +150,19 @@ jumpAwaiting d = do
   st <- State.get
   let
     all_ = PullView.stops st width
-    awaits b = maybe False (Threads.awaitsYou st) (Conv.conversationFor (Types.bandConv b) (Types.stConversations st))
-    newest = map NEL.last . NEL.groupBy (\a b -> Types.bandConv a == Types.bandConv b) . filter awaits $ all_
-    current = Types.stBand st
-    here = current >>= \b -> List.elemIndex b {Types.bandDeleting = False} all_
+    awaits stop = maybe False (Threads.awaitsYou st) (stopConv stop >>= (`Conv.conversationFor` Types.stConversations st))
+    newest = map NEL.last . NEL.groupBy (\a b -> stopConv a == stopConv b) . filter awaits $ all_
+    current = PullView.selectedStop st
+    here = current >>= (`List.elemIndex` all_)
     position b = Maybe.fromMaybe 0 (List.elemIndex b all_)
-    elsewhere b = fmap Types.bandConv current /= Just (Types.bandConv b)
+    elsewhere b = (current >>= stopConv) /= stopConv b
     candidates = filter elsewhere newest
     (before, after) = List.partition (\b -> maybe False (position b <) here) candidates
     target = case here of
       Nothing -> if d > 0 then Maybe.listToMaybe candidates else Maybe.listToMaybe (reverse candidates)
       Just _ -> if d > 0 then Maybe.listToMaybe (after ++ before) else Maybe.listToMaybe (reverse before ++ reverse after)
   case target of
-    Just b -> State.modify (\s -> s {Types.stBand = Just b})
+    Just b -> State.modify (selectStop (Just b))
     Nothing ->
       if null newest
         then Types.setMsg "no thread awaits you"
@@ -190,20 +208,32 @@ listChecks = do
 foldHere :: Brick.EventM Types.Name Types.St ()
 foldHere = do
   st <- State.get
-  case ThreadAction.bandPost st of
-    Just _ -> ThreadAction.toggleFoldAtBand
-    Nothing -> Types.setMsg "j onto a thread's post first"
+  case (PullView.selectedStop st, ThreadAction.bandPost st) of
+    (Just (PullView.CommitStop sha), _) -> toggleMessage st sha
+    (_, Just _) -> ThreadAction.toggleFoldAtBand
+    _ -> Types.setMsg "j onto a thread's post or a commit first"
 
-{- | Enter takes a proposal, and on a thread's posted comment opens its
-lines in the diff.
+toggleMessage :: Types.St -> T.Text -> Brick.EventM Types.Name Types.St ()
+toggleMessage st sha =
+  let
+    commit = Types.ppSnapshot (Types.stPullPoll st) >>= List.find ((== sha) . PullPoll.pullCommitSha) . PullPoll.snapshotCommits
+  in
+    case commit of
+      Just c
+        | not (T.null (PullPoll.pullCommitBody c)) -> State.modify (\s -> s {Types.stOpenCommits = ThreadAction.toggleMember sha (Types.stOpenCommits s)})
+      _ -> Types.setMsg "this commit has no message beyond its subject"
+
+{- | Enter takes a proposal, on a thread's posted comment opens its
+lines in the diff, and on a commit opens the commit.
 -}
 enterKey :: Brick.EventM Types.Name Types.St ()
 enterKey = do
   st <- State.get
-  case ThreadAction.bandPost st of
-    Just (conv, _, post) ->
+  case (PullView.selectedStop st, ThreadAction.bandPost st) of
+    (Just (PullView.CommitStop sha), _) -> PullAction.walkToCommit sha
+    (_, Just (conv, _, post)) ->
       case (Conv.postState post, Conv.convAnchor conv) of
         (Conv.Proposal _ _, _) -> Monad.void ThreadAction.takeKey
         (_, Conv.OnPull) -> Types.setMsg "a PR-level comment has no line"
         _ -> InboxAction.jumpTo conv
-    Nothing -> Types.setMsg "j onto a post first"
+    _ -> Types.setMsg "j onto a post or a commit first"

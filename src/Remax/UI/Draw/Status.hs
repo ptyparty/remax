@@ -145,8 +145,8 @@ verbHint verbs keys =
 pullViewHint :: Config.KeyMode -> T.Text
 pullViewHint keys =
   case keys of
-    Config.KeysEmacs -> "C-n C-p move by post \183 C-c [ ] awaiting you \183 C-c g comment \183 C-c k checks \183 esc body"
-    _ -> "j/k move by post \183 [ ] awaiting you \183 @ comment \183 c checks \183 esc body"
+    Config.KeysEmacs -> "C-n C-p move \183 C-c [ ] awaiting you \183 C-c g comment \183 C-c k checks \183 esc body"
+    _ -> "j/k move \183 [ ] awaiting you \183 @ comment \183 c checks \183 esc body"
 
 popupWord :: Types.WorkPopup -> T.Text
 popupWord wp =

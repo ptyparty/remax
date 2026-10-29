@@ -197,6 +197,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stBand = Nothing
     , Types.stFoldFlipped = Set.empty
     , Types.stOpenDetails = Set.empty
+    , Types.stOpenCommits = Set.empty
     , Types.stConfirm = Nothing
     , Types.stCiting = Nothing
     , Types.stZPending = False
@@ -204,7 +205,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stSubmit = Nothing
     , Types.stSending = Nothing
     , Types.stInbox = Nothing
-    , Types.stPullView = fmap (const Types.PullView) pullMeta
+    , Types.stPullView = fmap (const Types.PullView {Types.pvCommit = Nothing}) pullMeta
     , Types.stNow = suNow startup
     , Types.stConversations = Conv.conversations Conv.emptyRemote (suWork startup)
     , Types.stOutdated = Map.empty

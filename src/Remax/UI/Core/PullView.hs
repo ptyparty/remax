@@ -3,6 +3,8 @@
 module Remax.UI.Core.PullView
   ( Row (..)
   , Gutter (..)
+  , Stop (..)
+  , selectedStop
   , timeline
   , stops
   , checksSummary
@@ -17,11 +19,13 @@ import Data.List qualified as List
 import Data.List.NonEmpty qualified as NEL
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
 import Remax.Highlight qualified as Highlight
 import Remax.PullPoll qualified as PullPoll
+import Remax.SoftWrap qualified as SoftWrap
 import Remax.Store qualified as Store
 import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Markdown qualified as Markdown
@@ -29,26 +33,37 @@ import Remax.UI.Core.Threads qualified as Threads
 import Remax.UI.Core.Types qualified as Types
 
 {- | One row of the timeline: its gutter glyph and its text, and the
-post it belongs to when the band can land on it.
+post or commit it belongs to when the cursor can land on it.
 -}
 data Row = Row
   { rowGutter :: Gutter
   , rowSegs :: [Markdown.Segment]
-  , rowPost :: Maybe (Conv.ConversationId, Int)
+  , rowStop :: Maybe Stop
   , rowFill :: Maybe Markdown.Row
   }
 
 data Gutter = Dot | Pending | Rail | Branch | Blank
 
--- | Every post the band may visit, in timeline order.
-stops :: Types.St -> Int -> [Types.Band]
+data Stop
+  = PostStop Conv.ConversationId Int
+  | CommitStop T.Text
+  deriving (Eq)
+
+selectedStop :: Types.St -> Maybe Stop
+selectedStop st =
+  case (Types.stBand st, Types.stPullView st >>= Types.pvCommit) of
+    (Just band, _) -> Just (PostStop (Types.bandConv band) (Types.bandPost band))
+    (Nothing, commit) -> fmap CommitStop commit
+
+-- | Every post and commit the cursor may visit, in timeline order.
+stops :: Types.St -> Int -> [Stop]
 stops st width =
   let
-    once acc band = case acc of
-      (prev : _) | prev == band -> acc
-      _ -> band : acc
+    once acc stop = case acc of
+      (prev : _) | prev == stop -> acc
+      _ -> stop : acc
   in
-    reverse (List.foldl' once [] (Maybe.mapMaybe (\r -> fmap (\(cid, i) -> Types.Band cid i False) (rowPost r)) (timeline st width)))
+    reverse (List.foldl' once [] (Maybe.mapMaybe rowStop (timeline st width)))
 
 timeline :: Types.St -> Int -> [Row]
 timeline st width =
@@ -61,9 +76,10 @@ timeline st width =
     byReview = Map.fromListWith (flip (++)) (Maybe.mapMaybe (\c -> fmap (\r -> (r, [c])) (reviewOf st c)) threads)
     orphans = filter (Maybe.isNothing . reviewOf st) threads
     entries =
-      List.sortOn fst $
+      groupCommits . map snd . List.sortOn fst $
         maybe [] (\c -> Maybe.mapMaybe (\(i, p) -> fmap (\t -> (t, CommentEntry c i p)) (postedAt p)) (zip [0 ..] (Conv.convPosts c))) pullConv
           ++ Maybe.mapMaybe reviewEntry reviews
+          ++ maybe [] historyEntries snap
     reviewEntry r =
       let
         under = Map.findWithDefault [] (Conv.remoteReviewId r) byReview
@@ -71,7 +87,7 @@ timeline st width =
       in
         if says || not (null under) then Just (Conv.remoteReviewSubmittedAt r, ReviewEntry r under) else Nothing
     drafts = draftRows st width convs
-    bodyRows = concatMap (entryRows st width) (map snd entries ++ [ThreadsEntry orphans | not (null orphans)])
+    bodyRows = concatMap (entryRows st width) (entries ++ [ThreadsEntry orphans | not (null orphans)])
   in
     headerRows st width ++ bodyRows ++ drafts ++ footerRows st
 
@@ -79,6 +95,37 @@ data Entry
   = CommentEntry Conv.Conversation Int Conv.Post
   | ReviewEntry Conv.RemoteReview [Conv.Conversation]
   | ThreadsEntry [Conv.Conversation]
+  | CommitsEntry Conv.Author (NEL.NonEmpty PullPoll.PullCommit)
+  | ForcePushEntry Conv.Author PullPoll.ForcePush
+
+historyEntries :: PullPoll.Snapshot -> [(T.Text, Entry)]
+historyEntries snap =
+  let
+    commit c = (PullPoll.pullCommitCommittedAt c, CommitsEntry (gitHubAuthor snap (PullPoll.pullCommitAuthor c)) (NEL.singleton c))
+    push p = (PullPoll.forcePushAt p, ForcePushEntry (gitHubAuthor snap (PullPoll.forcePushActor p)) p)
+  in
+    map commit (PullPoll.snapshotCommits snap) ++ map push (PullPoll.snapshotForcePushes snap)
+
+gitHubAuthor :: PullPoll.Snapshot -> T.Text -> Conv.Author
+gitHubAuthor snap name =
+  Conv.remoteAuthor (Conv.remoteViewer (PullPoll.snapshotRemote snap)) (Conv.Login (if T.null name then "ghost" else name))
+
+groupCommits :: [Entry] -> [Entry]
+groupCommits entries =
+  case entries of
+    CommitsEntry author commits : rest ->
+      let
+        byAuthor e = case e of
+          CommitsEntry next more | next == author -> Just (NEL.toList more)
+          _ -> Nothing
+        (run, others) = List.span (Maybe.isJust . byAuthor) rest
+      in
+        CommitsEntry author (NEL.appendList commits (concat (Maybe.mapMaybe byAuthor run))) : groupCommits others
+    entry : rest -> entry : groupCommits rest
+    [] -> []
+
+countText :: Int -> T.Text -> T.Text
+countText k word = Types.tshow k <> " " <> word <> (if k == 1 then "" else if T.isSuffixOf "push" word then "es" else "s")
 
 postedAt :: Conv.Post -> Maybe T.Text
 postedAt p =
@@ -113,20 +160,19 @@ headerRows st width =
         h = PullPoll.snapshotHead snap
         n = Types.tshow (PullPoll.snapshotPull snap)
         reviewers = List.nub (map (Threads.authorName . Conv.Person . Conv.remoteReviewAuthor) (Conv.remoteReviews (PullPoll.snapshotRemote snap)))
-        count k word = Types.tshow k <> " " <> word <> (if k == 1 then "" else if T.isSuffixOf "push" word then "es" else "s")
         parts =
           [ "#" <> n
           , PullPoll.pullHeadAuthor h
-          , count (length (PullPoll.snapshotCommits snap)) "commit"
+          , countText (length (PullPoll.snapshotCommits snap)) "commit"
           ]
-            ++ (if null (PullPoll.snapshotForcePushes snap) then [] else [count (length (PullPoll.snapshotForcePushes snap)) "force-push"])
+            ++ (if null (PullPoll.snapshotForcePushes snap) then [] else [countText (length (PullPoll.snapshotForcePushes snap)) "force-push"])
             ++ (if null reviewers then [] else [T.intercalate ", " reviewers])
             ++ (if null (PullPoll.snapshotLabels snap) then [] else [T.intercalate ", " (PullPoll.snapshotLabels snap)])
             ++ (if PullPoll.pullHeadDraft h == PullPoll.Draft then ["draft"] else [])
         description = map (\r -> Row Blank (Markdown.rowSegments r) Nothing (Just r)) (Markdown.render Markdown.Folded (width - 4) (Conv.Markdown (PullPoll.pullHeadBody h)))
         emacs = Config.cfgKeys (Types.stConfig st) == Config.KeysEmacs
         checksKey = if emacs then "    C-c k lists them" else "    c lists them"
-        conversationKeys = if emacs then "conversation \183 C-n C-p move by post \183 C-c [ ] threads awaiting you \183 C-c g comment on the PR" else "conversation \183 j/k move by post \183 [ ] threads awaiting you \183 @ comment on the PR"
+        conversationKeys = if emacs then "conversation \183 C-n C-p move \183 C-c [ ] threads awaiting you \183 C-c g comment on the PR" else "conversation \183 j/k move \183 [ ] threads awaiting you \183 @ comment on the PR"
       in
         [ Row Blank [Markdown.Segment Attrs.trayFileAttr (PullPoll.pullHeadTitle h) Nothing] Nothing Nothing
         , hint Blank (T.intercalate " \183 " parts)
@@ -196,23 +242,63 @@ entryRows st width entry =
               ++ [blank]
           Nothing -> concatMap (threadRows st width) threads
     ThreadsEntry threads -> concatMap (threadRows st width) threads ++ [blank]
+    CommitsEntry author commits ->
+      authorDot st author (Just (PullPoll.pullCommitCommittedAt (NEL.last commits))) (Just ("added " <> countText (length commits) "commit"))
+        : concatMap (commitRows st width) (NEL.toList commits)
+        ++ [blank]
+    ForcePushEntry author push ->
+      let
+        moved = "force-pushed " <> T.take 7 (PullPoll.forcePushBefore push) <> " \8594 " <> T.take 7 (PullPoll.forcePushAfter push)
+      in
+        [authorDot st author (Just (PullPoll.forcePushAt push)) (Just moved), blank]
 
 dotRow :: Types.St -> Conv.Post -> Maybe T.Text -> [Row]
-dotRow st post event =
+dotRow st post event = [authorDot st (Conv.postAuthor post) (postedAt post) event]
+
+authorDot :: Types.St -> Conv.Author -> Maybe T.Text -> Maybe T.Text -> Row
+authorDot st author at event =
+  Row
+    Dot
+    ( [ Markdown.Segment (Threads.authorInk author) (Threads.authorName author) Nothing
+      , Markdown.Segment Attrs.hintAttr (" \183 " <> maybe "" (Threads.ageText (Types.stNow st)) at) Nothing
+      ]
+        ++ maybe [] (\e -> [Markdown.Segment Attrs.hintAttr (" \183 " <> e) Nothing]) event
+    )
+    Nothing
+    Nothing
+
+commitRows :: Types.St -> Int -> PullPoll.PullCommit -> [Row]
+commitRows st width commit =
   let
-    age = case Conv.postState post of
-      Conv.Posted _ at _ -> Threads.ageText (Types.stNow st) at
-      _ -> ""
-    attr = Threads.authorInk (Conv.postAuthor post)
-  in
-    [ Row
-        Dot
-        ( [Markdown.Segment attr (Threads.authorName (Conv.postAuthor post)) Nothing, Markdown.Segment Attrs.hintAttr (" \183 " <> age) Nothing]
-            ++ maybe [] (\e -> [Markdown.Segment Attrs.hintAttr (" \183 " <> e) Nothing]) event
+    sha = PullPoll.pullCommitSha commit
+    stop = CommitStop sha
+    body = PullPoll.pullCommitBody commit
+    opened = Set.member sha (Types.stOpenCommits st)
+    folded = if T.null body || opened then [] else [Markdown.Segment Attrs.hintAttr " \8230" Nothing]
+    subject =
+      Row
+        Rail
+        ( [ Markdown.Segment Attrs.msgAttr "  " Nothing
+          , Markdown.Segment Attrs.rebaseShaAttr (T.take 7 sha) Nothing
+          , Markdown.Segment Attrs.msgAttr ("  " <> PullPoll.pullCommitSubject commit) Nothing
+          ]
+            ++ folded
         )
+        (Just stop)
         Nothing
-        Nothing
-    ]
+    messageRow r = Row Rail [Markdown.Segment Attrs.msgAttr (T.replicate 11 " " <> SoftWrap.srText r) Nothing] (Just stop) Nothing
+    message = if opened then map messageRow (SoftWrap.softRows (max 20 (width - 15)) (T.lines (T.replace "\t" "    " body))) else []
+    fold = if Config.cfgKeys (Types.stConfig st) == Config.KeysEmacs then "C-c z" else "za"
+    messageKey
+      | T.null body = []
+      | opened = [fold <> " hides the message"]
+      | otherwise = [fold <> " shows the message"]
+    strip = if selectedStop st == Just stop then [keyStrip stop (T.intercalate " \183 " (messageKey ++ ["\9166 opens the commit"]))] else []
+  in
+    subject : message ++ strip
+
+keyStrip :: Stop -> T.Text -> Row
+keyStrip stop keys = Row Rail [Markdown.Segment Attrs.hintAttr ("  \9584 " <> keys) Nothing] (Just stop) Nothing
 
 {- | A post's body under its dot, with its reactions and, when the band
 is on it, its keys.
@@ -223,7 +309,7 @@ postBody st width cid i post =
     rendered = Markdown.render (Threads.detailsFold st cid i) (width - 6) (Conv.postBody post)
     at = case Conv.postState post of
       Conv.Local _ -> Nothing
-      _ -> Just (cid, i)
+      _ -> Just (PostStop cid i)
     body = map (\r -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Markdown.rowSegments r) at (Just r)) rendered
     reactions = case Conv.postReactions post of
       [] -> []
@@ -240,7 +326,7 @@ stripRow st cid i post =
             venue = maybe Conv.PullComments Conv.convVenue (Conv.conversationFor cid (Types.stConversations st))
             keys = Config.cfgKeys (Types.stConfig st)
           in
-            [Row Rail [Markdown.Segment Attrs.hintAttr ("  \9584 " <> Threads.postKeys keys (Types.flagRule st) venue post) Nothing] (Just (cid, i)) Nothing]
+            [keyStrip (PostStop cid i) (Threads.postKeys keys (Types.flagRule st) venue post)]
     _ -> []
 
 {- | A review thread under the review that started it: its place and
@@ -259,11 +345,11 @@ threadRows st width conv =
         [ Markdown.Segment markAttr (" " <> mark) Nothing
         , Markdown.Segment Attrs.hintAttr (" \183 " <> placeOf st conv <> " \183 " <> Types.tshow (length (Conv.convPosts conv)) <> " comments \183 za opens") Nothing
         ]
-        (Just (cid, 0))
+        (Just (PostStop cid 0))
         Nothing
     foldedStrip = maybe [] (stripRow st cid 0) (Maybe.listToMaybe (Conv.convPosts conv))
     rangeLines = map excerptRow (rangeOf st conv)
-    logRows = map (\tl -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Threads.tlSegs tl) (fmap (\i -> (cid, i)) (Threads.tlPost tl)) Nothing) (threadLog st width conv)
+    logRows = map (\tl -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Threads.tlSegs tl) (fmap (PostStop cid) (Threads.tlPost tl)) Nothing) (threadLog st width conv)
   in
     if folded
       then foldedLine : foldedStrip ++ [blank]
@@ -277,7 +363,7 @@ conversationRows st width conv =
       Conv.LocalOnly _ -> (" \9550 ", "note to the agent")
       _ -> (" \8618 ", Threads.threadState st conv)
     header = Row Branch [Markdown.Segment Attrs.hintAttr lead Nothing, Markdown.Segment Attrs.trayFileAttr (placeOf st conv) Nothing, Markdown.Segment Attrs.hintAttr (" \183 " <> state) Nothing] Nothing Nothing
-    logRows = map (\tl -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Threads.tlSegs tl) (fmap (\i -> (cid, i)) (Threads.tlPost tl)) Nothing) (threadLog st width conv)
+    logRows = map (\tl -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Threads.tlSegs tl) (fmap (PostStop cid) (Threads.tlPost tl)) Nothing) (threadLog st width conv)
     postRows (i, post) = dotRow st post Nothing ++ postBody st width cid i post ++ [blank]
   in
     case Conv.convAnchor conv of
