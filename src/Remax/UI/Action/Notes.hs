@@ -109,6 +109,19 @@ choicesFor st lineSpan =
       in
         Types.NewNote : concatMap choices touched
 
+defaultChoice :: [Types.NoteChoice] -> Int
+defaultChoice choices =
+  let
+    isReply (_, choice) = case choice of
+      Types.ReplyNote _ -> True
+      Types.ReplyOutdated _ -> True
+      Types.NewNote -> False
+      Types.JoinNote _ -> False
+  in
+    case filter isReply (zip [0 ..] choices) of
+      [(i, _)] -> i
+      _ -> 0
+
 openNotePopup :: Store.Verdict -> Types.MarkUndo -> Brick.EventM Types.Name Types.St ()
 openNotePopup v undoing = do
   st <- State.get
@@ -118,13 +131,14 @@ openNotePopup v undoing = do
       let
         ed0 = Modal.newEdState 0 [""]
         ed1 = ed0 {Modal.edMode = Modal.Insert}
+        choices = choicesFor st lineSpan
         plan =
           Types.NotePlan
             { Types.planVerdict = v
             , Types.planSpan = lineSpan
             , Types.planUndo = undoing
-            , Types.planChoices = choicesFor st lineSpan
-            , Types.planChosen = 0
+            , Types.planChoices = choices
+            , Types.planChosen = defaultChoice choices
             }
       State.modify (\s -> s {Types.stNotePopup = Just (Types.NotePopup ed1 (Types.NoteOn plan)), Types.stVi = Vi.viIdle})
 

@@ -574,7 +574,8 @@ one line stack oldest first, each after the first labelled with its
 range, such as `╶ 78–80`.
 
 `!` or `?` over lines that already hold a note opens the note popup in
-insert mode with *new note* chosen. A `goes to` list under the text
+insert mode. When the selection touches one note, the reply to it is
+chosen; otherwise *new note* is. A `goes to` list under the text
 offers, for each note the selection touches, a reply that leaves the
 note's lines alone and, when the selection reaches past the note's
 lines, a join that adds the post and grows the note to cover the
