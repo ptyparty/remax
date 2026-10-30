@@ -143,7 +143,7 @@ parkGo f h st fv =
   let
     rs = Types.fvRuns fv
     clamped = Types.clampH rs h
-    parked = st {Types.stCurF = f, Types.stCurH = clamped, Types.stMsg = " "}
+    parked = st {Types.stCurF = f, Types.stCurH = clamped}
     -- land on the first line still needing attention, not merely
     -- the top of the hunk
     target r =
