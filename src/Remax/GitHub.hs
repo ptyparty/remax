@@ -78,6 +78,8 @@ data GhFailure
   | GhNotFound T.Text
   | GhFailed T.Text
   | GhRefused Int T.Text
+  | FetchFailed T.Text
+  | FetchNeedsSignIn T.Text
   deriving (Eq, Show)
 
 failureText :: GhFailure -> T.Text
@@ -89,6 +91,8 @@ failureText failure =
     GhNotFound why -> "not found on GitHub: " <> why
     GhFailed why -> "gh: " <> why
     GhRefused status why -> "GitHub " <> T.pack (show status) <> " \183 " <> why
+    FetchFailed why -> "git fetch: " <> why
+    FetchNeedsSignIn why -> "git fetch could not sign in without asking \8212 load your key into ssh-agent or set up a credential helper (" <> why <> ")"
 
 runGh :: FilePath -> [T.Text] -> IO (Either GhFailure T.Text)
 runGh root args = do
@@ -103,18 +107,22 @@ runGhOutput root args = runGhInput root args ""
 
 runGhInput :: FilePath -> [T.Text] -> T.Text -> IO (Either GhFailure (Exit.ExitCode, T.Text, T.Text))
 runGhInput root args input = do
-  environment <- Env.getEnvironment
-  let
-    quiet = [("GH_PROMPT_DISABLED", "1"), ("GH_NO_UPDATE_NOTIFIER", "1")]
-    p =
-      (Process.proc "gh" (map T.unpack args))
-        { Process.cwd = Just root
-        , Process.env = Just (quiet ++ filter ((`notElem` map fst quiet) . fst) environment)
-        }
+  p <- withoutTerminal [("GH_PROMPT_DISABLED", "1"), ("GH_NO_UPDATE_NOTIFIER", "1")] (Process.proc "gh" (map T.unpack args)) {Process.cwd = Just root}
   got <- Exception.try (Process.readCreateProcessWithExitCode p (T.unpack input))
   pure $ case got of
     Left e -> let _ = (e :: Exception.IOException) in Left GhMissing
     Right (code, out, err) -> Right (code, T.pack out, T.pack err)
+
+withoutTerminal :: [(String, String)] -> Process.CreateProcess -> IO Process.CreateProcess
+withoutTerminal extra p = do
+  environment <- Env.getEnvironment
+  let
+    quiet = ("GIT_TERMINAL_PROMPT", "0") : extra
+  pure
+    p
+      { Process.env = Just (quiet ++ filter ((`notElem` map fst quiet) . fst) environment)
+      , Process.new_session = True
+      }
 
 classify :: T.Text -> GhFailure
 classify err =
@@ -128,6 +136,18 @@ classify err =
         | mentions ["could not resolve host", "no such host", "dial tcp", "connection refused", "network is unreachable", "timeout"] -> GhOffline (firstLine err)
         | mentions ["http 404", "not found", "could not resolve to"] -> GhNotFound (firstLine err)
         | otherwise -> GhFailed (firstLine err)
+
+classifyFetch :: T.Text -> GhFailure
+classifyFetch err =
+  let
+    lower = T.toLower err
+    mentions = any (`T.isInfixOf` lower)
+  in
+    if mentions ["terminal prompts disabled", "permission denied (publickey", "host key verification failed", "could not read from remote repository", "authentication failed"]
+      then FetchNeedsSignIn (firstLine err)
+      else case classify err of
+        GhFailed why -> FetchFailed why
+        other -> other
 
 firstLine :: T.Text -> T.Text
 firstLine t = Maybe.fromMaybe "" (Maybe.listToMaybe (T.lines t))
@@ -690,7 +710,7 @@ openPull root cached n = do
       remote <- remoteFor root repo
       fetched <- fetchPull root remote n (metaBaseBranch meta)
       pure $ case fetched of
-        Left e -> Left (classify e)
+        Left e -> Left (classifyFetch e)
         Right () ->
           Right
             Opened
@@ -759,7 +779,8 @@ fetchPull root remote n baseBranch = do
 
 gitIn :: FilePath -> [T.Text] -> IO (Either T.Text T.Text)
 gitIn root args = do
-  (code, out, err) <- Process.readProcessWithExitCode "git" (["-C", root] ++ map T.unpack args) ""
+  p <- withoutTerminal [] (Process.proc "git" (["-C", root] ++ map T.unpack args))
+  (code, out, err) <- Process.readCreateProcessWithExitCode p ""
   pure $ case code of
     Exit.ExitSuccess -> Right (T.strip (T.pack out))
     Exit.ExitFailure _ -> Left (firstLine (T.strip (T.pack err)))
@@ -785,7 +806,7 @@ refreshPullRefs root repo n baseBranch headSha baseSha = do
       remote <- remoteFor root repo
       fetched <- fetchPull root remote n baseBranch
       pure $ case fetched of
-        Left e -> Left (classify e)
+        Left e -> Left (classifyFetch e)
         Right () -> Right RefsFetched
 
 data Kept = KeptHere | NotKept
@@ -828,5 +849,5 @@ keepPushedHead root repo n sha = do
         remote <- remoteFor root repo
         gitIn root ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", remote, "+" <> sha <> ":" <> ref]
   pure $ case kept of
-    Left e -> Left (classify e)
+    Left e -> Left (classifyFetch e)
     Right _ -> Right ref
