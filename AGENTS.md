@@ -45,7 +45,7 @@ imports its internals. The order within a tree is convention.
    drawn from it and the poll, and where outdated ones draw), `Load`
    (loading, rebuilding, refresh, reload, highlighting).
 3. `Action` — `Threads` (the band, the work popups and the GitHub
-   writes), `Cite`, `Conversation`, `Verdicts`, `Rebase`, `Notes`, `Settings`,
+   writes), `Cite`, `Conversation`, `Verdicts`, `Tour` (the tour's stops popup), `Rebase`, `Notes`, `Settings`,
    `Submit` (the :submit dialog, after `Open`), `PullView` (the PR view,
    after `Open`),
    `Pull`, `Fuzzy`, `Repo`, `Open`, `Worktree` (edit mode's checkout and

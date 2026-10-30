@@ -346,7 +346,9 @@ stays a prefix there too.
 | `:message` | the full message of the commit under review, as `Space c` shows it |
 | `:walk tour` | follow the tour an agent posted for this view (see *A guided tour*); `]`/`[` step through it and the header counts the steps |
 | `:tour` / `:tour N` | get back on the tour: `:tour` returns to the stop you last visited (or the one under the cursor, or the first), `:tour N` jumps to stop N. Either way the walk follows the tour again |
+| `:tour list` | the tour's stops in a popup, as `Space T` (`C-c T` in emacs) opens it: each stop's title, its note and the files it covers; `⏎` goes to the stop |
 | `:tour ask [TEXT]` | ask the agent watching this review for a tour of the view you have open, with TEXT as the brief ("schema changes first"). The request shows up in the agent's `remax list`, wakes a `list --wait`, and carries the exact ref flags for the view, so the tour lands where you are looking |
+| `:follow` | follow edits, as `Space F` (`C-c F` in emacs) toggles it: whenever a file in the working tree changes on disk the session takes you to the first line that changed, and a file that newly joins the change set is opened at its first hunk. The header says `following edits` while it is on. Nothing moves you while you are typing or a popup, prompt or menu is open |
 | `:mode head` / `:mode unstaged` / `:mode untracked` | the classic change sets; `:mode tree` returns to the working tree |
 | `:rebase [REF]` | start a commit-by-commit review pass (below) |
 | `:continue` | fold this stop's edits into the stopped commit and advance — *everything* dirty at the stop counts, including edits made through `$EDITOR` or by an agent, since the stop started clean |
@@ -775,7 +777,9 @@ one — with the stop's note under the header on its first hunk. Notes are narra
 outstanding and nothing waits on them.
 Space p or `:walk pending` leaves the tour; a file switch, a grep hit
 or Space a can wander off it too. `:tour` brings you back to the last
-stop you were on, and `:tour 4` jumps to stop four. A tour belongs to the view it was built for; switching the
+stop you were on, and `:tour 4` jumps to stop four. `Space T` (`C-c T`
+in emacs, or `:tour list`) lays the whole tour out in a popup, every
+stop with its note and files, and `⏎` takes you to the one selected. A tour belongs to the view it was built for; switching the
 subject puts it away and `tour begin` on the same view replaces it.
 
 ## Configuration

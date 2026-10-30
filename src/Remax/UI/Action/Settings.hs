@@ -7,6 +7,7 @@ module Remax.UI.Action.Settings
   , showSetting
   , applySet
   , toggleIgnoreWs
+  , toggleFollow
   , setMode
   , returnToTree
   , setBaseRef
@@ -141,6 +142,17 @@ toggleIgnoreWs :: Brick.EventM Types.Name Types.St ()
 toggleIgnoreWs = do
   st <- State.get
   applySet "ignore-whitespace" (if Config.cfgIgnoreWs (Types.stConfig st) then "0" else "1")
+
+toggleFollow :: Brick.EventM Types.Name Types.St ()
+toggleFollow = do
+  st <- State.get
+  case Types.stFollow st of
+    Types.FollowEdits -> do
+      State.modify (\s -> s {Types.stFollow = Types.FollowOff})
+      Types.setMsg "stopped following edits"
+    Types.FollowOff -> do
+      State.modify (\s -> s {Types.stFollow = Types.FollowEdits})
+      Types.setMsg "following edits \8212 each change to a file takes you to it"
 
 -- Switch what the session reviews against. Each switch closes the pass
 -- and opens a new one, so pass history records what was reviewed vs what.

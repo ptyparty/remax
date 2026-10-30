@@ -418,7 +418,21 @@ installReload plan i installed = do
     WorkModel.placeOutdated
     Monad.when isCurrent $
       State.modify (\s -> s {Types.stCurH = Nav.matchRun oldCur (Types.fvRuns installed)})
-  Types.setMsg ("\8635 reloaded " <> T.pack (rlPath plan))
+  followed <- State.get
+  if Nav.followable followed
+    then do
+      let
+        line = firstChangedLine (rlOldLines plan) (Modal.bufferLines (Types.fvEd installed))
+      Nav.followTo i line
+      Types.setMsg ("\8635 following " <> T.pack (rlPath plan) <> ":" <> Types.tshow (line + 1))
+    else Types.setMsg ("\8635 reloaded " <> T.pack (rlPath plan))
+
+firstChangedLine :: [T.Text] -> [T.Text] -> Int
+firstChangedLine old new =
+  let
+    same = length (takeWhile id (zipWith (==) old new))
+  in
+    max 0 (min same (length new - 1))
 
 pollSubject :: Brick.EventM Types.Name Types.St ()
 pollSubject = do
@@ -703,10 +717,24 @@ installRefreshed before refresh = do
   Monad.when gitMoved (MonadIO.liftIO (Watch.watchTracked (Types.stWatch latest) (Types.stRoot latest)))
   applyChangeSet remaining
   WorkModel.placeOutdated
+  followArrival before
   State.modify (\s -> Tour.installTour (Types.stTour s) s)
   settled <- State.get
   Monad.when (Types.stWalk settled == Types.WalkTour && not (null (Types.stTour settled)) && null (Tour.tourOrder settled)) $
     State.modify (\s -> s {Types.stWalk = Types.WalkPending, Types.stMsg = "the tour's hunks left the view \8212 walking pending hunks"})
+
+followArrival :: Types.St -> Brick.EventM Types.Name Types.St ()
+followArrival before = do
+  latest <- State.get
+  let
+    known = Set.fromList (map Types.fvPath (Types.stFiles before))
+    arrived = List.find (\(_, fv) -> Set.notMember (Types.fvPath fv) known) (zip [0 ..] (Types.stFiles latest))
+  case arrived of
+    Just (f, fv)
+      | Types.stLoadedOnce before && Nav.followable latest -> do
+          Nav.visitHunk f 0
+          Types.setMsg ("\8635 following " <> T.pack (Types.fvPath fv))
+    _ -> pure ()
 
 currentReplaced :: Types.St -> Refresh -> Bool
 currentReplaced before refresh =

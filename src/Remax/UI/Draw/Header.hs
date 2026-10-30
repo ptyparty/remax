@@ -261,11 +261,15 @@ fileHeader st lead fv =
       Types.WalkUnresolved -> Brick.withAttr Attrs.headerRebaseAttr (Brick.txt "  ·  unresolved only")
       Types.WalkTour -> Brick.withAttr Attrs.headerRebaseAttr (Brick.txt ("  ·  " <> tourPosition st))
       _ -> Brick.txt ""
+    followSeg = case Types.stFollow st of
+      Types.FollowEdits -> Brick.withAttr Attrs.headerRebaseAttr (Brick.txt "  \183  following edits")
+      Types.FollowOff -> Brick.txt ""
   in
     [ Brick.txt lead
     , Brick.withAttr Attrs.headerFileAttr (Brick.txt (T.pack (Types.fvPath fv)))
     , deletedSeg
     , walkSeg
+    , followSeg
     , Brick.withAttr Attrs.headerCountAttr (Brick.txt counts)
     , doneBadge
     ]

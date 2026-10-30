@@ -829,6 +829,18 @@ qualified = { qualifiedPost = true }
 alias = "DrawInbox"
 
 [[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Tour"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "TourAction"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Draw.Tour"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "DrawTour"
+
+[[forAnyModule.allowedQualifications]]
 module = "Remax.UI.Core.Markdown"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }

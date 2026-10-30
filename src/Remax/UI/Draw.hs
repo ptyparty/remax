@@ -24,6 +24,7 @@ import Remax.UI.Draw.PullView qualified as DrawPullView
 import Remax.UI.Draw.Reactions qualified as DrawReactions
 import Remax.UI.Draw.Status qualified as DrawStatus
 import Remax.UI.Draw.Submit qualified as DrawSubmit
+import Remax.UI.Draw.Tour qualified as DrawTour
 import Remax.UI.Draw.Tray qualified as DrawTray
 import Remax.UI.Draw.Tree qualified as DrawTree
 
@@ -49,6 +50,7 @@ draw st =
         , fmap DrawCite.citeLayer (Types.stCiting st)
         , fmap (DrawNotes.notePopupLayer st) (Types.stNotePopup st)
         , fmap (DrawInbox.inboxLayer st) (Types.stInbox st)
+        , fmap (DrawTour.tourOverviewLayer st) (Types.stTourOverview st)
         , DrawTree.fileMenuLayer =<< Types.stTree st
         , fmap (DrawTree.treeLayer st) (Types.stTree st)
         , fmap DrawPicker.pickerLayer (Types.stPicker st)

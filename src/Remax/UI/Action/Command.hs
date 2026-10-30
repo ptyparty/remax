@@ -31,6 +31,7 @@ import Remax.UI.Action.Rebase qualified as Rebase
 import Remax.UI.Action.Repo qualified as Repo
 import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Action.Submit qualified as SubmitAction
+import Remax.UI.Action.Tour qualified as TourAction
 import Remax.UI.Action.Tree qualified as TreeAction
 import Remax.UI.Action.Uses qualified as Uses
 import Remax.UI.Action.Verdicts qualified as VerdictAction
@@ -79,6 +80,9 @@ commandTable =
   , ("checkout", NoArg, "switch branches (picker)")
   , ("pr", ArgPull, "open pull request N on its page, in edit mode if it is yours and checked out; bare :pr picks one; :pr commits walks its commits; :pr edit opens it in a worktree of its own, :pr review returns")
   , ("submit", NoArg, "send every pending comment and reply to GitHub as one review")
+  , ("walk", ArgText, "which hunks ] and [ visit: " <> T.intercalate " | " (map Types.walkLabel Types.walkCycle))
+  , ("tour", ArgText, "back on the tour; :tour N goes to stop N, :tour list shows the stops, :tour ask TEXT requests one")
+  , ("follow", NoArg, "follow edits: each change to a file on disk takes you to it (again to stop)")
   , ("feedback", NoArg, "recent conversations, newest first; \9166 goes to one (also Space i)")
   , ("ready", NoArg, "mark the pull request ready for review")
   , ("draft", NoArg, "convert the pull request to a draft")
@@ -120,6 +124,8 @@ cmdCandidates st input =
       ["set", "note-on-flag"] -> prefixed ["0", "1"]
       ["resolve"] -> prefixed ["all"]
       ["pr"] -> prefixed ["commits", "edit", "review"]
+      ["tour"] -> prefixed ["list", "ask"]
+      ["walk"] -> prefixed (map Types.walkLabel Types.walkCycle)
       [cmd] -> case argKindOf cmd of
         Just ArgRef -> prefixed ("branch" : Types.stCmdRefs st)
         Just ArgMode -> prefixed modeNames
@@ -207,6 +213,7 @@ runCommand input =
     ["pr", "edit"] -> Worktree.editPull PickerAction.openWorktreePicker
     ["submit"] -> SubmitAction.openSubmit
     ["feedback"] -> InboxAction.openInbox
+    ["follow"] -> Settings.toggleFollow
     ["ready"] -> PullViewAction.markReady
     ["draft"] -> PullViewAction.markDraft
     ["pr", "review"] -> Worktree.reviewPull
@@ -228,6 +235,7 @@ runCommand input =
     ["revert"] -> VerdictAction.revertTarget
     ["walk"] -> VerdictAction.cycleWalkFilter
     ["tour"] -> VerdictAction.resumeTour
+    ["tour", "list"] -> TourAction.openTourOverview
     ("tour" : "ask" : rest) -> VerdictAction.askTour (T.unwords rest)
     ["tour", n] | Just k <- lineAddress n -> VerdictAction.gotoTourStep k
     ["walk", which] -> setWalkNamed which
