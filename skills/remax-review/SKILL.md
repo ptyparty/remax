@@ -1,6 +1,6 @@
 ---
 name: remax-review
-description: "Act on code-review feedback recorded by remax — read the reviewer's flagged/questioned lines and notes for a repository, fix them, and understand how the review session sees your edits. Use when asked to address review feedback, check for remax flags, or work alongside a human reviewing in remax, or to show the reviewer a hunk, file, line or conversation by moving their remax session there (`remax do :go`). Also use whenever the user asks to be shown where some code is: take them there instead of replying with a line number. Takes an argument: no argument answers what is outstanding once and stops; `watch` keeps waiting on the reviewer and reacting until told to stop; `stop` ends a watch."
+description: "Act on code-review feedback recorded by remax — read the reviewer's flagged/questioned lines and notes for a repository, fix them (or only answer them in a read-only pull request review), and understand how the review session sees your edits. Use when asked to address review feedback, check for remax flags, or work alongside a human reviewing in remax, or to show the reviewer a hunk, file, line or conversation by moving their remax session there (`remax do :go`). Also use whenever the user asks to be shown where some code is: take them there instead of replying with a line number. Takes an argument: no argument answers what is outstanding once and stops; `watch` keeps waiting on the reviewer and reacting until told to stop; `stop` ends a watch."
 ---
 
 # Working with a remax reviewer
@@ -22,7 +22,8 @@ the same time rather than in turns.
 
 The argument you were invoked with decides how long you stay:
 
-**No argument — answer once.** Read what is outstanding, fix it, reply,
+**No argument — answer once.** Read what is outstanding, fix it (unless
+the view is a review, see *Answering in a pull request review*), reply,
 report what you did, and stop. Right when the human has finished a pass
 and wants it dealt with. Do not start a background wait.
 
@@ -146,10 +147,12 @@ which one it landed in.
   sides of a change are numbered separately, so they can interleave;
   pair them by content, not by position. Each has its own verdict, and
   the lines of one conversation can differ:
-  - `!` (flagged) — the reviewer wants this changed. Fix it.
+  - `!` (flagged) — the reviewer wants this changed. Fix it, except in
+    a `PR #N review` view (see *Answering in a pull request review*).
   - `?` (questioned) — the reviewer wants an explanation or a fix.
-    If the code is wrong, fix it. If the code is right as written,
-    answer the question — see **Replying to notes** below. Never answer
+    If the code is wrong, fix it, again except in a review view. If the
+    code is right as written, answer the question — see **Replying to
+    notes** below. Never answer
     by adding comments to the code, and never edit the reviewer's note.
   - a blank — a line with no verdict of its own, such as a GitHub
     thread's.
@@ -380,6 +383,23 @@ The session writes each poll of the pull request to a cache file that
 has the pull request open, and `list --wait` wakes on a new GitHub post
 as on a new note.
 
+## Answering in a pull request review
+
+When the session's `view` reads `PR #N review`, the reviewer is
+reading a pull request without changing it, usually someone else's, so
+nothing in it is yours to fix. `remax -C "$REPO" hunks` names the view
+on its first line, as `viewing PR #482 review`, and `hunks --json` in
+its `view` field. In that view:
+
+- Answer every note with `remax reply`. Explain the code, say whether
+  the reviewer's concern holds, or say what the author could change. A
+  `!` there asks you to judge the line, not to change it.
+- Draft a GitHub comment with `remax comment` only when the reviewer
+  asks for one.
+- Never edit files, commit, or offer to fix anything. A fix belongs on
+  the author's branch, and when the pull request is the reviewer's own,
+  `:pr edit` is theirs to run.
+
 ## Addressing feedback on the reviewer's own pull request
 
 `:pr edit` opens the reviewer's pull request for editing, and the
@@ -589,6 +609,8 @@ tip is the safe fallback.
   note text.
 - Fix by editing the files normally. The reviewer's session updates
   itself; the fixed lines go back to pending and they re-review.
+- In a `PR #N review` view, never edit files or offer fixes: answer
+  with `remax reply`, and draft comments only when asked.
 - Never write to `~/.local/state/remax/review.db` directly, and never
   run `remax forget` unless the human explicitly asks.
 - Post a tour only when asked for one; `tour begin` discards the
