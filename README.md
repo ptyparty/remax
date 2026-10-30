@@ -576,8 +576,9 @@ range, such as `╶ 78–80`.
 `!` or `?` over lines that already hold a note opens the note popup in
 insert mode with *new note* chosen. A `goes to` list under the text
 offers, for each note the selection touches, a reply that leaves the
-note's lines alone and a join that adds the post and grows the note to
-cover the selection. To ask the agent about a GitHub thread, use `?` on
+note's lines alone and, when the selection reaches past the note's
+lines, a join that adds the post and grows the note to cover the
+selection. To ask the agent about a GitHub thread, use `?` on
 its highlighted row instead. `Tab`
 and `S-Tab` in normal mode (`M-n`/`M-p` in emacs) change the target,
 and the title names it. The popup discards with `C-c` (`C-c C-k` in emacs), or `Esc` in
