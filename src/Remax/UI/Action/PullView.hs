@@ -184,9 +184,8 @@ draftnessText d =
     PullPoll.Draft -> "a draft"
 
 commentOnPull :: Brick.EventM Types.Name Types.St ()
-commentOnPull = do
-  st <- State.get
-  Monad.void (ThreadAction.openWorkPopupAt st "PR-level" Nothing (Types.CommentOn Conv.OnPull) "")
+commentOnPull =
+  Monad.void (ThreadAction.openWorkPopupAt "PR-level" Nothing (Types.CommentOn Conv.OnPull) "")
 
 listChecks :: Brick.EventM Types.Name Types.St ()
 listChecks = do

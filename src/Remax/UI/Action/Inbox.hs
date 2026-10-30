@@ -169,9 +169,13 @@ replyTo conv =
     newestPosted = List.find Threads.isPosted (reverse (Conv.convPosts conv))
   in
     case (Conv.convVenue conv, newestPosted) of
-      (Conv.LocalOnly _, _) -> Types.setMsg "a note is talk with the agent \183 \9166 goes to its lines"
+      (Conv.LocalOnly _, _) -> answerNote conv
       (_, Nothing) -> Types.setMsg "nothing posted to reply to yet"
       (_, Just post) -> Monad.void (ThreadAction.replyToPost conv post)
+
+answerNote :: Conv.Conversation -> Brick.EventM Types.Name Types.St ()
+answerNote conv =
+  Monad.void (ThreadAction.openWorkPopupAt (Threads.anchorPlace (Conv.convAnchor conv)) (Just (Conv.convId conv)) (Types.AnswerNote (Conv.convTarget conv)) "")
 
 filterKey :: V.Event -> Types.Inbox -> Brick.EventM Types.Name Types.St ()
 filterKey ev inbox =

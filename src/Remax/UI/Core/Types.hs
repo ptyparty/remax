@@ -365,6 +365,7 @@ data LogView
 data WorkAction
   = ReplyTo Conv.Target T.Text
   | AskOn AgentRemark Conv.Target
+  | AnswerNote Conv.Target
   | CommentOn Conv.Anchor
   | EditPending Conv.WorkId WorkOrigin
   | TakeProposal Conv.WorkId Conv.Target T.Text

@@ -179,7 +179,10 @@ handleNotePopupKey ev np0 = do
   st0 <- State.get
   columns <- View.terminalColumns
   let
-    layout = SoftWrap.WrappedRows (popupRowWidth (popupBoxWidth columns))
+    boxWidth = case View.popupPlacement st0 np0 of
+      View.Floating -> popupBoxWidth columns
+      View.InInbox -> View.igPreview (View.inboxGeometry columns)
+    layout = SoftWrap.WrappedRows (popupRowWidth boxWidth)
     np =
       np0
         { Types.npEd =
@@ -289,6 +292,9 @@ notePopupNormalKey st np ev =
           ThreadAction.switchAction wp (Types.AskOn Types.FlagRemark target)
     V.EvKey (V.KChar 'r') []
       | Types.WorkFor wp <- Types.npPurpose np
+      , Types.AskOn _ target@(Conv.OnLinesOnly {}) <- Types.wpAction wp ->
+          ThreadAction.switchAction wp (Types.AnswerNote target)
+      | Types.WorkFor wp <- Types.npPurpose np
       , Types.AskOn _ target <- Types.wpAction wp ->
           ThreadAction.switchAction wp (Types.ReplyTo target (repliedTo st wp))
     -- the popup's normal mode follows the session's keymap, so a
@@ -322,6 +328,7 @@ remarkTarget wp =
   case Types.wpAction wp of
     Types.ReplyTo target _ -> Just target
     Types.AskOn _ target -> Just target
+    Types.AnswerNote target -> Just target
     _ -> Nothing
 
 repliedTo :: Types.St -> Types.WorkPopup -> T.Text
