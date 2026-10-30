@@ -517,11 +517,7 @@ draftRows :: Types.St -> Int -> [Conv.Conversation] -> [Row]
 draftRows st width convs =
   let
     newThreads = Maybe.mapMaybe (\c -> case Conv.convVenue c of Conv.ReviewThread Nothing _ -> Just c; _ -> Nothing) convs
-    unsent c = Maybe.mapMaybe (\(i, p) -> if isUnsent p then Just (c, i, p) else Nothing) (zip [0 ..] (Conv.convPosts c))
-    isUnsent p = case Conv.postState p of
-      Conv.Draft -> True
-      Conv.Proposal _ _ -> True
-      _ -> False
+    unsent c = Maybe.mapMaybe (\(i, p) -> if Conv.isUnsent p then Just (c, i, p) else Nothing) (zip [0 ..] (Conv.convPosts c))
     pullDrafts = maybe [] unsent (List.find ((== Conv.PullConversation) . Conv.convId) convs)
     heading p = case Conv.postState p of
       Conv.Proposal name _ ->

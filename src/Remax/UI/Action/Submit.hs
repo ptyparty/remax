@@ -190,7 +190,13 @@ editItem placed = do
 dropItem :: Submit.Placed -> Brick.EventM Types.Name Types.St ()
 dropItem placed = do
   st <- State.get
-  MonadIO.liftIO (WorkStore.discardWork (Types.stConn st) (Submit.itemWork (Submit.placedItem placed)))
+  let
+    item = Submit.placedItem placed
+    wid = Submit.itemWork item
+    conv = List.find ((== Submit.itemTarget item) . Conv.convTarget) (Types.stConversations st)
+    dropped = conv >>= List.find ((== Just wid) . Conv.postWork) . Conv.convPosts
+    stranded = Maybe.fromMaybe [] (Conv.strandedBy <$> conv <*> dropped)
+  MonadIO.liftIO (WorkStore.discardAll (Types.stConn st) (wid : stranded))
   WorkModel.reloadWork
   reopenSubmit
   Types.setMsg "dropped"

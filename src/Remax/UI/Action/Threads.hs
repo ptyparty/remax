@@ -364,22 +364,41 @@ discardKey :: Brick.EventM Types.Name Types.St Handled
 discardKey = do
   st <- State.get
   case bandPost st of
-    Just (_, _, post)
+    Just (conv, _, post)
       | Just wid <- Conv.postWork post ->
-          case Conv.postState post of
-            Conv.Draft
-              | T.null (T.strip (Conv.markdownText (Conv.postBody post))) -> dropWork wid "discarded" >> pure Handled
-              | otherwise -> do
-                  State.modify (\s -> s {Types.stConfirm = Just (Types.Confirm "discard the text you typed? y / n" (dropWork wid "discarded"))})
-                  pure Handled
-            Conv.Proposal _ _ -> dropWork wid "proposal dropped" >> pure Handled
-            _ -> pure Unhandled
+          let
+            stranded = Conv.strandedBy conv post
+            dropping msg = confirmDrop (dropPrompt (length stranded) post) (dropWork (wid : stranded) msg)
+          in
+            case Conv.postState post of
+              Conv.Draft -> dropping "discarded"
+              Conv.Proposal _ _ -> dropping "proposal dropped"
+              _ -> pure Unhandled
     _ -> pure Unhandled
 
-dropWork :: Conv.WorkId -> T.Text -> Brick.EventM Types.Name Types.St ()
-dropWork wid msg = do
+confirmDrop :: Maybe T.Text -> Brick.EventM Types.Name Types.St () -> Brick.EventM Types.Name Types.St Handled
+confirmDrop prompt act = do
+  case prompt of
+    Nothing -> act
+    Just question -> State.modify (\s -> s {Types.stConfirm = Just (Types.Confirm question act)})
+  pure Handled
+
+dropPrompt :: Int -> Conv.Post -> Maybe T.Text
+dropPrompt stranded post =
+  let
+    typed = not (T.null (T.strip (Conv.markdownText (Conv.postBody post))))
+    withLocals n = " and its " <> Types.tshow n <> (if n == 1 then " local post" else " local posts") <> "? y / n"
+  in
+    case (stranded, Conv.postState post) of
+      (0, Conv.Draft) | typed -> Just "discard the text you typed? y / n"
+      (0, _) -> Nothing
+      (n, Conv.Draft) -> Just ("discard the comment" <> withLocals n)
+      (n, _) -> Just ("drop the proposal" <> withLocals n)
+
+dropWork :: [Conv.WorkId] -> T.Text -> Brick.EventM Types.Name Types.St ()
+dropWork wids msg = do
   st <- State.get
-  MonadIO.liftIO (WorkStore.discardWork (Types.stConn st) wid)
+  MonadIO.liftIO (WorkStore.discardAll (Types.stConn st) wids)
   leaveBand
   WorkModel.reloadWork
   Types.setMsg msg
