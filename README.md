@@ -43,7 +43,9 @@ remax --untracked     # new files only, reviewed as pure additions; ordinary
                       #   reviews already include them (:set untracked 0 to stop)
 remax forget          # forget verdicts under the current directory (asks first)
                       #   in a folder of checkouts, reaches all of them
-remax list [--json]   # flagged/questioned punch list for this repository
+remax list [--json]   # flagged/questioned punch list for this repository,
+                      #   compact for agents; --json prints it whole
+remax show ID         # one conversation whole; any unique id prefix works
                       #   a leading space on a line means a remark on code the
                       #   change never touched, not feedback on the change
 remax list --wait     # ... but block until it changes, so an agent can wait
@@ -696,15 +698,18 @@ your feedback flows back through the store:
 
 1. Mark a line or hunk `!` (fix this) or `?` (explain or fix), and give
    the reason in the note popup that opens.
-2. The agent runs `remax -C /path/to/repo list --json` and gets file,
-   verdict, exact line text, position, and your note. Feedback given
+2. The agent runs `remax -C /path/to/repo list --awaiting agent` and
+   gets each conversation's id, file, verdicts, exact line text,
+   position, and your note, trimmed to the first lines and the last two
+   posts; `remax show ID` prints one whole. Feedback given
    during a `:rebase` stop also carries the commit it is about
    (sha + subject — final values, since stops only rewrite forward), so
    an agent can land fixes in the introducing commits; ambient feedback
    carries no commit and agents recover one from the line text with
    `git blame` when it matters.
 3. For a `?` it can answer in place: `remax reply ID "text"` (the id
-   comes from the JSON: a note's own, or a GitHub thread's) posts into
+   comes from the listing: a note's own, or a GitHub thread's, or any
+   prefix of it no other conversation shares) posts into
    the conversation, rendering live in order under your note with the
    agent's name. On a GitHub thread the post stays local to the two of
    you. `remax comment HUNK TEXT` proposes a new GitHub comment on a hunk
@@ -728,8 +733,8 @@ any command moves it back, the agent has to know: it edits files and
 reads feedback at the path it was pointed at, and the worktree's work
 is keyed under the worktree's path. The move is recorded as the group's
 latest, a checkout and its pull request worktrees being one group, and
-`remax list` on any path in the group reports it, as a `review moved
-to … for PR #N` line and a `review_moves` entry in `--json`; it wakes a
+`remax list` on any path in the group reports it, as a `moved  PR #N
+review is in …` line and a `review_moves` entry in `--json`; it wakes a
 `list --wait` as a flag does, and each move replaces the last. An agent
 whose `-C` does not already cover the path follows it, as the skill
 says. Switching among the group's checkouts with `:repo` or `:open`
@@ -846,8 +851,8 @@ whatever view they are in:
 
 A view loads the repo-wide notes and the work of its pull request: the
 one it reviews, or after `:mode tree` and friends, the one last open.
-`remax list --json` gives each conversation's `pull`: `null` for a
-repo-wide note or a draft that belongs to no pull request.
+`remax show ID` says where a conversation lives: `repo-wide` for a note
+or a draft that belongs to no pull request, else `on PR #N`.
 
 ## Filesystem awareness
 

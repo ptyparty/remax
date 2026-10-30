@@ -7,8 +7,13 @@ module Remax.Feedback
   , partyText
   , parseParty
   , listedParty
+  , awaits
+  , isBot
   , listFor
   , digestOf
+  , IdResolution (..)
+  , resolveId
+  , shortIds
   , Reply (..)
   , replyTo
   , Drafted (..)
@@ -16,6 +21,7 @@ module Remax.Feedback
   , proposeOn
   , listedJson
   , agentName
+  , authorWord
   ) where
 
 import Control.Monad qualified as Monad
@@ -23,6 +29,7 @@ import Data.List qualified as List
 import Data.List.NonEmpty qualified as NEL
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Database.SQLite.Simple qualified as SQLite
 import Remax.Conversation qualified as Conv
@@ -212,19 +219,62 @@ bareListed root rows =
       , listedScope = WorkStore.RepoWide
       }
 
-{- | What a wait watches: each conversation's newest post, so a new one
-from the reviewer or from GitHub wakes it.
+awaits :: Maybe Party -> Listed -> Bool
+awaits party l =
+  case party of
+    Nothing -> True
+    Just AwaitingAgent ->
+      listedParty l == AwaitingAgent
+        && listedKind l `notElem` ["pull", "review"]
+        && not (maybe False (isBot . Conv.postAuthor) (Conv.newestPost (listedPosts l)))
+    Just p -> listedParty l == p
+
+isBot :: Conv.Author -> Bool
+isBot a =
+  case a of
+    Conv.Person (Conv.Login login) ->
+      let
+        lower = T.toLower login
+      in
+        "[bot]" `T.isSuffixOf` lower || lower `elem` ["copilot", "copilot-pull-request-reviewer"]
+    _ -> False
+
+{- | What a wait watches: each conversation's newest
+post, so a new one from the reviewer or from GitHub wakes it.
 -}
-digestOf :: Maybe Party -> [Listed] -> [T.Text]
+digestOf :: Maybe Party -> [Listed] -> [(T.Text, T.Text)]
 digestOf party listed =
   let
-    wanted l = maybe True (== listedParty l) party
     line l =
-      listedId l
-        <> "\t"
-        <> maybe "" (\p -> Conv.authorText (Conv.postAuthor p) <> "\t" <> Conv.markdownText (Conv.postBody p)) (Conv.newestPost (listedPosts l))
+      maybe "" (\p -> Conv.authorText (Conv.postAuthor p) <> "\t" <> Conv.markdownText (Conv.postBody p)) (Conv.newestPost (listedPosts l))
   in
-    map line (filter wanted listed)
+    map (\l -> (listedId l, line l)) (filter (awaits party) listed)
+
+data IdResolution = ResolvedId T.Text | AmbiguousId [T.Text] | UnknownId
+  deriving (Eq, Show)
+
+resolveId :: [T.Text] -> T.Text -> IdResolution
+resolveId ids given
+  | given `elem` ids = ResolvedId given
+  | otherwise =
+      case List.nub (filter (given `T.isPrefixOf`) ids) of
+        [] -> UnknownId
+        [only] -> ResolvedId only
+        several -> AmbiguousId several
+
+shortIds :: [T.Text] -> Map.Map T.Text T.Text
+shortIds ids =
+  let
+    sorted = Set.toAscList (Set.fromList ids)
+    shared a b = maybe 0 (\(p, _, _) -> T.length p) (T.commonPrefixes a b)
+    neighbours = zip3 (Nothing : map Just sorted) sorted (map Just (drop 1 sorted) ++ [Nothing])
+    shortest (before, i, after) =
+      let
+        n = max 8 (1 + maximum (0 : map (shared i) (Maybe.catMaybes [before, after])))
+      in
+        (i, if n >= T.length i then i else T.take n i)
+  in
+    Map.fromList (map shortest neighbours)
 
 data Reply = Replied Int WorkStore.ConversationScope | NoSuchConversation
 

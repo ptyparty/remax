@@ -122,6 +122,7 @@ executable remax
       Remax.DiffModel
       Remax.Emacs
       Remax.Feedback
+      Remax.FeedbackText
       Remax.Git
       Remax.GitHub
       Remax.Highlight
