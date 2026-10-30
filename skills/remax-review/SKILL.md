@@ -134,9 +134,9 @@ exactly one repository, so remax finds the owner itself and tells you
 which one it landed in.
 
 - **id** — the conversation's address for `remax reply`, `remax show`,
-  `remax comment --revise` and `remax move`: a GitHub thread's own id
-  (`PRRT_…`) or a note's, which a note keeps when the reviewer grows it
-  over more lines. The listing prints the shortest prefix no other
+  `remax comment --revise`, `remax comment --withdraw` and
+  `remax move`: a GitHub thread's own id (`PRRT_…`) or a note's, which a
+  note keeps when the reviewer grows it over more lines. The listing prints the shortest prefix no other
   conversation shares, at least eight characters, and every command
   takes any such prefix or the whole id. It is not a line key.
 - **kind** — `thread` for a GitHub review thread the session has
@@ -370,6 +370,7 @@ answer a question, reply to it instead.
 ```sh
 remax -C /path/to/repo comment HUNK_ID "comment text"   # draft on a hunk
 remax -C /path/to/repo comment --revise ID "new text"   # propose a rewrite
+remax -C /path/to/repo comment --withdraw ID            # drop your proposal
 ```
 
 `HUNK_ID` comes from `remax hunks`. `comment` writes a GitHub comment on
@@ -378,7 +379,11 @@ pending until they submit it; they can edit or drop it first. `--revise`
 records a proposal on a conversation by its id: text for a reply, or
 for a draft of theirs. Nothing happens until the reviewer takes it with
 Enter, which makes it their own pending text, and a new proposal
-replaces the old. Draft or revise only when asked to.
+replaces the old. `--withdraw` drops your proposal on a conversation
+until the reviewer takes it. On a comment you drafted on a hunk, the
+conversation goes with it, local talk included, and the output counts
+the local posts it dropped. Once taken, the text is the reviewer's and
+withdrawing refuses. Draft or revise only when asked to.
 
 A draft belongs to the pull request it was written for, and the output
 names it with the draft's id: `comment 3f9c… proposed on src/Foo.hs:42 on

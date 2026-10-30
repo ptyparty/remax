@@ -724,7 +724,9 @@ your feedback flows back through the store:
    you. `remax comment HUNK TEXT` proposes a new GitHub comment on a hunk
    and `remax comment --revise ID TEXT` proposes text for a
    conversation; you take either with `⏎`, and only then does it wait
-   for `:submit`. Each command says where its post landed: `repo-wide`
+   for `:submit`. Until you take it, `remax comment --withdraw ID` lets
+   the agent drop its proposal, and a proposed comment's local talk goes
+   with it. Each command says where its post landed: `repo-wide`
    for a note, `on PR #N` for anything bound for GitHub. When a pull
    request is closed and reopened under a new number,
    `remax move ID --pr N` files a draft and every post on it under the

@@ -23,6 +23,8 @@ module Remax.Feedback
   , Noted (..)
   , noteOnLines
   , proposeOn
+  , Withdrawal (..)
+  , withdrawOn
   , listedJson
   , agentName
   , authorWord
@@ -432,6 +434,28 @@ proposeOn conn root target text = do
           _ <- WorkStore.setProposal conn scope t agentName (Conv.Markdown text)
           fmap (Replied 1) (WorkStore.conversationScope conn scope t)
     _ -> pure NoSuchConversation
+
+data Withdrawal = Withdrawn Int WorkStore.ConversationScope | NoProposal | NoConversation
+
+withdrawOn :: SQLite.Connection -> FilePath -> T.Text -> IO Withdrawal
+withdrawOn conn root target = do
+  (_, listed) <- listScoped (const (pure [])) conn root
+  case List.find ((== target) . listedId) listed of
+    Nothing -> pure NoConversation
+    Just l ->
+      case (listedTarget l, Maybe.listToMaybe (Maybe.mapMaybe ownProposal (listedPosts l))) of
+        (Just t, Just (post, wid)) -> do
+          let
+            stranded = Conv.strandedIn t (listedPosts l) post
+          dropped <- WorkStore.withdrawProposal conn wid stranded
+          pure (if dropped then Withdrawn (length stranded) (listedScope l) else NoProposal)
+        _ -> pure NoProposal
+
+ownProposal :: Conv.Post -> Maybe (Conv.Post, Conv.WorkId)
+ownProposal p =
+  case (Conv.postState p, Conv.postWork p) of
+    (Conv.Proposal name _, Just wid) | name == agentName -> Just (p, wid)
+    _ -> Nothing
 
 listedJson :: Listed -> Json.Json
 listedJson l =

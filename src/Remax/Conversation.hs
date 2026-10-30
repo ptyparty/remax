@@ -45,6 +45,7 @@ module Remax.Conversation
   , isLocalPost
   , isUnsent
   , strandedBy
+  , strandedIn
   , newestPost
   , Venue (..)
   , ConversationId (..)
@@ -342,10 +343,13 @@ isUnsent p =
     _ -> False
 
 strandedBy :: Conversation -> Post -> [WorkId]
-strandedBy conv post =
-  case (convTarget conv, filter isUnsent (convPosts conv)) of
+strandedBy conv = strandedIn (convTarget conv) (convPosts conv)
+
+strandedIn :: Target -> [Post] -> Post -> [WorkId]
+strandedIn target posts post =
+  case (target, filter isUnsent posts) of
     (NewThread _ (OnLines _), [only])
-      | only == post -> Maybe.mapMaybe postWork (filter isLocalPost (convPosts conv))
+      | only == post -> Maybe.mapMaybe postWork (filter isLocalPost posts)
     _ -> []
 
 newestPost :: [Post] -> Maybe Post
