@@ -3,6 +3,8 @@
 module Remax.Feedback
   ( Listed (..)
   , ListedLine (..)
+  , LinesInFile (..)
+  , linesInFileText
   , Party (..)
   , partyText
   , parseParty
@@ -25,6 +27,7 @@ module Remax.Feedback
   ) where
 
 import Control.Monad qualified as Monad
+import Data.Char qualified as Char
 import Data.List qualified as List
 import Data.List.NonEmpty qualified as NEL
 import Data.Map.Strict qualified as Map
@@ -40,6 +43,7 @@ import Remax.Key qualified as Key
 import Remax.RemoteCache qualified as RemoteCache
 import Remax.Store qualified as Store
 import Remax.WorkStore qualified as WorkStore
+import System.FilePath ((</>))
 
 agentName :: Conv.AgentName
 agentName = Conv.AgentName "claude"
@@ -62,6 +66,7 @@ data Listed = Listed
   , listedLines :: [ListedLine]
   , listedPosts :: [Conv.Post]
   , listedCommit :: Maybe T.Text
+  , listedLinesInFile :: Maybe LinesInFile
   , listedUpdatedAt :: T.Text
   , listedTarget :: Maybe Conv.Target
   , listedVerdictKeys :: [Store.LineKey]
@@ -104,10 +109,10 @@ draws, from the store and the last poll's cache, then the lines with a
 verdict that no conversation covers.
 -}
 listFor :: SQLite.Connection -> FilePath -> IO [Listed]
-listFor conn root = fmap snd (listScoped conn root)
+listFor conn root = fmap snd (listScoped (\p -> T.lines <$> Git.readFileOr "" (root </> T.unpack p)) conn root)
 
-listScoped :: SQLite.Connection -> FilePath -> IO (Maybe Int, [Listed])
-listScoped conn root = do
+listScoped :: (T.Text -> IO [T.Text]) -> SQLite.Connection -> FilePath -> IO (Maybe Int, [Listed])
+listScoped readWorking conn root = do
   let
     repo = T.pack root
   cached <- RemoteCache.readRemote repo
@@ -127,11 +132,15 @@ listScoped conn root = do
   texts <- positionTexts root pull convs
   scopes <- mapM (WorkStore.conversationScope conn checkout . Conv.convTarget) convs
   let
-    listedConvs = zipWith (fromConversation root rows texts) scopes convs
+    paths = Set.fromList (Maybe.mapMaybe (fmap fst . placedLines) convs ++ map Store.punchFile rows)
+  working <- Map.fromList <$> mapM (\p -> fmap ((,) p) (readWorking p)) (Set.toList paths)
+  let
+    standing (path, placed) = linesInFile (Map.findWithDefault [] path working) placed
+    listedConvs = zipWith (fromConversation root rows texts standing) scopes convs
     covered = Map.fromList (map (\k -> (k, ())) (concatMap listedVerdictKeys listedConvs))
     bare = filter (\r -> Map.notMember (Store.punchKey r) covered) rows
     bareGroups = Map.fromListWith (flip (++)) (map (\r -> ((Store.punchFile r, Store.punchCommitSha r), [r])) bare)
-  pure (pull, listedConvs ++ map (bareListed root) (Map.elems bareGroups))
+  pure (pull, listedConvs ++ map (bareListed root standing) (Map.elems bareGroups))
 
 positionTexts :: FilePath -> Maybe Int -> [Conv.Conversation] -> IO (Map.Map (Conv.Side, T.Text) [T.Text])
 positionTexts root pull convs =
@@ -148,8 +157,21 @@ positionTexts root pull convs =
           _ -> Nothing
       pure (Map.fromList (Maybe.catMaybes found))
 
-fromConversation :: FilePath -> [Store.PunchRow] -> Map.Map (Conv.Side, T.Text) [T.Text] -> WorkStore.ConversationScope -> Conv.Conversation -> Listed
-fromConversation root rows texts scope conv =
+placedLines :: Conv.Conversation -> Maybe (T.Text, [(Int, T.Text)])
+placedLines conv =
+  case Conv.convAnchor conv of
+    Conv.OnLines lineSpan -> Just (Conv.spanPath lineSpan, Maybe.mapMaybe (\l -> traverse unmarked (Conv.slLineNo l, Conv.slText l)) (NEL.toList (Conv.spanLines lineSpan)))
+    _ -> Nothing
+
+unmarked :: T.Text -> Maybe T.Text
+unmarked line =
+  case T.uncons line of
+    Just ('+', rest) -> Just rest
+    Just (' ', rest) -> Just rest
+    _ -> Nothing
+
+fromConversation :: FilePath -> [Store.PunchRow] -> Map.Map (Conv.Side, T.Text) [T.Text] -> ((T.Text, [(Int, T.Text)]) -> Maybe LinesInFile) -> WorkStore.ConversationScope -> Conv.Conversation -> Listed
+fromConversation root rows texts standing scope conv =
   let
     textAt pos n = Maybe.fromMaybe "" (Maybe.listToMaybe (drop (n - 1) (Map.findWithDefault [] (Conv.posSide pos, Conv.posPath pos) texts)))
     verdictOf k = Maybe.listToMaybe (map Store.punchVerdict (filter ((== k) . Store.punchKey) rows))
@@ -184,6 +206,7 @@ fromConversation root rows texts scope conv =
       , listedLines = lines_
       , listedPosts = Conv.convPosts conv
       , listedCommit = commit
+      , listedLinesInFile = standing =<< placedLines conv
       , listedUpdatedAt = updated
       , listedTarget = Just (Conv.convTarget conv)
       , listedVerdictKeys = keys
@@ -200,10 +223,11 @@ postTime p =
 {- | Lines with a verdict and no note draw no conversation yet; they
 list under the name a note on them would take.
 -}
-bareListed :: FilePath -> [Store.PunchRow] -> Listed
-bareListed root rows =
+bareListed :: FilePath -> ((T.Text, [(Int, T.Text)]) -> Maybe LinesInFile) -> [Store.PunchRow] -> Listed
+bareListed root standing rows =
   let
     keys = map (Store.lineKeyToText . Store.punchKey) rows
+    placed = Maybe.mapMaybe (\r -> (\n -> traverse unmarked (n, Store.punchLine r)) =<< Store.punchLineNo r) rows
   in
     Listed
       { listedId = Key.noteGroupId (T.pack root) keys
@@ -213,6 +237,7 @@ bareListed root rows =
       , listedLines = map (\r -> ListedLine (Store.punchLineNo r) (Store.punchLine r) (Just (Store.punchVerdict r))) rows
       , listedPosts = []
       , listedCommit = Store.punchCommitSha =<< Maybe.listToMaybe rows
+      , listedLinesInFile = (\r -> standing (Store.punchFile r, placed)) =<< Maybe.listToMaybe rows
       , listedUpdatedAt = maximum ("" : map Store.punchAt rows)
       , listedTarget = Nothing
       , listedVerdictKeys = map Store.punchKey rows
@@ -238,6 +263,35 @@ isBot a =
       in
         "[bot]" `T.isSuffixOf` lower || lower `elem` ["copilot", "copilot-pull-request-reviewer"]
     _ -> False
+
+data LinesInFile = AllInFile | SomeInFile | NoneInFile
+  deriving (Eq, Show)
+
+linesInFileText :: LinesInFile -> T.Text
+linesInFileText l =
+  case l of
+    AllInFile -> "all"
+    SomeInFile -> "some"
+    NoneInFile -> "none"
+
+linesInFile :: [T.Text] -> [(Int, T.Text)] -> Maybe LinesInFile
+linesInFile fileLines placed =
+  let
+    lineAt = Map.fromList (zip [1 ..] fileLines)
+    positionsOf = Map.fromListWith (flip (<>)) (zip fileLines (map pure [1 ..]))
+    anchors = filter (T.any Char.isAlphaNum . snd) placed
+    shifts = List.nub (concatMap (\(n, text) -> map (subtract n) (Map.findWithDefault [] text positionsOf)) anchors)
+    matchesAt shift = length (filter (\(n, text) -> Map.lookup (n + shift) lineAt == Just text) placed)
+    best = maximum (0 : map matchesAt shifts)
+  in
+    if null anchors
+      then Nothing
+      else Just (placement best)
+ where
+  placement best
+    | best == length placed = AllInFile
+    | best > 0 = SomeInFile
+    | otherwise = NoneInFile
 
 {- | What a wait watches: each conversation's newest
 post, so a new one from the reviewer or from GitHub wakes it.
@@ -283,7 +337,7 @@ with no note yet takes a fresh note on its lines.
 -}
 replyTo :: SQLite.Connection -> FilePath -> T.Text -> T.Text -> IO Reply
 replyTo conn root target text = do
-  (pull, listed) <- listScoped conn root
+  (pull, listed) <- listScoped (const (pure [])) conn root
   let
     repo = T.pack root
     scope = WorkStore.Scope {WorkStore.scopeRepo = repo, WorkStore.scopePull = pull}
@@ -343,7 +397,7 @@ commentOnHunk conn root pull hunk text = do
 -- | The agent's proposed text on a conversation; the next replaces it.
 proposeOn :: SQLite.Connection -> FilePath -> T.Text -> T.Text -> IO Reply
 proposeOn conn root target text = do
-  (pull, listed) <- listScoped conn root
+  (pull, listed) <- listScoped (const (pure [])) conn root
   let
     scope = WorkStore.Scope {WorkStore.scopeRepo = T.pack root, WorkStore.scopePull = pull}
   case List.find ((== target) . listedId) listed of
@@ -379,6 +433,7 @@ listedJson l =
       , ("lines", Json.JArray (map lineJson (listedLines l)))
       , ("thread", Json.JArray (map postJson (listedPosts l)))
       , ("awaiting", str (partyText (listedParty l)))
+      , ("lines_in_file", maybe Json.JNull (str . linesInFileText) (listedLinesInFile l))
       , ("updated_at", str (listedUpdatedAt l))
       , ("pull", maybe Json.JNull (Json.JNumber . T.pack . show) (WorkStore.scopeColumn (listedScope l)))
       ]
