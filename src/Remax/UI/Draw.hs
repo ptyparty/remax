@@ -11,6 +11,7 @@ import Data.Maybe qualified as Maybe
 import Remax.Config qualified as Config
 import Remax.Git qualified as Git
 import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.View qualified as View
 import Remax.UI.Core.Widgets qualified as Widgets
 import Remax.UI.Draw.Body qualified as DrawBody
 import Remax.UI.Draw.Cite qualified as DrawCite
@@ -48,7 +49,7 @@ draw st =
         [ fmap DrawReactions.reactionLayer (Types.stReacting st)
         , fmap (DrawSubmit.submitLayer st) (Types.stSubmit st)
         , fmap DrawCite.citeLayer (Types.stCiting st)
-        , fmap (DrawNotes.notePopupLayer st) (Types.stNotePopup st)
+        , floatingNotePopup st
         , fmap (DrawInbox.inboxLayer st) (Types.stInbox st)
         , fmap (DrawTour.tourOverviewLayer st) (Types.stTourOverview st)
         , DrawTree.fileMenuLayer =<< Types.stTree st
@@ -83,3 +84,10 @@ draw st =
                  ++ [DrawStatus.statusBar st]
              )
          ]
+
+floatingNotePopup :: Types.St -> Maybe (BrickTypes.Widget Types.Name)
+floatingNotePopup st = do
+  np <- Types.stNotePopup st
+  case View.popupPlacement st np of
+    View.Floating -> Just (DrawNotes.notePopupLayer st np)
+    View.InInbox -> Nothing

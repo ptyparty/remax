@@ -155,6 +155,7 @@ popupWord wp =
     Types.ReplyTo _ _ -> "reply"
     Types.AskOn Types.AskRemark _ -> "ask"
     Types.AskOn Types.FlagRemark _ -> "flag"
+    Types.AnswerNote _ -> "reply"
     Types.CommentOn _ -> "comment"
     Types.EditPending _ origin -> case origin of
       Types.ReplyOrigin _ -> "reply"
@@ -169,6 +170,7 @@ popupStatus wp =
   case Types.wpAction wp of
     Types.ReplyTo _ author -> "reply to " <> author
     Types.AskOn _ _ -> "the agent about " <> T.takeWhile (/= ' ') (Types.wpPlace wp)
+    Types.AnswerNote _ -> "reply to the agent about " <> T.takeWhile (/= ' ') (Types.wpPlace wp)
     Types.CommentOn anchor -> "new comment on " <> Threads.anchorPlace anchor
     Types.EditPending _ _ -> "editing your pending text"
     Types.TakeProposal _ target author -> "editing the proposal as your " <> Threads.takenAs target author

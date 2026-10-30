@@ -2,6 +2,7 @@
 
 module Remax.UI.Draw.Inbox
   ( inboxLayer
+  , inboxReply
   ) where
 
 import Brick qualified as Brick
@@ -15,7 +16,9 @@ import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Inbox qualified as Inbox
 import Remax.UI.Core.PullView qualified as PullView
 import Remax.UI.Core.Types qualified as Types
+import Remax.UI.Core.View qualified as View
 import Remax.UI.Core.Widgets qualified as Widgets
+import Remax.UI.Draw.Notes qualified as DrawNotes
 import Remax.UI.Draw.PullView qualified as DrawPullView
 
 inboxLayer :: Types.St -> Types.Inbox -> BrickTypes.Widget Types.Name
@@ -25,19 +28,40 @@ inboxLayer st inbox =
     let
       convs = Inbox.entries st (Types.ibFilter inbox)
       chosen = Inbox.selected inbox convs
-      boxWidth = max 60 (BrickTypes.availWidth ctx - 10)
+      geometry = View.inboxGeometry (BrickTypes.availWidth ctx)
+      boxWidth = View.igBox geometry
       bodyRows = max 6 (BrickTypes.availHeight ctx - 10)
-      listWidth = boxWidth * 2 `div` 5
-      previewWidth = boxWidth - listWidth - 3
+      listWidth = View.igList geometry
+      previewWidth = View.igPreview geometry
       title = "feedback \183 " <> Types.tshow (length convs)
       body =
         Brick.hBox
           [ Brick.hLimit listWidth (Brick.vLimit bodyRows (listColumn st inbox listWidth bodyRows convs chosen))
           , Brick.withAttr Attrs.hintAttr (Brick.hLimit 1 (Brick.vLimit bodyRows (Brick.fill '\9474')))
           , Brick.txt " "
-          , Brick.hLimit previewWidth (Brick.vLimit bodyRows (previewColumn st inbox previewWidth chosen))
+          , Brick.hLimit previewWidth (Brick.vLimit bodyRows (rightColumn st inbox previewWidth bodyRows chosen))
           ]
-    BrickTypes.render (Widgets.floatFrame title (hint (Config.cfgKeys (Types.stConfig st)) inbox) (Brick.hLimit boxWidth body))
+      shownHint = maybe (hint (Config.cfgKeys (Types.stConfig st)) inbox) (DrawNotes.notePopupHint st) (inboxReply st)
+    BrickTypes.render (Widgets.floatFrame title shownHint (Brick.hLimit boxWidth body))
+
+inboxReply :: Types.St -> Maybe Types.NotePopup
+inboxReply st = do
+  np <- Types.stNotePopup st
+  case View.popupPlacement st np of
+    View.InInbox -> Just np
+    View.Floating -> Nothing
+
+rightColumn :: Types.St -> Types.Inbox -> Int -> Int -> Maybe Conv.Conversation -> BrickTypes.Widget Types.Name
+rightColumn st inbox width rows chosen =
+  case inboxReply st of
+    Just np ->
+      Brick.padBottom Brick.Max $
+        Brick.vBox
+          [ Brick.withAttr Attrs.noteInlineAttr (Brick.txt (Widgets.clipT width (DrawNotes.popupTitle np)))
+          , Brick.txt " "
+          , Brick.padRight Brick.Max (DrawNotes.notePopupPane st np width (rows - 2))
+          ]
+    Nothing -> previewColumn st inbox width chosen
 
 listColumn :: Types.St -> Types.Inbox -> Int -> Int -> [Conv.Conversation] -> Maybe Conv.Conversation -> BrickTypes.Widget Types.Name
 listColumn st inbox width rows convs chosen =

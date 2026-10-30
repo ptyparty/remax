@@ -317,7 +317,7 @@ commentKey = do
           Types.setMsg "nothing to comment on here"
           pure Handled
         Just lineSpan ->
-          openWorkPopupAt st (Threads.anchorPlace (Conv.OnLines lineSpan) <> declOf fv) Nothing (Types.CommentOn (Conv.OnLines lineSpan)) ""
+          openWorkPopupAt (Threads.anchorPlace (Conv.OnLines lineSpan) <> declOf fv) Nothing (Types.CommentOn (Conv.OnLines lineSpan)) ""
 
 suggestionFence :: Conv.LineSpan -> T.Text
 suggestionFence lineSpan =
@@ -436,10 +436,10 @@ openWorkPopup conv action initial = do
   st <- State.get
   let
     place = Threads.anchorPlace (Conv.convAnchor conv) <> maybe "" declOf (Types.currentFileMay st)
-  openWorkPopupAt st place (Just (Conv.convId conv)) action initial
+  openWorkPopupAt place (Just (Conv.convId conv)) action initial
 
-openWorkPopupAt :: Types.St -> T.Text -> Maybe Conv.ConversationId -> Types.WorkAction -> T.Text -> Brick.EventM Types.Name Types.St Handled
-openWorkPopupAt _ place cid action initial = do
+openWorkPopupAt :: T.Text -> Maybe Conv.ConversationId -> Types.WorkAction -> T.Text -> Brick.EventM Types.Name Types.St Handled
+openWorkPopupAt place cid action initial = do
   let
     ls = if T.null initial then [""] else T.lines initial
     lastRow = length ls - 1
@@ -486,10 +486,9 @@ saveWork wp text = do
         Monad.void (MonadIO.liftIO (WorkStore.addPending conn scope target Conv.Viewer body))
         reloadAndBand (Types.wpConv wp)
         Types.setMsg ("reply to " <> author <> " waits for :submit")
-      Types.AskOn remark target -> do
-        Monad.void (MonadIO.liftIO (WorkStore.addAside conn scope target Conv.Viewer body))
-        reloadAndBand (Types.wpConv wp)
-        Types.setMsg (case remark of Types.FlagRemark -> "flagged for the agent"; Types.AskRemark -> "asked the agent")
+      Types.AskOn remark target ->
+        saveAside wp target body (case remark of Types.FlagRemark -> "flagged for the agent"; Types.AskRemark -> "asked the agent")
+      Types.AnswerNote target -> saveAside wp target body "replied to the agent"
       Types.CommentOn anchor -> do
         lid <- MonadIO.liftIO (WorkStore.newLocalId (Types.repoText st) (anchorKeys anchor))
         Monad.void (MonadIO.liftIO (WorkStore.addPending conn scope (Conv.NewThread lid anchor) Conv.Viewer body))
@@ -508,6 +507,13 @@ saveWork wp text = do
         case pullOf st of
           Just pr -> githubJob "editing the comment" (GitHub.editComment (Types.stRoot st) (Git.prRepo pr) kind cid text) "edited on GitHub"
           Nothing -> Types.setMsg "no pull request open"
+
+saveAside :: Types.WorkPopup -> Conv.Target -> Conv.Markdown -> T.Text -> Brick.EventM Types.Name Types.St ()
+saveAside wp target body said = do
+  st <- State.get
+  Monad.void (MonadIO.liftIO (WorkStore.addAside (Types.stConn st) (WorkModel.scopeOf st) target Conv.Viewer body))
+  reloadAndBand (Types.wpConv wp)
+  Types.setMsg said
 
 -- GitHub writes --------------------------------------------------------
 

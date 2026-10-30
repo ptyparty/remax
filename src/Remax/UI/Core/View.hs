@@ -12,6 +12,10 @@ module Remax.UI.Core.View
   , windowRowsFor
   , terminalRows
   , terminalColumns
+  , PopupPlacement (..)
+  , popupPlacement
+  , InboxGeometry (..)
+  , inboxGeometry
   , windowSpanFor
   , bodyWindow
   , gutterWidth
@@ -194,6 +198,28 @@ terminalColumns = do
   vty <- Brick.getVtyHandle
   (columns, _) <- MonadIO.liftIO (V.displayBounds (V.outputIface vty))
   pure columns
+
+data PopupPlacement = Floating | InInbox
+
+popupPlacement :: Types.St -> Types.NotePopup -> PopupPlacement
+popupPlacement st np =
+  case (Types.stInbox st, Types.npPurpose np) of
+    (Just _, Types.WorkFor _) -> InInbox
+    _ -> Floating
+
+data InboxGeometry = InboxGeometry
+  { igBox :: Int
+  , igList :: Int
+  , igPreview :: Int
+  }
+
+inboxGeometry :: Int -> InboxGeometry
+inboxGeometry columns =
+  let
+    box = max 60 (columns - 10)
+    list = box * 2 `div` 5
+  in
+    InboxGeometry {igBox = box, igList = list, igPreview = box - list - 3}
 
 -- How many display rows the body draws at once, and how close the cursor
 -- may come to an edge before the window is moved.

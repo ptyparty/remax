@@ -3,6 +3,9 @@
 
 module Remax.UI.Draw.Notes
   ( notePopupLayer
+  , notePopupPane
+  , popupTitle
+  , notePopupHint
   ) where
 
 import Brick ((<+>))
@@ -26,32 +29,37 @@ import Remax.UI.Core.Widgets qualified as Widgets
 
 notePopupLayer :: Types.St -> Types.NotePopup -> BrickTypes.Widget Types.Name
 notePopupLayer st np =
+  BrickTypes.Widget BrickTypes.Greedy BrickTypes.Greedy $ do
+    ctx <- BrickTypes.getContext
+    let
+      boxWidth = NoteAction.popupBoxWidth (BrickTypes.availWidth ctx)
+      bodyRows = max 6 (BrickTypes.availHeight ctx - 14)
+    BrickTypes.render $
+      Widgets.floatFrame (popupTitle np) (notePopupHint st np) $
+        Brick.hLimit boxWidth $
+          Brick.padRight Brick.Max $
+            Brick.vLimit bodyRows (notePopupPane st np boxWidth bodyRows)
+
+notePopupHint :: Types.St -> Types.NotePopup -> T.Text
+notePopupHint st = popupHint (Config.cfgKeys (Types.stConfig st)) (Types.flagRule st)
+
+notePopupPane :: Types.St -> Types.NotePopup -> Int -> Int -> BrickTypes.Widget Types.Name
+notePopupPane st np boxWidth bodyRows =
   let
     ed = Types.npEd np
-    title = popupTitle np
     targetRows = popupTargetRows st np
     choiceRows = choiceList np
+    -- the editor keeps its room first; the transcript takes what is
+    -- left, and gives up its oldest posts to fit rather than
+    -- squeezing the box you are typing in
+    rows = SoftWrap.softRows (NoteAction.popupRowWidth boxWidth) (Modal.bufferLines ed)
+    editorRows = max 3 (min 10 (length rows + 1))
+    budget = bodyRows - editorRows - length targetRows - length choiceRows - 1
+    transcript = case Types.npPurpose np of
+      Types.WorkFor wp -> workRows st (Modal.edMode ed) (boxWidth - 2) budget wp
+      _ -> []
   in
-    BrickTypes.Widget BrickTypes.Greedy BrickTypes.Greedy $ do
-      ctx <- BrickTypes.getContext
-      let
-        boxWidth = NoteAction.popupBoxWidth (BrickTypes.availWidth ctx)
-        bodyRows = max 6 (BrickTypes.availHeight ctx - 14)
-        -- the editor keeps its room first; the transcript takes what is
-        -- left, and gives up its oldest posts to fit rather than
-        -- squeezing the box you are typing in
-        rows = SoftWrap.softRows (NoteAction.popupRowWidth boxWidth) (Modal.bufferLines ed)
-        editorRows = max 3 (min 10 (length rows + 1))
-        budget = bodyRows - editorRows - length targetRows - length choiceRows - 1
-        transcript = case Types.npPurpose np of
-          Types.WorkFor wp -> workRows st (Modal.edMode ed) (boxWidth - 2) budget wp
-          _ -> []
-      BrickTypes.render $
-        Widgets.floatFrame title (popupHint (Config.cfgKeys (Types.stConfig st)) (Types.flagRule st) np) $
-          Brick.hLimit boxWidth $
-            Brick.padRight Brick.Max $
-              Brick.vLimit bodyRows $
-                Brick.vBox (targetRows ++ transcript ++ [Brick.vLimit editorRows (noteBodyWidget ed rows)] ++ choiceRows)
+    Brick.vBox (targetRows ++ transcript ++ [Brick.vLimit editorRows (noteBodyWidget ed rows)] ++ choiceRows)
 
 popupTitle :: Types.NotePopup -> T.Text
 popupTitle np =
@@ -152,6 +160,7 @@ workTitle wp =
   case Types.wpAction wp of
     Types.ReplyTo _ author -> "reply \183 to " <> author
     Types.AskOn r _ -> remarkWord r <> " \183 the agent"
+    Types.AnswerNote _ -> "reply \183 the agent"
     Types.CommentOn anchor -> "comment \183 " <> Threads.anchorPlace anchor
     Types.EditPending _ origin -> case origin of
       Types.ReplyOrigin author -> "reply \183 to " <> author
@@ -178,8 +187,9 @@ workHint keys rule mode wp =
     sha = ["C-g inserts a sha"]
     (verb, typing, normal) = case Types.wpAction wp of
       Types.ReplyTo _ _ -> ("queues for :submit", sha, [remarks])
-      Types.AskOn Types.AskRemark _ -> ("saves", sha, flag ++ ["r replies on GitHub instead"])
-      Types.AskOn Types.FlagRemark _ -> ("saves", sha, ["? asks the agent instead", "r replies on GitHub instead"])
+      Types.AskOn Types.AskRemark target -> ("saves", sha, flag ++ [replyInstead target])
+      Types.AskOn Types.FlagRemark target -> ("saves", sha, ["? asks the agent instead", replyInstead target])
+      Types.AnswerNote _ -> ("saves", sha, [remarks <> ", marking the lines"])
       Types.CommentOn (Conv.OnLines _) -> ("saves", sha ++ ["C-s inserts a suggestion"], [])
       Types.CommentOn _ -> ("saves", sha, [])
       Types.EditPending _ _ -> ("saves", sha, [])
@@ -188,6 +198,12 @@ workHint keys rule mode wp =
       Types.EditPosted _ _ -> ("edits on GitHub at once", sha, [])
   in
     editorHint keys mode verb typing normal
+
+replyInstead :: Conv.Target -> T.Text
+replyInstead target =
+  case target of
+    Conv.OnLinesOnly {} -> "r replies without marking the lines"
+    _ -> "r replies on GitHub instead"
 
 -- The thread's log above the editor: the newest two posts in full,
 -- older ones collapsed to one line each, then the rule naming what
@@ -266,6 +282,7 @@ ruleText wp =
   case Types.wpAction wp of
     Types.ReplyTo _ author -> "reply to " <> author <> " \183 waits for :submit"
     Types.AskOn r _ -> remarkWord r <> " the agent"
+    Types.AnswerNote _ -> "reply to the agent"
     Types.CommentOn _ -> "comment \183 waits for :submit"
     Types.EditPending _ origin -> case origin of
       Types.ReplyOrigin author -> "your reply to " <> author <> " \183 waits for :submit"

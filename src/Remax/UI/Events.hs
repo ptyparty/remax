@@ -74,6 +74,7 @@ syncComposing = do
     writing = case Types.stNotePopup st of
       Just np
         | Types.NoteOn _ <- Types.npPurpose np -> Just (Types.repoText st)
+        | Types.WorkFor wp <- Types.npPurpose np, talksToAgent (Types.wpAction wp) -> Just (Types.repoText st)
       _ -> Nothing
   Monad.unless (writing == Types.stComposing st) $ do
     -- cleared where it was set before being set anywhere else, so
@@ -81,6 +82,13 @@ syncComposing = do
     Monad.forM_ (Types.stComposing st) (\was -> MonadIO.liftIO (Store.setComposing (Types.stConn st) was False))
     Monad.forM_ writing (\now -> MonadIO.liftIO (Store.setComposing (Types.stConn st) now True))
     State.modify (\s -> s {Types.stComposing = writing})
+
+talksToAgent :: Types.WorkAction -> Bool
+talksToAgent action =
+  case action of
+    Types.AskOn _ _ -> True
+    Types.AnswerNote _ -> True
+    _ -> False
 
 -- Keep whichever selector is on screen, so ␣' can bring it back.
 --

@@ -649,9 +649,12 @@ conversation: the file opens on its line with the thread's newest post
 selected, and the hunk holding it becomes the current one. When its
 lines have left the file it lands on the nearest line and says `that
 hunk is gone · nearest line N`. A PR-level comment or review opens the
-PR view on it. `r` replies to the newest posted comment in the reply
-popup, queued for `:submit` like any reply, and the popup stays open
-behind it. `Esc` closes it (`C-c C-k` in emacs).
+PR view on it. `r` writes a reply on the right side, under the
+conversation's log. On a GitHub conversation it replies to the newest
+posted comment, queued for `:submit` like any reply; on a note it is
+your next word to the agent, saved at once, and the note's marks stay as
+they are; `?` or `!` in the reply's normal mode marks the lines again as
+it saves. The list stays open beside it. `Esc` closes it (`C-c C-k` in emacs).
 
 ### Submitting
 
