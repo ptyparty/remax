@@ -168,7 +168,7 @@ treeActivate st view row =
     Tree.RowHunk ix -> do
       closeTree
       case List.findIndex ((== Tree.trPath row) . Types.fvPath) (Types.stFiles st) of
-        Just f -> Nav.parkAnchor f ix
+        Just f -> Nav.visitAnchor f ix
         Nothing -> Types.setMsg "that file has left the session"
     -- a deletion opens like anything else now: the change set
     -- carries it as a file whose every line is removed

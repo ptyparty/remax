@@ -34,6 +34,7 @@ editCurrent = Types.whenWritable $ \grant -> do
 -- and come back; the watcher reloads whatever the editor wrote.
 launchEditor :: Git.Writable -> FilePath -> Int -> Brick.EventM Types.Name Types.St ()
 launchEditor _ file line = do
+  State.modify Types.hidePullView
   st <- State.get
   Brick.suspendAndResume $ do
     (cmd, args) <- editorInvocation file line
