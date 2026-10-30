@@ -780,7 +780,7 @@ applyChangeSet remaining = do
             Types.stMsg =
               if (wasEmpty && not firstLoad) || (firstLoad && Types.stWatchMode latest == Types.PollingWatch)
                 then Types.stMsg latest
-                else "change set is empty — watching for changes"
+                else emptyNotice
           }
     else do
       let
@@ -798,13 +798,19 @@ applyChangeSet remaining = do
           , Types.stMsg =
               if firstLoad && Types.stWatchMode latest == Types.NativeWatch
                 then Types.tshow pendingCount <> " of " <> Types.tshow totalCount <> " hunks pending"
-                else Types.stMsg latest
+                else
+                  if Types.stMsg latest == emptyNotice
+                    then " "
+                    else Types.stMsg latest
           }
       Monad.when wasEmpty $ do
         woken <- State.get
         case Verdict.firstUnrespondedOrPending woken of
           Just (f, h) -> Nav.parkAnchor f h
           Nothing -> Nav.parkAnchor 0 0
+
+emptyNotice :: T.Text
+emptyNotice = "change set is empty — watching for changes"
 
 -- The : command line ----------------------------------------------------------
 

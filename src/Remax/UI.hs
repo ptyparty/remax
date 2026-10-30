@@ -273,7 +273,7 @@ parkAtStart st0 =
   case Verdict.firstUnrespondedOrPending st0 of
     Just (f, h) ->
       let
-        parked = (Nav.park f h st0) {Types.stMsg = Types.stMsg st0}
+        parked = Nav.park f h st0
       in
         parked
           { Types.stAnchor =
