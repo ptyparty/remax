@@ -79,8 +79,8 @@ markedSpan st = do
   fv <- Types.currentFileMay st
   Anchor.lineSpanFor st fv (map (\(key, _, _, _) -> key) (Types.stLastRows st))
 
--- The notes the span touches, oldest first, each offering a reply and
--- a join.
+-- The notes the span touches, oldest first, each offering a reply and,
+-- when the span reaches past the note's lines, a join.
 choicesFor :: Types.St -> Conv.LineSpan -> [Types.NoteChoice]
 choicesFor st lineSpan =
   case Types.currentFileMay st of
@@ -99,8 +99,13 @@ choicesFor st lineSpan =
             List.nubBy (\a b -> Conv.convId a == Conv.convId b) (filter touches (Types.stConversations st) ++ filter outdated drawnHere)
         choices conv = case (Conv.convVenue conv, outdated conv) of
           (Conv.LocalOnly _, True) -> [Types.ReplyOutdated conv]
-          (Conv.LocalOnly _, False) -> [Types.ReplyNote conv, Types.JoinNote conv]
+          (Conv.LocalOnly _, False)
+            | grows conv -> [Types.ReplyNote conv, Types.JoinNote conv]
+            | otherwise -> [Types.ReplyNote conv]
           _ -> []
+        grows conv = case Conv.convAnchor conv of
+          Conv.OnLines old -> any (`notElem` Conv.spanKeys old) (Conv.spanKeys lineSpan)
+          _ -> True
       in
         Types.NewNote : concatMap choices touched
 
