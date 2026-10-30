@@ -113,6 +113,7 @@ executables:
       # >= 0.4 for WatchModePoll, the fallback when inotify is full
       - fsnotify >= 0.4
       - mtl
+      - network
       - process
       - sqlite-simple
       - text

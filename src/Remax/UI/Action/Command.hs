@@ -8,11 +8,14 @@ module Remax.UI.Action.Command
   , promptComplete
   , lineAddress
   , runCommand
+  , AgentRule (..)
+  , agentRule
   ) where
 
 import Brick qualified as Brick
 import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
+import Data.Maybe qualified as Maybe
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Read qualified as TR
@@ -21,6 +24,7 @@ import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.UI.Action.Conversation qualified as Conversation
 import Remax.UI.Action.Editor qualified as Editor
+import Remax.UI.Action.Go qualified as GoAction
 import Remax.UI.Action.Inbox qualified as InboxAction
 import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
@@ -55,7 +59,8 @@ data ArgKind
 
 commandTable :: [(T.Text, ArgKind, T.Text)]
 commandTable =
-  [ ("base", ArgRef, "diff against REF; bare :base picks from history")
+  [ ("go", ArgText, "go to a hunk id, a conversation id, PATH[:LINE], tour [N], pr or feedback")
+  , ("base", ArgRef, "diff against REF; bare :base picks from history")
   , ("branch", NoArg, "whole-branch view (merge-base base)")
   , ("mode", ArgMode, modeChoices)
   , ("rebase", ArgRef, "commit-by-commit review pass")
@@ -205,6 +210,7 @@ runCommand input =
   case T.words input of
     [] -> pure ()
     ["q"] -> Brick.halt
+    ("go" : rest) -> GoAction.goTo rest
     ["base"] -> PickerAction.openBasePicker
     ["checkout"] -> PickerAction.openBranchPicker
     ["checkout", branch] -> PickerAction.applyCheckout branch
@@ -262,6 +268,42 @@ runCommand input =
     ["edit", path] -> editPath path
     [tok] | Just n <- lineAddress tok -> Nav.gotoLine n
     _ -> Types.setMsg ("unknown command: " <> input)
+
+data AgentRule = AgentMay | ReviewerOnly
+
+agentRule :: T.Text -> AgentRule
+agentRule input =
+  case T.words (Maybe.fromMaybe input (T.stripPrefix ":" (T.strip input))) of
+    ("pr" : "edit" : _) -> ReviewerOnly
+    ("pr" : "review" : _) -> ReviewerOnly
+    ("tour" : "ask" : _) -> ReviewerOnly
+    (first : _)
+      | first `elem` agentCommands || Maybe.isJust (lineAddress first) -> AgentMay
+    _ -> ReviewerOnly
+
+agentCommands :: [T.Text]
+agentCommands =
+  [ "go"
+  , "open"
+  , "close"
+  , "files"
+  , "tree"
+  , "grep"
+  , "uses"
+  , "walk"
+  , "tour"
+  , "feedback"
+  , "commit"
+  , "message"
+  , "help"
+  , "follow"
+  , "base"
+  , "branch"
+  , "mode"
+  , "ref"
+  , "pr"
+  , "repo"
+  ]
 
 setWalkNamed :: T.Text -> Brick.EventM Types.Name Types.St ()
 setWalkNamed which =

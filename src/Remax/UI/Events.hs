@@ -24,6 +24,7 @@ import Remax.Config qualified as Config
 import Remax.Emacs qualified as Emacs
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
+import Remax.UI.Action.Agent qualified as AgentAction
 import Remax.UI.Action.Cite qualified as CiteAction
 import Remax.UI.Action.Command qualified as Command
 import Remax.UI.Action.Editor qualified as Editor
@@ -212,6 +213,7 @@ handleEvent brickEvent =
         rel = FilePath.makeRelative (Types.stRoot st) absolute
       Monad.unless (FilePath.isAbsolute rel) (Load.reloadFromDisk rel)
     Brick.AppEvent Types.GitStateChanged -> Load.refreshGit
+    Brick.AppEvent (Types.FromAgent request respond) -> AgentAction.fromAgent request respond
     Brick.AppEvent Types.StoreChanged -> do
       st <- State.get
       threads <- MonadIO.liftIO (Store.loadThreads (Types.stConn st) (Types.repoText st))

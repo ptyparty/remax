@@ -131,6 +131,7 @@ executable remax
       Remax.Key
       Remax.Modal
       Remax.PullPoll
+      Remax.Remote
       Remax.RemoteCache
       Remax.SoftWrap
       Remax.Store
@@ -139,12 +140,14 @@ executable remax
       Remax.Tree
       Remax.TreeSitter
       Remax.UI
+      Remax.UI.Action.Agent
       Remax.UI.Action.Cite
       Remax.UI.Action.Command
       Remax.UI.Action.Conversation
       Remax.UI.Action.Editor
       Remax.UI.Action.Files
       Remax.UI.Action.Fuzzy
+      Remax.UI.Action.Go
       Remax.UI.Action.Inbox
       Remax.UI.Action.Menus
       Remax.UI.Action.Notes
@@ -263,6 +266,7 @@ executable remax
     , filepath
     , fsnotify >=0.4
     , mtl
+    , network
     , process
     , sqlite-simple
     , text

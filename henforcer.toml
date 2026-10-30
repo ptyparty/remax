@@ -841,6 +841,42 @@ qualified = { qualifiedPost = true }
 alias = "DrawTour"
 
 [[forAnyModule.allowedQualifications]]
+module = "Data.Either"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Either"
+
+[[forAnyModule.allowedQualifications]]
+module = "Network.Socket"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Socket"
+
+[[forAnyModule.allowedQualifications]]
+module = "Network.Socket.ByteString"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "SocketBS"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.Remote"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Remote"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Go"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "GoAction"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Agent"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "AgentAction"
+
+[[forAnyModule.allowedQualifications]]
 module = "Remax.UI.Core.Markdown"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }

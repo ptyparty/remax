@@ -27,6 +27,7 @@ module Remax.UI.Model.Nav
   , parkOnLine
   , gotoLine
   , followable
+  , reviewerFree
   , followTo
   , setCurrentHunkHere
   , selectCurrentHunk
@@ -529,7 +530,10 @@ gotoLine n = do
           else Modal.plainMove move ed
 
 followable :: Types.St -> Bool
-followable st =
+followable st = Types.stFollow st == Types.FollowEdits && reviewerFree st
+
+reviewerFree :: Types.St -> Bool
+reviewerFree st =
   let
     inserting = maybe False ((== Modal.Insert) . Modal.edMode . Types.fvEd) (Types.currentFileMay st)
     nothingOpen =
@@ -547,7 +551,7 @@ followable st =
         && not (Types.stSpace st)
         && not (Types.stHelp st)
   in
-    Types.stFollow st == Types.FollowEdits && nothingOpen && not inserting
+    nothingOpen && not inserting
 
 followTo :: Int -> Int -> Brick.EventM Types.Name Types.St ()
 followTo f line = do

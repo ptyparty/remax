@@ -51,7 +51,8 @@ imports its internals. The order within a tree is convention.
    `Pull`, `Fuzzy`, `Repo`, `Open`, `Worktree` (edit mode's checkout and
    the moves in and out of it), `Picker`, `Search`, `Uses` (the hunks mentioning a
    name), `Tree`, `Files`,
-   `TreeKeys`, `Editor`, `Command`, `Menus`.
+   `TreeKeys`, `Editor`, `Go` (`:go`), `Command`, `Agent` (commands that
+   arrive from `remax do`), `Menus`.
 4. `Draw` — one module per surface, composed by `Remax.UI.Draw`.
 5. `Events` — key and event dispatch, the top of the session.
 
@@ -71,7 +72,8 @@ Placement rules:
   modules are no exception.
 - `Remax.Git`, `Remax.Store`, `Remax.Conversation`, `Remax.WorkStore`,
   `Remax.Submit`, `Remax.RemoteCache`, `Remax.Feedback`, `Remax.Json`,
-  `Remax.DiffModel`, `Remax.Modal` and the
+  `Remax.DiffModel`, `Remax.Modal`, `Remax.Remote` (the socket `remax do`
+  reaches a session through) and the
   other `Remax.*` modules are below all of `Remax.UI.*` and know nothing
   about the session state.
 

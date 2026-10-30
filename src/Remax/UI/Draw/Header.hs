@@ -6,6 +6,7 @@ module Remax.UI.Draw.Header
   , pullBar
   , rebaseBar
   , tourBar
+  , claudeBar
   , headerBar
   ) where
 
@@ -302,6 +303,18 @@ tourBar st =
       in
         Just (Brick.withDefAttr Attrs.guideAttr (Brick.padRight Brick.Max (Brick.txt text)))
     _ -> Nothing
+
+claudeBar :: Types.St -> Maybe (Brick.Widget Types.Name)
+claudeBar st =
+  let
+    said command outcome = " \8618 Claude ran :" <> command <> (if T.null outcome then "" else "  \183  " <> outcome)
+    text = case (Types.stClaudeLine st, Types.stConfirm st) of
+      (Just (Types.ClaudeRan command outcome _), _) -> Just (said command outcome)
+      (Just (Types.ClaudeOffers command), Just _) -> Just (" \8618 Claude asks to run :" <> command)
+      (Just (Types.ClaudeOffers command), Nothing) -> Just (" \8618 Claude asks to run :" <> command <> "  \183  you will be asked once you are free")
+      (Nothing, _) -> Nothing
+  in
+    fmap (Brick.withDefAttr Attrs.guideAttr . Brick.padRight Brick.Max . Brick.txt) text
 
 stepLead :: Store.TourStep -> T.Text
 stepLead step = Maybe.fromMaybe "" (Maybe.listToMaybe (T.lines (Store.tourNote step)))

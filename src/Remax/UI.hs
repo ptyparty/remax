@@ -33,9 +33,11 @@ import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
+import Remax.Remote qualified as Remote
 import Remax.Store qualified as Store
 import Remax.Theme qualified as Theme
 import Remax.TreeSitter qualified as TS
+import Remax.UI.Action.Agent qualified as AgentAction
 import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Tour qualified as Tour
@@ -49,6 +51,7 @@ import Remax.UI.Model.Watch qualified as Watch
 import Remax.UI.Model.Work qualified as WorkModel
 import Remax.Vi qualified as Vi
 import System.Environment qualified as Env
+import System.Timeout qualified as Timeout
 
 data Startup = Startup
   { suConn :: SQLite.Connection
@@ -77,7 +80,7 @@ runReview mode pullMeta root roots story = do
   startup <- loadStartup mode root
   let
     chan = suChan startup
-  final <- Watch.withWatcher $ \mgr watchMode -> do
+  final <- Remote.withListener (agentRequest chan) . Watch.withWatcher $ \mgr watchMode -> do
     dirWatch <- Watch.installWatches mgr chan root watchMode
     -- probed once: doing it per yank would be a process spawn a keystroke
     clip <- Clipboard.discoverClipboard
@@ -93,6 +96,16 @@ runReview mode pullMeta root roots story = do
     Brick.customMain vty buildVty (Just chan) (app (suTheme startup)) (parkAtStart (Tour.installTour (suTour startup) st0))
   Store.finishPass (suConn startup) (Types.stPassId final)
   printSummary final
+
+agentRequest :: BChan.BChan Types.REvent -> Remote.Request -> IO Remote.Reply
+agentRequest chan request = do
+  box <- Concurrent.newEmptyMVar
+  BChan.writeBChan chan (Types.FromAgent request (Monad.void . Concurrent.tryPutMVar box))
+  got <- Timeout.timeout agentAnswerUs (Concurrent.takeMVar box)
+  pure (Maybe.fromMaybe (Remote.Refused "the session did not answer in time") got)
+
+agentAnswerUs :: Int
+agentAnswerUs = 5000000
 
 loadStartup :: Git.ReviewMode -> FilePath -> IO Startup
 loadStartup mode root = do
@@ -209,7 +222,9 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stSending = Nothing
     , Types.stInbox = Nothing
     , Types.stTourOverview = Nothing
-    , Types.stFollow = Types.FollowOff
+    , Types.stFollow = Types.FollowEdits
+    , Types.stAgentHeld = Nothing
+    , Types.stClaudeLine = Nothing
     , Types.stPullView = fmap (const Types.emptyPullView) pullMeta
     , Types.stNow = suNow startup
     , Types.stConversations = Conv.conversations Conv.emptyRemote (suWork startup)
@@ -383,6 +398,7 @@ app theme =
             >> Events.syncComposing
             >> Events.rememberSelector
             >> Events.noteTrayView
+            >> AgentAction.afterEvent ev
     , Brick.appStartEvent = do
         vty <- Brick.getVtyHandle
         let
