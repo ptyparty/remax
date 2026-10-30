@@ -15,7 +15,8 @@ module Remax.WorkStore
   , editWork
   , discardWork
   , discardAll
-  , takeWork
+  , takeProposal
+  , withdrawProposal
   , recordSubmitted
   , growNote
   , retireNotesOn
@@ -318,15 +319,28 @@ discardAll :: SQLite.Connection -> [Conv.WorkId] -> IO ()
 discardAll conn wids =
   SQLite.withTransaction conn (mapM_ (discardWork conn) wids)
 
-takeWork :: SQLite.Connection -> Conv.WorkId -> IO ()
-takeWork conn wid =
+takeProposal :: SQLite.Connection -> Scope -> Conv.Target -> Conv.WorkId -> Conv.Markdown -> IO ()
+takeProposal conn scope target wid body =
   case wid of
-    Conv.StoredWork i ->
+    Conv.StoredWork i -> do
       SQLite.execute
         conn
-        "UPDATE work SET kind = 'pending', author = 'viewer' WHERE id = ? AND kind = 'proposed'"
-        (SQLite.Only i)
+        "UPDATE work SET kind = 'pending', author = 'viewer', body = ? WHERE id = ? AND kind IN ('proposed', 'pending')"
+        (Conv.markdownText body, i)
+      took <- SQLite.changes conn
+      Monad.when (took == 0) (Monad.void (addPending conn scope target Conv.Viewer body))
     Conv.LegacyPost _ _ -> pure ()
+
+withdrawProposal :: SQLite.Connection -> Conv.WorkId -> [Conv.WorkId] -> IO Bool
+withdrawProposal conn wid stranded =
+  case wid of
+    Conv.StoredWork i ->
+      SQLite.withTransaction conn $ do
+        SQLite.execute conn "DELETE FROM work WHERE id = ? AND kind = 'proposed'" (SQLite.Only i)
+        dropped <- SQLite.changes conn
+        Monad.when (dropped > 0) (mapM_ (discardWork conn) stranded)
+        pure (dropped > 0)
+    Conv.LegacyPost _ _ -> pure False
 
 recordSubmitted :: SQLite.Connection -> T.Text -> Conv.LocalId -> Store.CommentId -> IO ()
 recordSubmitted conn repo lid cid =

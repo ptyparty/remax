@@ -83,6 +83,7 @@ data ListWhen = ListNow | ListOnChange
 data CommentArgs
   = Draft T.Text T.Text
   | Revise T.Text T.Text
+  | Withdraw T.Text
 
 data ListOptions = ListOptions
   { listFormat :: ListFormat
@@ -206,9 +207,14 @@ usage =
   \       remax [-C DIR] comment --revise ID TEXT\n\
   \                                     propose text for a conversation; the\n\
   \                                     reviewer takes it with Enter\n\
-  \                                     reply, comment --revise and move take\n\
-  \                                     a conversation id or any prefix of it\n\
-  \                                     that no other id shares\n\
+  \       remax [-C DIR] comment --withdraw ID\n\
+  \                                     drop your proposal on a conversation\n\
+  \                                     before the reviewer takes it; on a\n\
+  \                                     comment you drafted on a hunk, the\n\
+  \                                     local talk on it goes too\n\
+  \                                     reply, comment --revise, --withdraw and\n\
+  \                                     move take a conversation id or any\n\
+  \                                     prefix of it that no other id shares\n\
   \       remax [-C DIR] move ID --pr N  file a draft comment and every post on\n\
   \                                     it under pull request N, such as after\n\
   \                                     its PR was reopened under a new number\n\
@@ -272,6 +278,7 @@ parseArgs args0 =
               Right (mDir, Reply (T.pack target) (T.pack (unwords rest)))
         ("note" : place : rest)
           | not (null rest) -> Right (mDir, Note (T.pack place) (T.pack (unwords rest)))
+        ["comment", "--withdraw", target] -> Right (mDir, Comment (Withdraw (T.pack target)))
         ("comment" : "--revise" : target : rest)
           | not (null rest) ->
               Right (mDir, Comment (Revise (T.pack target) (T.pack (unwords rest))))
@@ -1074,6 +1081,7 @@ comment args = do
       case Maybe.mapMaybe proposed outcomes of
         [] -> Exit.die "No such conversation recorded for this repository."
         (landing : _) -> putStrLn ("proposal recorded " ++ scopeWords landing ++ "; the reviewer takes it with Enter")
+    Withdraw given -> withdraw conn roots given
     Draft hunkId text -> do
       cfg <- Config.loadConfig
       found <- Monad.forM roots $ \root -> do
@@ -1099,6 +1107,20 @@ comment args = do
                     ++ scopeWords landing
                     ++ "; the reviewer takes it with Enter"
                 )
+
+withdraw :: SQLite.Connection -> [FilePath] -> T.Text -> IO ()
+withdraw conn roots given = do
+  target <- resolveTarget conn roots given
+  outcomes <- mapM (\r -> Feedback.withdrawOn conn r target) roots
+  let
+    found outcome = case outcome of
+      Feedback.NoConversation -> False
+      _ -> True
+  case List.find found outcomes of
+    Just (Feedback.Withdrawn n landing) ->
+      putStrLn ("proposal withdrawn " ++ scopeWords landing ++ (if n > 0 then " with " ++ show n ++ " local post(s)" else ""))
+    Just _ -> Exit.die "No proposal of yours is pending on that conversation; the reviewer may have taken it."
+    Nothing -> Exit.die "No such conversation recorded for this repository."
 
 -- JSON output ------------------------------------------------------------------
 
