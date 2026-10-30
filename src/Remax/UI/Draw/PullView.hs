@@ -7,6 +7,8 @@ module Remax.UI.Draw.PullView
 
 import Brick qualified as Brick
 import Brick.Types qualified as BrickTypes
+import Data.List qualified as List
+import Data.Maybe qualified as Maybe
 import Graphics.Vty qualified as V
 import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Markdown qualified as Markdown
@@ -22,16 +24,18 @@ pullViewBody st =
         width = max 40 (BrickTypes.availWidth ctx - 6)
         rows = PullView.timeline st width
         selected = PullView.selectedStop st
-        bandedAt i r = selected /= Nothing && PullView.rowStop r == selected && i >= (0 :: Int)
-        drawn = zipWith (\i r -> rowWidget (bandedAt i r) r) [0 ..] rows ++ [Brick.txt " "]
-        bandedRows = map fst (filter (uncurry bandedAt) (zip [0 ..] rows))
+        banded r = selected /= Nothing && PullView.rowStop r == selected
+        drawn = map (\r -> rowWidget (banded r) r) rows ++ [Brick.txt " "]
+        bandedRows = List.findIndices banded rows
         shown = case bandedRows of
           (first : more) ->
             let
-              (before, rest) = splitAt first drawn
-              (focus, after) = splitAt (foldr max first more - first + 1 + rowsBelowSelection) rest
+              lead = length (List.dropWhileEnd (Maybe.isNothing . PullView.rowStop) (take first rows))
+              (before, rest) = splitAt lead drawn
+              (leadIn, fromBand) = splitAt (first - lead) rest
+              (focus, after) = splitAt (foldr max first more - first + 1 + rowsBelowSelection) fromBand
             in
-              before ++ [Brick.visible (Brick.vBox focus)] ++ after
+              before ++ [Brick.visible (Brick.vBox (leadIn ++ [Brick.visible (Brick.vBox focus)]))] ++ after
           [] -> drawn
       BrickTypes.render (Brick.vBox shown)
 
