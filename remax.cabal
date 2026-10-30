@@ -1,6 +1,6 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.39.3.
+-- This file has been generated from package.yaml by hpack version 0.39.6.
 --
 -- see: https://github.com/sol/hpack
 
@@ -158,6 +158,7 @@ executable remax
       Remax.UI.Action.Settings
       Remax.UI.Action.Submit
       Remax.UI.Action.Threads
+      Remax.UI.Action.Tour
       Remax.UI.Action.Tree
       Remax.UI.Action.TreeKeys
       Remax.UI.Action.Uses
@@ -190,6 +191,7 @@ executable remax
       Remax.UI.Draw.Reactions
       Remax.UI.Draw.Status
       Remax.UI.Draw.Submit
+      Remax.UI.Draw.Tour
       Remax.UI.Draw.Tray
       Remax.UI.Draw.Tree
       Remax.UI.Events

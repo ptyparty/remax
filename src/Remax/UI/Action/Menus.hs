@@ -18,6 +18,7 @@ import Remax.UI.Action.Picker qualified as PickerAction
 import Remax.UI.Action.PullView qualified as PullViewAction
 import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Action.Threads qualified as ThreadAction
+import Remax.UI.Action.Tour qualified as TourAction
 import Remax.UI.Action.Tree qualified as TreeAction
 import Remax.UI.Action.Uses qualified as Uses
 import Remax.UI.Action.Verdicts qualified as VerdictAction
@@ -93,6 +94,8 @@ reviewGroup mode =
       , ("\9251 h", "make this hunk the current one")
       , ("\9251 p", "show only hunks still pending")
       , ("\9251 k", "walk all / code / comment hunks")
+      , ("\9251 T", "the tour's stops; \9166 goes to one")
+      , ("\9251 F", "follow edits to each file as they land")
       ]
   in
     ( "review"
@@ -112,6 +115,8 @@ reviewGroup mode =
           , ("C-c ] [", "next / previous hunk")
           , ("C-c p", "show only hunks still pending")
           , ("C-c k", "walk all / code / comment hunks")
+          , ("C-c T", "the tour's stops; \9166 goes to one")
+          , ("C-c F", "follow edits to each file as they land")
           ]
         Config.KeysHelix ->
           [ ("\9166", "accept the selection as reviewed")
@@ -298,5 +303,7 @@ spaceMenuEntries =
   , ("c", "the commit message", VerdictAction.showCommitPopup)
   , ("o", "PR overview", PullViewAction.togglePullView)
   , ("i", "recent feedback", InboxAction.openInbox)
+  , ("T", "the tour's stops", TourAction.openTourOverview)
+  , ("F", "follow edits as they land", Settings.toggleFollow)
   , ("?", "keys", Types.showHelp)
   ]

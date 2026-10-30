@@ -197,6 +197,7 @@ arriveAt target remembered saved mode passId loaded = do
         , Types.stSubmit = Nothing
         , Types.stSending = Nothing
         , Types.stInbox = Nothing
+        , Types.stTourOverview = Nothing
         , Types.stPullView = Nothing
         , Types.stBaseAt = Nothing
         , Types.stPullLocal = Nothing

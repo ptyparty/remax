@@ -38,6 +38,7 @@ import Remax.UI.Action.Search qualified as Search
 import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Action.Submit qualified as SubmitAction
 import Remax.UI.Action.Threads qualified as ThreadAction
+import Remax.UI.Action.Tour qualified as TourAction
 import Remax.UI.Action.Tree qualified as TreeAction
 import Remax.UI.Action.TreeKeys qualified as TreeKeys
 import Remax.UI.Action.Uses qualified as Uses
@@ -254,6 +255,8 @@ handleEvent brickEvent =
           returnToSubmit np
         _
           | Just inbox <- Types.stInbox st -> InboxAction.handleInboxKey ev inbox
+        _
+          | Just overview <- Types.stTourOverview st -> TourAction.handleTourOverviewKey ev overview
         _
           | Just dialog <- Types.stSubmit st -> SubmitAction.handleSubmitKey ev dialog
         _
@@ -624,6 +627,8 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'c') [] -> VerdictAction.showCommitPopup
         V.EvKey (V.KChar 'o') [] -> PullViewAction.togglePullView
         V.EvKey (V.KChar 'i') [] -> InboxAction.openInbox
+        V.EvKey (V.KChar 'T') [] -> TourAction.openTourOverview
+        V.EvKey (V.KChar 'F') [] -> Settings.toggleFollow
         V.EvKey (V.KChar '\'') [] -> Nav.jumpToAnchor
         V.EvKey (V.KChar '*') [] -> Search.searchWordUnderCursor
         V.EvKey (V.KChar 'n') [] -> Search.searchRepeat 1

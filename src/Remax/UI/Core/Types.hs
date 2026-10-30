@@ -3,6 +3,7 @@
 
 module Remax.UI.Core.Types
   ( WatchMode (..)
+  , FollowMode (..)
   , Name (..)
   , REvent (..)
   , Prompt (..)
@@ -51,6 +52,8 @@ module Remax.UI.Core.Types
   , SubmitFocus (..)
   , Inbox (..)
   , InboxFocus (..)
+  , TourOverview (..)
+  , TourStop (..)
   , EventChoice (..)
   , AmendTarget (..)
   , MarkUndo (..)
@@ -137,6 +140,9 @@ data Name = BodyVP | TrayVP | PullVP | PopupLogVP | TheCursor
 -- know, relativizes on arrival.
 data WatchMode = NativeWatch | PollingWatch
   deriving (Eq, Show)
+
+data FollowMode = FollowOff | FollowEdits
+  deriving (Eq)
 
 data REvent
   = FileChangedOnDisk FilePath
@@ -416,6 +422,20 @@ data Inbox = Inbox
 data InboxFocus = InboxList | InboxFiltering
   deriving (Eq)
 
+data TourOverview = TourOverview
+  { toStops :: [TourStop]
+  , toSel :: Int
+  , toHere :: Maybe Int
+  , toScroll :: Int
+  }
+
+data TourStop = TourStop
+  { tsNumber :: Int
+  , tsTitle :: Maybe T.Text
+  , tsNote :: T.Text
+  , tsPlaces :: [(T.Text, Int)]
+  }
+
 -- | The PR view is up; pvStop says which post or commit is selected.
 data PullView = PullView
   { pvStop :: Maybe Stop
@@ -562,6 +582,8 @@ data St = St
   , stSubmit :: Maybe SubmitDialog
   , stSending :: Maybe SubmitDialog
   , stInbox :: Maybe Inbox
+  , stTourOverview :: Maybe TourOverview
+  , stFollow :: FollowMode
   , stPullView :: Maybe PullView -- the pull request's own page, over the body
   , stNow :: Clock.UTCTime -- wall clock, for ages; moved on the attending beat
   , stTour :: [Store.TourStep]

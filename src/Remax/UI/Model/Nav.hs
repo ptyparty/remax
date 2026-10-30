@@ -26,6 +26,8 @@ module Remax.UI.Model.Nav
   , jumpToAnchor
   , parkOnLine
   , gotoLine
+  , followable
+  , followTo
   , setCurrentHunkHere
   , selectCurrentHunk
   ) where
@@ -525,6 +527,34 @@ gotoLine n = do
           -- emacs: point moves, the mark stays, so the region grows
           then ed {Modal.edZipper = move (Modal.edZipper ed), Modal.edInsertEntry = Nothing}
           else Modal.plainMove move ed
+
+followable :: Types.St -> Bool
+followable st =
+  let
+    inserting = maybe False ((== Modal.Insert) . Modal.edMode . Types.fvEd) (Types.currentFileMay st)
+    nothingOpen =
+      Maybe.isNothing (Types.stPrompt st)
+        && Maybe.isNothing (Types.stPicker st)
+        && Maybe.isNothing (Types.stNotePopup st)
+        && Maybe.isNothing (Types.stInbox st)
+        && Maybe.isNothing (Types.stTourOverview st)
+        && Maybe.isNothing (Types.stSubmit st)
+        && Maybe.isNothing (Types.stTree st)
+        && Maybe.isNothing (Types.stConfirm st)
+        && Maybe.isNothing (Types.stCiting st)
+        && Maybe.isNothing (Types.stReacting st)
+        && Maybe.isNothing (Types.stInfoPopup st)
+        && not (Types.stSpace st)
+        && not (Types.stHelp st)
+  in
+    Types.stFollow st == Types.FollowEdits && nothingOpen && not inserting
+
+followTo :: Int -> Int -> Brick.EventM Types.Name Types.St ()
+followTo f line = do
+  visitHunk f 0
+  gotoLine (line + 1)
+  st <- State.get
+  Monad.forM_ (hunkUnderCursor st) (\h -> State.modify (\s -> s {Types.stCurH = h}))
 
 -- Space h: make the hunk the cursor is standing in the current one —
 -- the current hunk being what a selection-less X, ! or ? acts on, and
