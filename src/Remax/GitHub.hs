@@ -60,6 +60,7 @@ module Remax.GitHub
 
 import Control.Exception qualified as Exception
 import Control.Monad qualified as Monad
+import Data.List qualified as List
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Database.SQLite.Simple qualified as SQLite
@@ -80,6 +81,7 @@ data GhFailure
   | GhRefused Int T.Text
   | FetchFailed T.Text
   | FetchNeedsSignIn T.Text
+  | GitFailed T.Text
   deriving (Eq, Show)
 
 failureText :: GhFailure -> T.Text
@@ -92,6 +94,7 @@ failureText failure =
     GhFailed why -> "gh: " <> why
     GhRefused status why -> "GitHub " <> T.pack (show status) <> " \183 " <> why
     FetchFailed why -> "git fetch: " <> why
+    GitFailed why -> "git: " <> why
     FetchNeedsSignIn why -> "git fetch could not sign in without asking \8212 load your key into ssh-agent or set up a credential helper (" <> why <> ")"
 
 runGh :: FilePath -> [T.Text] -> IO (Either GhFailure T.Text)
@@ -117,7 +120,7 @@ withoutTerminal :: [(String, String)] -> Process.CreateProcess -> IO Process.Cre
 withoutTerminal extra p = do
   environment <- Env.getEnvironment
   let
-    quiet = ("GIT_TERMINAL_PROMPT", "0") : extra
+    quiet = ("GIT_TERMINAL_PROMPT", "0") : ("SSH_ASKPASS_REQUIRE", "never") : extra
   pure
     p
       { Process.env = Just (quiet ++ filter ((`notElem` map fst quiet) . fst) environment)
@@ -127,27 +130,42 @@ withoutTerminal extra p = do
 classify :: T.Text -> GhFailure
 classify err =
   let
-    lower = T.toLower err
-    mentions = any (`T.isInfixOf` lower)
+    mentions = mentionsAny err
   in
     case () of
       _
         | mentions ["gh auth login", "not logged into", "authentication required", "bad credentials", "http 401"] -> GhLoggedOut
-        | mentions ["could not resolve host", "no such host", "dial tcp", "connection refused", "network is unreachable", "timeout"] -> GhOffline (firstLine err)
+        | mentions offlineMarks -> GhOffline (firstLine err)
         | mentions ["http 404", "not found", "could not resolve to"] -> GhNotFound (firstLine err)
         | otherwise -> GhFailed (firstLine err)
 
 classifyFetch :: T.Text -> GhFailure
 classifyFetch err =
   let
-    lower = T.toLower err
-    mentions = any (`T.isInfixOf` lower)
+    mentions = mentionsAny err
+    notFound = ["repository not found", "does not appear to be a git repository"]
+    signIn = ["terminal prompts disabled", "permission denied (publickey", "host key verification failed", "authentication failed", "invalid username or password"]
   in
-    if mentions ["terminal prompts disabled", "permission denied (publickey", "host key verification failed", "could not read from remote repository", "authentication failed"]
-      then FetchNeedsSignIn (firstLine err)
-      else case classify err of
-        GhFailed why -> FetchFailed why
-        other -> other
+    case () of
+      _
+        | mentions notFound -> GhNotFound (lineMentioning notFound err)
+        | mentions signIn -> FetchNeedsSignIn (lineMentioning signIn err)
+        | mentions offlineMarks -> GhOffline (lineMentioning offlineMarks err)
+        | otherwise -> FetchFailed (lineMentioning ["fatal:", "error:"] err)
+
+offlineMarks :: [T.Text]
+offlineMarks = ["could not resolve host", "no such host", "dial tcp", "connection refused", "network is unreachable", "timeout"]
+
+mentionsAny :: T.Text -> [T.Text] -> Bool
+mentionsAny err marks =
+  let
+    lower = T.toLower err
+  in
+    any (`T.isInfixOf` lower) marks
+
+lineMentioning :: [T.Text] -> T.Text -> T.Text
+lineMentioning marks err =
+  Maybe.fromMaybe (firstLine err) (List.find (`mentionsAny` marks) (T.lines err))
 
 firstLine :: T.Text -> T.Text
 firstLine t = Maybe.fromMaybe "" (Maybe.listToMaybe (T.lines t))
@@ -710,7 +728,7 @@ openPull root cached n = do
       remote <- remoteFor root repo
       fetched <- fetchPull root remote n (metaBaseBranch meta)
       pure $ case fetched of
-        Left e -> Left (classifyFetch e)
+        Left failure -> Left failure
         Right () ->
           Right
             Opened
@@ -750,7 +768,7 @@ remoteFor root repo = do
 stripSuffix :: T.Text -> T.Text -> T.Text
 stripSuffix suffix t = Maybe.fromMaybe t (T.stripSuffix suffix t)
 
-fetchPull :: FilePath -> T.Text -> Int -> T.Text -> IO (Either T.Text ())
+fetchPull :: FilePath -> T.Text -> Int -> T.Text -> IO (Either GhFailure ())
 fetchPull root remote n baseBranch = do
   let
     numText = T.pack (show n)
@@ -769,13 +787,15 @@ fetchPull root remote n baseBranch = do
       , "+refs/heads/" <> baseBranch <> ":" <> baseRef
       ]
   case fetched of
-    Left e -> pure (Left e)
+    Left e -> pure (Left (classifyFetch e))
     Right _ -> do
       kept <- git ["update-ref", baseTipRef, baseRef]
       forked <- either (pure . Left) (const (git ["merge-base", headRef, baseRef])) kept
       case forked of
-        Left e -> pure (Left e)
-        Right sha -> fmap (fmap (const ())) (git ["update-ref", baseRef, sha])
+        Left e
+          | T.null e -> pure (Left (GitFailed "the pull request shares no history with its base in this clone \8212 is it shallow?"))
+          | otherwise -> pure (Left (GitFailed (firstLine e)))
+        Right sha -> fmap (either (Left . GitFailed . firstLine) (const (Right ()))) (git ["update-ref", baseRef, sha])
 
 gitIn :: FilePath -> [T.Text] -> IO (Either T.Text T.Text)
 gitIn root args = do
@@ -783,7 +803,7 @@ gitIn root args = do
   (code, out, err) <- Process.readCreateProcessWithExitCode p ""
   pure $ case code of
     Exit.ExitSuccess -> Right (T.strip (T.pack out))
-    Exit.ExitFailure _ -> Left (firstLine (T.strip (T.pack err)))
+    Exit.ExitFailure _ -> Left (T.strip (T.pack err))
 
 markReady :: FilePath -> T.Text -> Int -> IO (Either GhFailure ())
 markReady root repo n = fmap (fmap (const ())) (runGh root ["pr", "ready", T.pack (show n), "-R", repo])
@@ -792,7 +812,14 @@ markDraft :: FilePath -> T.Text -> Int -> IO (Either GhFailure ())
 markDraft root repo n = fmap (fmap (const ())) (runGh root ["pr", "ready", T.pack (show n), "-R", repo, "--undo"])
 
 checkoutPull :: FilePath -> T.Text -> Int -> IO (Either GhFailure ())
-checkoutPull root repo n = fmap (fmap (const ())) (runGh root ["pr", "checkout", T.pack (show n), "-R", repo])
+checkoutPull root repo n = do
+  got <- runGhOutput root ["pr", "checkout", T.pack (show n), "-R", repo]
+  pure $ case got of
+    Left failure -> Left failure
+    Right (Exit.ExitSuccess, _, _) -> Right ()
+    Right (Exit.ExitFailure _, _, err) -> case classifyFetch (T.strip err) of
+      FetchFailed _ -> Left (classify (T.strip err))
+      failure -> Left failure
 
 data RefsMove = RefsInPlace | RefsFetched
 
@@ -806,7 +833,7 @@ refreshPullRefs root repo n baseBranch headSha baseSha = do
       remote <- remoteFor root repo
       fetched <- fetchPull root remote n baseBranch
       pure $ case fetched of
-        Left e -> Left (classifyFetch e)
+        Left failure -> Left failure
         Right () -> Right RefsFetched
 
 data Kept = KeptHere | NotKept
@@ -844,10 +871,10 @@ keepPushedHead root repo n sha = do
     ref = Git.pushedHeadRef n sha
   kept <-
     if local
-      then gitIn root ["update-ref", ref, sha]
+      then fmap (either (Left . GitFailed . firstLine) Right) (gitIn root ["update-ref", ref, sha])
       else do
         remote <- remoteFor root repo
-        gitIn root ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", remote, "+" <> sha <> ":" <> ref]
+        fmap (either (Left . classifyFetch) Right) (gitIn root ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", remote, "+" <> sha <> ":" <> ref])
   pure $ case kept of
-    Left e -> Left (classifyFetch e)
+    Left failure -> Left failure
     Right _ -> Right ref
