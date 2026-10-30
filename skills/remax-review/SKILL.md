@@ -52,48 +52,51 @@ the human says they are done reviewing, or closes the session.
 ## Reading the feedback
 
 ```sh
-remax -C /path/to/repo list --awaiting agent --json
+remax -C /path/to/repo list --awaiting agent
 ```
 
 This prints what is waiting on you (run it from anywhere — `-C` points
 at the target). Drop `--awaiting agent` to see every conversation,
 including ones you have answered and ones with no note yet. **Three
-kinds of thing can be waiting**: `review_moves`, where the review has
-moved into another checkout (see *When the review moves*),
-`tour_requests`, where the reviewer asked you for a guided tour of the
-view they have open (see *Giving a tour*), and `conversations`, each
-the lines a note was written across and the thread about them. An
-empty `conversations` with a non-empty `tour_requests` or
-`review_moves` is work. Shape:
+kinds of thing can be waiting**: a `moved` line, where the review has
+moved into another checkout (see *When the review moves*), a `tour`
+line, where the reviewer asked you for a guided tour of the view they
+have open (see *Giving a tour*), and conversations, each the lines a
+note was written across and the thread about them. A `tour` line or a
+`moved` line with no conversations under it is still work. Shape:
 
-```json
-{"repo": "/path/to/repo",
- "review_moves": [
-   {"repo": "/path/to/repo", "pull": 482, "to": "/path/to/repo-pr-482",
-    "moved_at": "2026-10-29 18:02:11"}],
- "tour_requests": [
-   {"repo": "/path/to/repo", "view": "feature vs b9045d7",
-    "ref": "feature", "base": "b9045d7", "pull": null,
-    "prompt": "schema changes first", "asked_at": "2026-10-22 19:48:58"}],
- "commits": {"8b36d626c": "Lists the air carriers an integration supports"},
- "conversations": [
-   {"id": "3f9c…",
-    "repo": "/path/to/repo",
-    "file": "src/Foo.hs",
-    "commit_sha": "8b36d626c",
-    "lines": [{"line_no": 42, "line": "+  let xs = map fromJust ys", "verdict": "flagged"},
-              {"line_no": 43, "line": "+  in sum xs", "verdict": "questioned"}],
-    "thread": [{"author": "reviewer", "body": "use mapMaybe here instead"},
-               {"author": "agent", "body": "done — switched to mapMaybe"}],
-    "awaiting": "reviewer",
-    "lines_in_file": "none",
-    "updated_at": "2026-08-23 19:23:51",
-    "pull": null}]}
 ```
+moved  PR #482 review is in /path/to/repo-pr-482  (2026-10-29 18:02:11)
+tour   feature vs b9045d7: schema changes first  (--ref feature --base b9045d7)
+
+3f9c41d2  note  src/Foo.hs  @8b36d626  awaiting agent  new
+  ! 42 +  let xs = map fromJust ys
+  ? 43 +  in sum xs
+  (1 earlier posts)
+  reviewer: use mapMaybe here instead
+  claude: done — switched to mapMaybe
+```
+
+Each conversation is a header line, its lines, and its thread:
+
+- **Header:** the id, the kind, the file (`PR #N` for a conversation
+  on the pull request as a whole), the commit after `@`, whose turn it
+  is, and on a wait's wake `new` or `changed`.
+- **Lines:** a verdict glyph, the line number and the line, at most six
+  of them, each cut at 160 characters.
+- **Thread:** the last two posts, with earlier ones counted. A bot's
+  post shows as its first line of text.
+
+`remax -C /path/to/repo show ID` prints one conversation whole: every
+line and every post in full, with where it lives and when it last
+changed. Run it whenever the listing cut something you need.
+
+`list --json` prints every conversation whole, for scripts. Read the
+plain listing yourself.
 
 ### Each line's marker says which side it is
 
-Each entry in `lines` has a `line` with a diff marker on the front, and
+Each line's text has a diff marker on the front, after its number, and
 the marker tells you what kind of feedback this is:
 
 - `+` — a line your change added. Ordinary feedback on your work.
@@ -119,68 +122,63 @@ repository you get that repository, at a folder of them you get **all of
 them at once**, which is usually what you want, since one story's
 feedback is spread across its repos.
 
-That is why every conversation has its own **`repo`**. Read it rather
-than the top-level one: when the listing spans checkouts, the top level
-names the directory you asked about, and only `conversation.repo` tells
-you which checkout a conversation lives in. `cd` there before editing the
-file named by `conversation.file`, which is always relative to
-`conversation.repo`.
+That is why a listing that spans checkouts heads each checkout's
+conversations with its name, as `── penguin ──`. `cd` into that
+checkout before editing a conversation's file, which is always relative
+to it. `show` names the checkout in full.
 
 `remax reply ID TEXT` works from the folder too — an id belongs to
 exactly one repository, so remax finds the owner itself and tells you
 which one it landed in.
 
-- `id` — the conversation's address for `remax reply` and
-  `remax comment --revise`: a GitHub thread's own id (`PRRT_…`) or a
-  note's, which a note keeps when the reviewer grows it over more lines.
-  It is not a line key; hold only a line, and `list --json` is how you
-  find its conversation.
-- `kind` — `"thread"` for a GitHub review thread the session has polled,
-  `"note"` for a `!`/`?` note between you and the reviewer, `"draft"`
-  for a comment pending until the reviewer submits, `"pull"` for the
-  PR-level comments and `"review"` for a review summary.
-- `lines` — the lines the conversation is about, by `line_no`. The `-`
-  and `+` sides of a change are numbered separately, so they can
-  interleave; pair them by content, not by position. Each has its own
-  `verdict`, and the lines of one conversation can differ:
-  - `"flagged"` (`!`) — the reviewer wants this changed. Fix it.
-  - `"questioned"` (`?`) — the reviewer wants an explanation or a fix.
+- **id** — the conversation's address for `remax reply`, `remax show`,
+  `remax comment --revise` and `remax move`: a GitHub thread's own id
+  (`PRRT_…`) or a note's, which a note keeps when the reviewer grows it
+  over more lines. The listing prints the shortest prefix no other
+  conversation shares, at least eight characters, and every command
+  takes any such prefix or the whole id. It is not a line key.
+- **kind** — `thread` for a GitHub review thread the session has
+  polled, `note` for a `!`/`?` note between you and the reviewer,
+  `draft` for a comment pending until the reviewer submits, `pull` for
+  the PR-level comments and `review` for a review summary.
+- **lines** — the lines the conversation is about. The `-` and `+`
+  sides of a change are numbered separately, so they can interleave;
+  pair them by content, not by position. Each has its own verdict, and
+  the lines of one conversation can differ:
+  - `!` (flagged) — the reviewer wants this changed. Fix it.
+  - `?` (questioned) — the reviewer wants an explanation or a fix.
     If the code is wrong, fix it. If the code is right as written,
     answer the question — see **Replying to notes** below. Never answer
     by adding comments to the code, and never edit the reviewer's note.
-- `line` — the exact line text, prefixed `+` (added), `-` (removed from
-  the base) or a space (unchanged). Find it by content.
-- `line_no` — where the line sat when the verdict was recorded;
-  advisory, may have drifted. Trust `line` over `line_no`.
-- `thread` — the conversation, oldest first. Each post has an `author`
-  (`"reviewer"` is the human; a GitHub login is another reviewer; agents
-  appear under the name they replied with), a `body` and a `state`:
-  `"posted"` on GitHub, `"pending"` until the reviewer submits,
-  `"proposal"` for text you proposed, `"local"` for talk between you and
-  the reviewer that never reaches GitHub. **Read the whole thread and act
-  on the newest reviewer post**; if your own post is already the last
-  word and still answers it, don't repeat yourself.
-- `awaiting` — whose turn it is. `"agent"`: the reviewer or a GitHub
-  reviewer spoke last, so act on it. `"reviewer"`: your post is the last
-  word, so leave it unless they answer. `"note"`: a verdict with no note
-  yet — see *A conversation with no note yet*.
-- `pull` — where the conversation lives: the pull request number for a
-  GitHub thread, PR-level comment, review or draft. `null` on a note means
-  repo-wide: it shows in every view that has its lines. `null` on a draft
-  means it was written with no pull request in view; see *Drafting review
-  comments*. Every
-  post on a conversation, yours and the reviewer's, lands where the
-  conversation lives, whatever view either of you is in.
-- `lines_in_file` — whether the conversation's `+` and unchanged lines
-  still stand together in the working file, spaced as their `line_no`s
-  were: `"all"`, `"some"` or `"none"`. The block may have moved up or
-  down. `"none"` usually means the code was already changed or deleted,
-  by you or in another commit. Check that the thread's point was met,
-  then say so with `reply` rather than editing again. `null` when there
-  is nothing distinctive to look for: every line is a `-` line, blank,
-  or only punctuation such as `}`.
-- `commit_sha` — the commit the note was written on, when the session
-  knew one. `null` otherwise; recover the introducing commit yourself
+  - a blank — a line with no verdict of its own, such as a GitHub
+    thread's.
+- The line text is exact, prefixed `+` (added), `-` (removed from the
+  base) or a space (unchanged). Find it by content. The number is where
+  the line sat when the verdict was recorded; it may have drifted, so
+  trust the text over the number.
+- **thread** — the conversation, oldest first, as `author: body`.
+  `reviewer` is the human; a GitHub login is another reviewer; agents
+  appear under the name they replied with. `[pending]` marks a post
+  waiting for the reviewer to submit it and `[proposal]` text you
+  proposed. **Act on the newest reviewer post**, and `show` the whole
+  thread when earlier posts were counted rather than shown; if your own
+  post is already the last word and still answers it, don't repeat
+  yourself.
+- **awaiting** — whose turn it is. `agent`: the reviewer or a GitHub
+  reviewer spoke last, so act on it. `reviewer`: your post is the last
+  word, so leave it unless they answer. `note`: a verdict with no note
+  yet — see *A conversation with no note yet*. `--awaiting agent`
+  leaves out PR-level comments, review summaries, and threads a bot
+  spoke last on: none of those asks you for anything.
+- **where it lives** — `show` says `on PR #N` for a GitHub thread,
+  PR-level comment, review or draft, and `repo-wide` for a note, which
+  shows in every view that has its lines. A draft that is `repo-wide`
+  was written with no pull request in view; see *Drafting review
+  comments*. Every post on a conversation, yours and the reviewer's,
+  lands where the conversation lives, whatever view either of you is
+  in.
+- **commit** — the commit the note was written on, when the session
+  knew one. Absent otherwise; recover the introducing commit yourself
   from the line text when it matters (`git log -S"<line text>"` or
   `git blame`).
 
@@ -204,8 +202,8 @@ Start one as soon as the one-off pass is done, and **always pass
 
 ```sh
 SEEN="/tmp/remax-seen$(printf %s "$REPO" | tr / -)"
-FEEDBACK="/tmp/remax-feedback$(printf %s "$REPO" | tr / -).json"
-remax -C "$REPO" list --wait --awaiting agent --state "$SEEN" --json \
+FEEDBACK="/tmp/remax-feedback$(printf %s "$REPO" | tr / -)"
+remax -C "$REPO" list --wait --awaiting agent --state "$SEEN" \
   > "$FEEDBACK.part" && mv "$FEEDBACK.part" "$FEEDBACK"
 ```
 
@@ -221,9 +219,11 @@ listing, and the wait counts only a new or changed conversation as
 news. So you never need to wait twice to get past your own work.
 Without `--awaiting agent` every change counts, and each of your
 replies wakes the wait at once. When it wakes, act on **everything**
-in the listing, `tour_requests` and `review_moves` included — a request
-you skip is already recorded as seen, and no later wait will show it
-again.
+in the listing, `tour` and `moved` lines included — a request you skip
+is already recorded as seen, and no later wait will show it again. The
+listing marks each conversation `new` or `changed` against the state
+file, so you can tell what woke you without comparing listings
+yourself.
 
 The state file is where remax keeps a fingerprint of the listing you were
 last shown. Without it a wait measures change from the moment it starts,
@@ -270,13 +270,14 @@ saying what is wrong. A verdict with no note waits on `note`, so
 `--awaiting agent` leaves it out and it does not wake the wait. Its
 note does, once written:
 
-```json
-{"lines": [{"line": "+TWO CHANGED", "verdict": "flagged"}],
- "thread": [{"author": "reviewer", "body": "use a constant"}]}
+```
+5a1e09c7  note  src/Foo.hs  awaiting agent  new
+  ! 12 +TWO CHANGED
+  reviewer: use a constant
 ```
 
 A listing without `--awaiting agent` can still show a conversation
-whose `thread` is `[]` — a bare `!` with the note popup turned off, or
+with no posts — a bare `!` with the note popup turned off, or
 one they opened and abandoned. There is nothing to act on. Do not guess
 at what they meant: say you are holding off, and wait again with the
 same `--state` file.
@@ -289,14 +290,15 @@ Never answer a flag whose note you have not read. Your reply would land
 Flagging a line that was *changed* covers both sides of the change, so
 its conversation has two lines — the removal and the addition:
 
-```json
-{"lines": [{"line": "-two", "verdict": "flagged"},
-           {"line": "+TWO CHANGED", "verdict": "flagged"}],
- "thread": [{"author": "reviewer", "body": "use a named constant"}]}
+```
+5a1e09c7  note  src/Foo.hs  awaiting agent
+  ! 12 -two
+  ! 12 +TWO CHANGED
+  reviewer: use a named constant
 ```
 
 That is one piece of feedback. Fix it once, and `reply` once to its
-`id`.
+id.
 
 ### Both sides need the same store
 
@@ -312,8 +314,8 @@ is writing to.
 remax -C /path/to/repo reply ID "answer text"
 ```
 
-`ID` is the conversation's `id` from `list --json`, a GitHub thread's
-or a note's. The reply **appends a local post to that conversation** and
+`ID` is the conversation's id from `list`, or any prefix of it no other
+conversation shares. The reply **appends a local post to that conversation** and
 renders inline, in order and under your name, in the reviewer's live
 session — this is the primary way to answer a `?`, because the answer
 appears exactly where the question was asked. A reply never reaches
@@ -321,7 +323,7 @@ GitHub: on a GitHub thread it is talk beside the thread that only the
 reviewer sees. Also summarize the answer in your chat reply when
 you're in a conversation with the human. The thread is ordered: the
 reviewer may answer your post with another of theirs, so re-check
-`list --json` for posts newer than yours instead of assuming your
+`list` for posts newer than yours instead of assuming your
 answer was the last word. Accepting the hunk (or resolving the note)
 closes the whole conversation. The output says where the post landed,
 `repo-wide` for a note or `on PR #N` for anything bound for GitHub. A
@@ -337,7 +339,7 @@ remax -C /path/to/repo comment --revise ID "new text"   # propose a rewrite
 `HUNK_ID` comes from `remax hunks`. `comment` writes a GitHub comment on
 the hunk's lines in the reviewer's name, marked as written by you,
 pending until they submit it; they can edit or drop it first. `--revise`
-records a proposal on a conversation by its `id`: text for a reply, or
+records a proposal on a conversation by its id: text for a reply, or
 for a draft of theirs. Nothing happens until the reviewer takes it with
 Enter, which makes it their own pending text, and a new proposal
 replaces the old. Draft or revise only when asked to.
@@ -372,10 +374,10 @@ that pull request, and tells you so; see the next section.
 
 ## When the review moves
 
-A `review_moves` entry says the reviewer's session has moved from the
-checkout you are watching into another one, or back: `to` is the
-checkout the review is in now, `pull` the pull request whose worktree
-it entered or left, and `repo` the main checkout. The verdicts, notes
+A `moved` line says the reviewer's session has moved from the checkout
+you are watching into another one, or back: the path after
+`review is in` is the checkout the review is in now, called `to` below,
+and `PR #N` the pull request whose worktree it entered or left. The verdicts, notes
 and drafts the reviewer makes there are keyed by that path, so a `list`
 on the old path never shows them, and an edit made at the old path
 lands on the wrong branch. A checkout and the pull request worktrees
@@ -383,7 +385,7 @@ made from it are one group, and every path in the group reports the
 group's latest move, until the next replaces it. The entry is a fact
 about where the review is, not a request: it stays in every listing
 until the next move, so a move you have already followed is not
-outstanding work. A later entry with a newer `moved_at` is.
+outstanding work. A later entry with a newer time is.
 
 What to do depends on whether your `-C` already covers `to`. It covers
 `to` when `-C` is `to` itself, or when `-C` is a folder and `to` is a
@@ -393,7 +395,8 @@ directory directly under it:
   beside the story's checkouts, at the default `../<repo>-pr-<N>`):
   keep `-C`, keep the `watching` task and the state and feedback files.
   The listing spans the worktree too, and the move is reported once per
-  group; find its work by `conversation.repo`, and `cd` there to edit.
+  group; find its work under the worktree's `── name ──` heading, and
+  `cd` there to edit.
   If you started `watching` or a wait before the worktree existed,
   restart them: both read the folder's checkouts when they start, so
   the reviewer's header in the worktree shows nobody watching, and a
@@ -436,8 +439,8 @@ and edits not pushed yet. Read that checkout, diffed against
 `refs/remax/pull/N/base`, rather than the head ref.
 
 While a session has the pull request open, its review threads and
-PR-level comments are in `remax list --json`, under conversations whose
-`pull` is `N`.
+PR-level comments are in `remax list`, and `show` says `on PR #N` for
+each of them.
 
 Use `gh` only for what git does not hold, such as the description or a
 failing check's log, and never for the diff.
@@ -448,21 +451,16 @@ When the human asks you to walk them through a change — present it,
 explain it, "give me a tour" — build one and remax walks them along it.
 This is the one thing you post *before* being asked about a line.
 
-They can also ask from inside remax. A `tour_requests` entry in
-`list --json` (or a `tour requested for …` line in the text listing) is
-that ask, and it wakes a `list --wait` like a flag does:
+They can also ask from inside remax. A `tour` line in
+`list` is that ask, and it wakes a `list --wait` like a flag does:
 
-```json
-{"tour_requests": [
-   {"repo": "/path/to/repo", "view": "feature vs b9045d7",
-    "ref": "feature", "base": "b9045d7", "pull": null,
-    "prompt": "schema changes first", "asked_at": "2026-10-22 03:10:41"}]}
+```
+tour   feature vs b9045d7: schema changes first  (--ref feature --base b9045d7)
 ```
 
-Answer it with the tour below, passing `--ref` and `--base` exactly as
-the request gives them, or `--pr N` when `pull` is set (all three `null`
-means the working tree: pass no flags). `prompt` is their brief; follow
-it. Posting `tour begin` for
+Answer it with the tour below, passing the flags in parentheses exactly
+as the request gives them (`working tree` means pass no flags). The
+text after the colon is their brief; follow it. Posting `tour begin` for
 that view clears the request. Spelling the commit differently — the
 branch name where the reviewer has a sha open, or a sha where they have
 the branch — still reaches them, since remax matches tours by the
@@ -519,9 +517,9 @@ turn feedback into tour steps: a `!` or `?` is theirs to give.
 
 ## Fixing per-commit feedback
 
-When conversations have a `commit_sha`, the reviewer reviewed commit by
+When conversations have a commit after `@`, the reviewer reviewed commit by
 commit and the fix should usually land in that commit, not at the branch
-tip. Group conversations by `commit_sha` and either amend surgically
+tip. Group conversations by commit and either amend surgically
 (`git rebase --exec false <base>`, fix at each relevant stop,
 `git commit -a --amend --no-edit`, `git rebase --continue`) or make
 fixup commits (`git commit --fixup <sha>` per group, then
@@ -545,8 +543,8 @@ tip is the safe fallback.
   run `remax forget` unless the human explicitly asks.
 - Post a tour only when asked for one; `tour begin` discards the
   previous tour for that view.
-- An empty `conversations` list with an empty `tour_requests` list
-  means no outstanding feedback, whatever `review_moves` holds: a move
+- No conversations and no `tour` line means no outstanding feedback,
+  whatever `moved` line the listing has: a move
   you have followed stays listed. A tour request on its own is work,
   and so is a move you have not followed yet: follow it as *When the
   review moves* says.

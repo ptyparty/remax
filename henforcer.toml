@@ -937,3 +937,9 @@ module = "System.Timeout"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }
 alias = "Timeout"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.FeedbackText"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "FeedbackText"

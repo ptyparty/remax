@@ -26,6 +26,7 @@ import Paths_remax qualified as Paths
 import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
 import Remax.Feedback qualified as Feedback
+import Remax.FeedbackText qualified as FeedbackText
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.Hunks qualified as Hunks
@@ -53,6 +54,7 @@ data Cmd
     -- is gone.
     Forget (Maybe FilePath)
   | List ListOptions
+  | ShowConversation T.Text
   | Reply T.Text T.Text
   | Comment CommentArgs
   | Move T.Text Int
@@ -113,6 +115,7 @@ main = do
         Review marg -> review marg
         Forget mPath -> forget mPath
         List options -> list options
+        ShowConversation target -> showConversation target
         Reply target text -> reply target text
         Comment commentArgs -> comment commentArgs
         Move target pull -> move target pull
@@ -162,7 +165,10 @@ usage =
   \                                     current directory); PATH need not still exist\n\
   \       remax [-C DIR] list [--json] [--wait] [--state FILE]\n\
   \                      [--awaiting note|agent|reviewer]\n\
-  \                                     show flagged and questioned lines;\n\
+  \                                     show conversations, each under the\n\
+  \                                     shortest id prefix only it has, with\n\
+  \                                     its first lines and last two posts;\n\
+  \                                     --json prints each one whole;\n\
   \                                     --wait prints nothing until the list\n\
   \                                     changes, so an agent can wait on a\n\
   \                                     reviewer instead of asking on a timer;\n\
@@ -174,7 +180,13 @@ usage =
   \                                     and a wait wakes only when one is new\n\
   \                                     or changed, so with --awaiting agent\n\
   \                                     your own replies and edits do not\n\
-  \                                     wake it\n\
+  \                                     wake it; --awaiting agent leaves out\n\
+  \                                     PR comments, review summaries and\n\
+  \                                     threads a bot spoke last on; against\n\
+  \                                     the --state FILE or the wait's start,\n\
+  \                                     each conversation is marked new or\n\
+  \                                     changed\n\
+  \       remax [-C DIR] show ID        print one conversation whole\n\
   \       remax [-C DIR] reply ID TEXT   answer a conversation; shows in the review\n\
   \                                     session, and never reaches GitHub\n\
   \       remax [-C DIR] comment HUNK TEXT\n\
@@ -183,6 +195,9 @@ usage =
   \       remax [-C DIR] comment --revise ID TEXT\n\
   \                                     propose text for a conversation; the\n\
   \                                     reviewer takes it with Enter\n\
+  \                                     reply, comment --revise and move take\n\
+  \                                     a conversation id or any prefix of it\n\
+  \                                     that no other id shares\n\
   \       remax [-C DIR] move ID --pr N  file a draft comment and every post on\n\
   \                                     it under pull request N, such as after\n\
   \                                     its PR was reopened under a new number\n\
@@ -226,6 +241,7 @@ parseArgs args0 =
         ("list" : rest)
           | Just cmd <- listArgs rest -> Right (mDir, cmd)
         ["watching"] -> Right (mDir, Attend)
+        ["show", target] -> Right (mDir, ShowConversation (T.pack target))
         ("hunks" : rest) -> Right (mDir, Hunks rest)
         ("tour" : "begin" : rest) -> Right (mDir, TourBegin rest)
         ("tour" : "step" : rest) -> Right (mDir, TourStep rest)
@@ -646,128 +662,201 @@ waitPollUs = 400000
 list :: ListOptions -> IO ()
 list options = do
   let
-    fmt = listFormat options
-    while = listWhen options
-    stateFile = listStateFile options
     party = listAwaiting options
   roots <- targetRepos
   conn <- Store.openStore
   let
-    digest = do
-      listed <- mapM (Feedback.listFor conn) roots
-      asked <- mapM (\r -> fmap (map ((,) r)) (Store.tourRequests conn (T.pack r))) roots
-      moved <- reviewMoves conn roots
-      pure
-        . Set.map Key.sha256Hex
-        . Set.unions
-        $ [ Set.fromList (concatMap (Feedback.digestOf party) listed)
-          , requestDigest party (concat asked)
-          , Set.fromList (map moveJson (filter (const (moveWanted party)) moved))
-          ]
-    news before now =
-      case party of
-        Nothing -> now /= before
-        Just _ -> not (now `Set.isSubsetOf` before)
-    -- which review the fingerprint below is of
+    digest = fmap (listDigest party) (fetchListing conn roots)
     watching =
       T.intercalate
         "\t"
-        ( "digest/4"
+        ( "digest/5"
             : maybe "all" Feedback.partyText party
             : map T.pack roots
         )
-    remembered = case stateFile of
-      Nothing -> pure Nothing
-      Just path -> do
-        got <- Exception.try (TIO.readFile path) :: IO (Either Exception.IOException T.Text)
-        pure $ case got of
-          Left _ -> Nothing
-          Right raw -> case T.breakOn "\n" raw of
-            (recorded, rest)
-              | recorded == watching -> Just (Set.fromList (T.lines (T.drop 1 rest)))
-            -- a fingerprint of somewhere else says nothing about here,
-            -- and believing one is worse than having none: this
-            -- repository's listing will not match it, so the wait
-            -- returns at once with nothing to report. Measure from now
-            -- instead. A file written before the scope was recorded
-            -- reads as somewhere else, and costs one such measurement.
-            _ -> Nothing
-  case while of
-    ListNow -> pure ()
+  seen <- maybe (pure Nothing) (readDigest watching) (listStateFile options)
+  baseline <- case listWhen options of
+    ListNow -> pure seen
     ListOnChange -> do
       -- the baseline is what the caller last saw when it has told us,
       -- and only otherwise the moment we started
-      seen <- remembered
       before <- maybe digest pure seen
-      let
-        settle = do
-          now <- digest
-          -- a flag whose note is still being typed is not news yet: the
-          -- verdict is in the store seconds before the sentence saying
-          -- what is wrong with it, and returning on it means answering
-          -- before being told
-          busy <- Store.composingNow conn (map T.pack roots)
-          Monad.unless (news before now && not busy) $ do
-            -- re-announced rather than announced: the timestamp is what
-            -- tells a session somebody is still here, so an agent that
-            -- dies stops saying so without having to say anything
-            Store.markPresence Store.Waiting (map T.pack roots)
-            Concurrent.threadDelay waitPollUs
-            settle
-      settle `Exception.finally` Store.clearWaiting
-  Monad.forM_ stateFile $ \path -> do
-    now <- digest
+      waitForNews conn roots party digest before
+      pure (Just before)
+  listing <- fetchListing conn roots
+  let
+    current = listDigest party listing
+    listed = listingConversations listing
+    moved = filter (const (moveWanted party)) (listingMoves listing)
+  Monad.forM_ (listStateFile options) $ \path ->
     Monad.void
-      ( Exception.try (TIO.writeFile path (T.unlines (watching : Set.toList now))) ::
+      ( Exception.try (TIO.writeFile path (T.unlines (watching : map (\(k, v) -> k <> "\t" <> v) (Map.toList current)))) ::
           IO (Either Exception.IOException ())
       )
   here <- Directory.getCurrentDirectory
-  listed <- mapM (\r -> fmap ((,) r) (Feedback.listFor conn r)) roots
-  asked <- mapM (\r -> fmap (map ((,) r)) (Store.tourRequests conn (T.pack r))) roots
-  moved <- fmap (filter (const (moveWanted party))) (reviewMoves conn roots)
   let
-    asJson = fmt == ListJson
-    wanted l = maybe True (== Feedback.listedParty l) party
-    shown = map (\(r, ls) -> (r, filter wanted ls)) listed
-    nonEmpty = filter (not . null . snd) shown
-    requests = filter (requestWanted party . snd) (concat asked)
+    shown = map (\(r, ls) -> (r, filter (Feedback.awaits party) ls)) listed
+    requests = filter (requestWanted party . snd) (listingRequests listing)
     scope = case roots of
       [only] -> only
       _ -> here
-  if asJson
-    then TIO.putStrLn (listJson (T.pack scope) shown requests moved)
-    else do
-      Monad.forM_ moved $ \m ->
-        TIO.putStrLn
-          ( "review moved to "
-              <> Store.moveTo m
-              <> " for PR #"
-              <> T.pack (show (Store.movePull m))
-              <> " ("
-              <> Store.moveAt m
-              <> ")"
-          )
-      Monad.forM_ requests $ \(repo, request) ->
-        TIO.putStrLn
-          ( "tour requested for "
-              <> maybe (Store.requestMode request) Git.modeLabel (Git.modeFromText (Store.requestMode request))
-              <> (if length roots > 1 then " in " <> T.pack (FilePath.takeFileName repo) else "")
-              <> (if T.null (Store.requestPrompt request) then "" else ": " <> Store.requestPrompt request)
-              <> "  ("
-              <> requestFlags request
-              <> ")"
-          )
-      if null nonEmpty
-        then Monad.when (null requests && null moved) . putStrLn $
-          case party of
-            Nothing -> "No conversations recorded for this repository."
-            Just who -> "No conversations awaiting " ++ T.unpack (Feedback.partyText who) ++ "."
-        else Monad.forM_ nonEmpty $ \(repo, described) -> do
-          -- name the repository only when there is more than one in
-          -- play, so a single-repo listing reads exactly as before
-          Monad.when (length roots > 1) $
-            putStrLn ("\9472\9472 " ++ FilePath.takeFileName repo ++ " \9472\9472")
-          printListed described
+  case listFormat options of
+    ListJson -> TIO.putStrLn (listJson (T.pack scope) shown requests moved)
+    ListText ->
+      mapM_ TIO.putStrLn $
+        listText
+          ListPage
+            { pageRoots = roots
+            , pageParty = party
+            , pageMoves = moved
+            , pageRequests = requests
+            , pageListed = shown
+            , pageIds = Feedback.shortIds (map Feedback.listedId (concatMap snd listed))
+            , pageChange = changeFor baseline current
+            }
+
+data Listing = Listing
+  { listingConversations :: [(FilePath, [Feedback.Listed])]
+  , listingRequests :: [(FilePath, Store.TourRequest)]
+  , listingMoves :: [Store.ReviewMove]
+  }
+
+fetchListing :: SQLite.Connection -> [FilePath] -> IO Listing
+fetchListing conn roots = do
+  listed <- mapM (\r -> fmap ((,) r) (Feedback.listFor conn r)) roots
+  asked <- mapM (\r -> fmap (map ((,) r)) (Store.tourRequests conn (T.pack r))) roots
+  moved <- reviewMoves conn roots
+  pure
+    Listing
+      { listingConversations = listed
+      , listingRequests = concat asked
+      , listingMoves = moved
+      }
+
+listDigest :: Maybe Feedback.Party -> Listing -> Map.Map T.Text T.Text
+listDigest party listing =
+  let
+    convs =
+      Map.fromListWith
+        (++)
+        (map (\(i, line) -> (conversationKey i, [line])) (concatMap (Feedback.digestOf party . snd) (listingConversations listing)))
+    others =
+      Set.toList (requestDigest party (listingRequests listing))
+        ++ map moveJson (filter (const (moveWanted party)) (listingMoves listing))
+  in
+    Map.union
+      (Map.map (Key.sha256Hex . T.intercalate "\n" . List.sort) convs)
+      (Map.fromList (map (\t -> (Key.sha256Hex t, "")) others))
+
+conversationKey :: T.Text -> T.Text
+conversationKey i = Key.sha256Hex ("conversation\t" <> i)
+
+readDigest :: T.Text -> FilePath -> IO (Maybe (Map.Map T.Text T.Text))
+readDigest watching path = do
+  got <- Exception.try (TIO.readFile path) :: IO (Either Exception.IOException T.Text)
+  let
+    entry line = case T.splitOn "\t" line of
+      [k, v] -> Just (k, v)
+      _ -> Nothing
+  pure $ case got of
+    Left _ -> Nothing
+    Right raw -> case T.breakOn "\n" raw of
+      (recorded, rest)
+        | recorded == watching -> Just (Map.fromList (Maybe.mapMaybe entry (T.lines (T.drop 1 rest))))
+      -- a fingerprint of somewhere else says nothing about here,
+      -- and believing one is worse than having none: this
+      -- repository's listing will not match it, so the wait
+      -- returns at once with nothing to report. Measure from now
+      -- instead. A file written before the scope was recorded
+      -- reads as somewhere else, and costs one such measurement.
+      _ -> Nothing
+
+waitForNews :: SQLite.Connection -> [FilePath] -> Maybe Feedback.Party -> IO (Map.Map T.Text T.Text) -> Map.Map T.Text T.Text -> IO ()
+waitForNews conn roots party digest before =
+  let
+    news now =
+      case party of
+        Nothing -> now /= before
+        Just _ -> not (now `Map.isSubmapOf` before)
+    settle = do
+      now <- digest
+      -- a flag whose note is still being typed is not news yet: the
+      -- verdict is in the store seconds before the sentence saying
+      -- what is wrong with it, and returning on it means answering
+      -- before being told
+      busy <- Store.composingNow conn (map T.pack roots)
+      Monad.unless (news now && not busy) $ do
+        -- re-announced rather than announced: the timestamp is what
+        -- tells a session somebody is still here, so an agent that
+        -- dies stops saying so without having to say anything
+        Store.markPresence Store.Waiting (map T.pack roots)
+        Concurrent.threadDelay waitPollUs
+        settle
+  in
+    settle `Exception.finally` Store.clearWaiting
+
+changeFor :: Maybe (Map.Map T.Text T.Text) -> Map.Map T.Text T.Text -> T.Text -> FeedbackText.Change
+changeFor baseline current i =
+  let
+    key = conversationKey i
+  in
+    case baseline of
+      Nothing -> FeedbackText.Unchanged
+      Just before -> case Map.lookup key before of
+        Nothing -> FeedbackText.New
+        seen
+          | seen == Map.lookup key current -> FeedbackText.Unchanged
+          | otherwise -> FeedbackText.Changed
+
+data ListPage = ListPage
+  { pageRoots :: [FilePath]
+  , pageParty :: Maybe Feedback.Party
+  , pageMoves :: [Store.ReviewMove]
+  , pageRequests :: [(FilePath, Store.TourRequest)]
+  , pageListed :: [(FilePath, [Feedback.Listed])]
+  , pageIds :: Map.Map T.Text T.Text
+  , pageChange :: T.Text -> FeedbackText.Change
+  }
+
+listText :: ListPage -> [T.Text]
+listText page =
+  let
+    roots = pageRoots page
+    inRepo repo = if length roots > 1 then " in " <> T.pack (FilePath.takeFileName repo) else ""
+    moveLine m =
+      "moved  PR #"
+        <> T.pack (show (Store.movePull m))
+        <> " review is in "
+        <> Store.moveTo m
+        <> "  ("
+        <> Store.moveAt m
+        <> ")"
+    requestLine (repo, request) =
+      "tour   "
+        <> maybe (Store.requestMode request) Git.modeLabel (Git.modeFromText (Store.requestMode request))
+        <> inRepo repo
+        <> (if T.null (Store.requestPrompt request) then "" else ": " <> Store.requestPrompt request)
+        <> "  ("
+        <> requestFlags request
+        <> ")"
+    nonEmpty = filter (not . null . snd) (pageListed page)
+    conversation l =
+      FeedbackText.listedText
+        FeedbackText.Compact
+        (Map.findWithDefault (Feedback.listedId l) (Feedback.listedId l) (pageIds page))
+        (pageChange page (Feedback.listedId l))
+        l
+    repoBlock (repo, described) =
+      (if length roots > 1 then ["\9472\9472 " <> T.pack (FilePath.takeFileName repo) <> " \9472\9472"] else [])
+        ++ List.intercalate [""] (map conversation described)
+    heading = map moveLine (pageMoves page) ++ map requestLine (pageRequests page)
+    empty = case pageParty page of
+      Nothing -> "No conversations recorded for this repository."
+      Just who -> "No conversations awaiting " <> Feedback.partyText who <> "."
+  in
+    case List.intercalate [""] (filter (not . null) (heading : map repoBlock nonEmpty)) of
+      [] -> [empty]
+      rendered -> rendered
 
 -- A tour request is the reviewer asking the agent for something, so it
 -- is news for an agent and for anyone listing everything.
@@ -831,13 +920,14 @@ requestJson repo request =
       ]
 
 -- An agent's post on a conversation: ID is a conversation's id from
--- `list --json`, a GitHub thread's or a note's own. From a directory
+-- `list`, a GitHub thread's or a note's own. From a directory
 -- of checkouts the id is offered to each, and the one that holds it
 -- answers.
 reply :: T.Text -> T.Text -> IO ()
-reply target text = do
+reply given text = do
   roots <- targetRepos
   conn <- Store.openStore
+  target <- resolveTarget conn roots given
   attached <- mapM (\r -> fmap ((,) r) (Feedback.replyTo conn r target text)) roots
   let
     replied (repo, outcome) = case outcome of
@@ -855,16 +945,41 @@ reply target text = do
               ++ (if length roots > 1 then " in " ++ FilePath.takeFileName repo else "")
           )
 
-scopeWords :: WorkStore.ConversationScope -> String
-scopeWords landing =
-  case landing of
-    WorkStore.RepoWide -> "repo-wide"
-    WorkStore.InPull n -> "on PR #" ++ show n
+resolveTarget :: SQLite.Connection -> [FilePath] -> T.Text -> IO T.Text
+resolveTarget conn roots given = do
+  listed <- fmap concat (mapM (Feedback.listFor conn) roots)
+  fmap (Maybe.fromMaybe given) (resolveIn listed given)
 
-move :: T.Text -> Int -> IO ()
-move target pull = do
+resolveIn :: [Feedback.Listed] -> T.Text -> IO (Maybe T.Text)
+resolveIn listed given =
+  case Feedback.resolveId (map Feedback.listedId listed) given of
+    Feedback.ResolvedId full -> pure (Just full)
+    Feedback.UnknownId -> pure Nothing
+    Feedback.AmbiguousId ids ->
+      Exit.die (T.unpack (T.unlines (("More than one conversation id starts with " <> given <> ":") : map ("  " <>) ids)))
+
+showConversation :: T.Text -> IO ()
+showConversation given = do
   roots <- targetRepos
   conn <- Store.openStore
+  listed <- fmap concat (mapM (Feedback.listFor conn) roots)
+  resolved <- resolveIn listed given
+  case resolved of
+    Nothing -> Exit.die "No such conversation recorded for this repository."
+    Just full -> do
+      let
+        repoLine l = if length roots > 1 then ["repo " <> T.pack (Feedback.listedRepo l)] else []
+        whole l = repoLine l ++ FeedbackText.listedText FeedbackText.Whole full FeedbackText.Unchanged l
+      mapM_ TIO.putStrLn (List.intercalate [""] (map whole (filter ((== full) . Feedback.listedId) listed)))
+
+scopeWords :: WorkStore.ConversationScope -> String
+scopeWords = T.unpack . FeedbackText.scopeText
+
+move :: T.Text -> Int -> IO ()
+move given pull = do
+  roots <- targetRepos
+  conn <- Store.openStore
+  target <- resolveTarget conn roots given
   outcomes <- mapM (\r -> WorkStore.moveDraft conn (T.pack r) (Conv.LocalId target) pull) roots
   if WorkStore.Moved `elem` outcomes
     then putStrLn ("draft moved to PR #" ++ show pull)
@@ -878,7 +993,8 @@ comment args = do
   roots <- targetRepos
   conn <- Store.openStore
   case args of
-    Revise target text -> do
+    Revise given text -> do
+      target <- resolveTarget conn roots given
       outcomes <- mapM (\r -> Feedback.proposeOn conn r target text) roots
       let
         proposed outcome = case outcome of
@@ -924,49 +1040,6 @@ listJson scope listed requests moved =
     , ("conversations", jsonArray (map (Json.encode . Feedback.listedJson) (concatMap snd listed)))
     ]
 
-printListed :: [Feedback.Listed] -> IO ()
-printListed described =
-  Monad.forM_ described $ \l -> do
-    TIO.putStrLn
-      ( Maybe.fromMaybe "PR-level" (Feedback.listedFile l)
-          <> "  ("
-          <> Feedback.listedKind l
-          <> ", "
-          <> Feedback.listedUpdatedAt l
-          <> ", awaiting "
-          <> Feedback.partyText (Feedback.listedParty l)
-          <> ", "
-          <> T.pack (scopeWords (Feedback.listedScope l))
-          <> ")"
-      )
-    Monad.forM_ (Feedback.listedLines l) $ \line ->
-      Monad.unless (T.null (Feedback.listedLineText line)) $
-        TIO.putStrLn
-          ( "    "
-              <> maybe "" Store.verdictText (Feedback.listedLineVerdict line)
-              <> maybe "" (\n -> " :" <> T.pack (show n)) (Feedback.listedLineNo line)
-              <> "  "
-              <> Feedback.listedLineText line
-          )
-    Monad.forM_ (Feedback.listedPosts l) $ \post ->
-      case T.lines (Conv.markdownText (Conv.postBody post)) of
-        [] -> pure ()
-        (firstLine : more) -> do
-          let
-            who = case Conv.postAuthor post of
-              Conv.Viewer -> "reviewer"
-              Conv.Person (Conv.Login login) -> login
-              Conv.Agent (Conv.AgentName n) -> n
-            tag = case Conv.postState post of
-              Conv.Draft -> " [pending]"
-              Conv.Proposal _ _ -> " [proposal]"
-              _ -> ""
-            label = who <> tag <> ": "
-            indent = T.replicate (T.length label) " "
-          TIO.putStrLn ("    " <> label <> firstLine)
-          Monad.forM_ more (\ln -> TIO.putStrLn ("    " <> indent <> ln))
-    Monad.forM_ (Feedback.listedCommit l) $ \sha ->
-      TIO.putStrLn ("    commit: " <> sha)
 jsonArray :: [T.Text] -> T.Text
 jsonArray values = "[" <> T.intercalate ", " values <> "]"
 
