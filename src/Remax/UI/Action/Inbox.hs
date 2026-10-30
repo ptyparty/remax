@@ -100,7 +100,7 @@ jumpTo conv = do
   case drawnLanding st (Conv.convId conv) <|> anchorLanding st conv of
     Nothing -> showInPullView conv
     Just landing -> do
-      State.modify (\s -> Types.hidePullView s {Types.stInbox = Nothing})
+      State.modify (\s -> s {Types.stInbox = Nothing})
       Open.openFilePath (laPath landing)
       opened <- State.get
       Monad.when (fmap (T.pack . Types.fvPath) (Types.currentFileMay opened) == Just (laPath landing)) $

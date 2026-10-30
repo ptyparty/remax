@@ -257,16 +257,15 @@ handleEvent brickEvent =
         _
           | Just dialog <- Types.stSubmit st -> SubmitAction.handleSubmitKey ev dialog
         _
-          | Just _ <- Types.stPullView st
-          , not (Types.stSpace st)
-          , Maybe.isNothing (Types.stEmacsPrefix st)
-          , Maybe.isNothing (Types.stPrompt st)
-          , Maybe.isNothing (Types.stPicker st) ->
-              handlePullViewKey ev
-        _
           | Just tv <- Types.stTree st -> TreeKeys.handleTreeKey ev tv
         (_, Just pk, _) -> PickerAction.handlePickerKey ev pk
         (_, _, Just p) -> handlePromptKey ev p
+        _
+          | Just _ <- Types.stPullView st
+          , not (Types.stSpace st)
+          , not (Types.stIdleGo st)
+          , Maybe.isNothing (Types.stEmacsPrefix st) ->
+              handlePullViewKey ev
         _ ->
           if Types.stSpace st
             then handleSpaceKey ev
@@ -317,14 +316,16 @@ handleIdleKey ev =
       State.modify (\s -> s {Types.stEmacsPrefix = Just 'x'})
     _ -> pure ()
 
--- The g menu with nothing on screen. Only gr means anything here: there
--- is no file to move around in, and switching repository is most of what
--- an empty session is for — a story's first checkout being clean is
--- exactly when the next one is wanted.
+-- The g menu with no modal layer to hold it: nothing on screen, or the
+-- PR view. With nothing on screen only gr means anything: there is no
+-- file to move around in, and switching repository is most of what an
+-- empty session is for — a story's first checkout being clean is
+-- exactly when the next one is wanted. On the PR view the whole menu
+-- goes to the diff.
 handleIdleGo :: V.Event -> Brick.EventM Types.Name Types.St ()
 handleIdleGo ev =
   case ev of
-    V.EvKey (V.KChar 'r') [] -> PickerAction.openRepoPicker
+    V.EvKey (V.KChar c) [] | Just go <- helixGoKey c -> go
     _ -> pure ()
 
 -- With no files on screen, only the session chords mean anything.
@@ -384,9 +385,11 @@ handlePromptKey ev prompt =
       _ -> pure ()
 
 -- The PR view takes the keys the body would, apart from the command
--- line and the leaders, which reach their menus as anywhere.
+-- line and the leaders, which reach their menus as anywhere, and the
+-- moves around the project, which land in the diff as they do there.
 handlePullViewKey :: V.Event -> Brick.EventM Types.Name Types.St ()
-handlePullViewKey ev =
+handlePullViewKey ev = do
+  keys <- State.gets (Config.cfgKeys . Types.stConfig)
   case ev of
     V.EvKey (V.KChar ':') [] -> Command.openCmdPrompt
     V.EvKey (V.KChar 'x') [V.MMeta] -> Command.openCmdPrompt
@@ -394,7 +397,32 @@ handlePullViewKey ev =
     V.EvKey (V.KChar 'c') [V.MCtrl] -> State.modify (\s -> s {Types.stEmacsPrefix = Just 'c'})
     V.EvKey (V.KChar 'x') [V.MCtrl] -> State.modify (\s -> s {Types.stEmacsPrefix = Just 'x'})
     V.EvKey (V.KChar '\t') [] -> State.modify (\s -> s {Types.stTray = not (Types.stTray s)})
+    V.EvKey (V.KChar 's') [V.MCtrl] | keys == Config.KeysEmacs -> Search.openSearchPrompt 1
+    V.EvKey (V.KChar 'g') [] | keys == Config.KeysHelix -> State.modify (\s -> s {Types.stIdleGo = True})
+    _
+      | keys /= Config.KeysEmacs
+      , Just go <- projectNavKey keys ev ->
+          go
     _ -> PullViewAction.handlePullViewKey ev
+
+projectNavKey :: Config.KeyMode -> V.Event -> Maybe (Brick.EventM Types.Name Types.St ())
+projectNavKey keys ev =
+  case ev of
+    V.EvKey (V.KChar 'p') [V.MCtrl] -> Just TreeAction.openFileFinder
+    V.EvKey (V.KChar '\'') [] -> Just Nav.jumpToAnchor
+    V.EvKey (V.KChar ')') [] -> Just (Open.switchFile 1)
+    V.EvKey (V.KChar '(') [] -> Just (Open.switchFile (-1))
+    V.EvKey (V.KChar '/') [] -> Just (Search.openSearchPrompt 1)
+    V.EvKey (V.KChar 'n') [] -> Just (Search.searchRepeat 1)
+    V.EvKey (V.KChar 'N') [] -> Just (Search.searchRepeat (-1))
+    V.EvKey (V.KChar '*') [] -> Just Search.searchWordUnderCursor
+    V.EvKey (V.KChar '#') [] | keys == Config.KeysVi -> Just Search.searchWordBackward
+    V.EvKey (V.KChar '{') [] -> Just (scrollTray (-8))
+    V.EvKey (V.KChar '}') [] -> Just (scrollTray 8)
+    _ -> Nothing
+
+scrollTray :: Int -> Brick.EventM Types.Name Types.St ()
+scrollTray = Brick.vScrollBy (Brick.viewportScroll Types.TrayVP)
 
 -- A popup the submit dialog's list opened brings the dialog back once
 -- it closes, saved or discarded.
@@ -681,6 +709,7 @@ helixNormalKey :: Int -> Types.FileView -> Modal.EdState -> V.Event -> Brick.Eve
 helixNormalKey i fv ed ev = do
   st <- State.get
   case ev of
+    _ | Just go <- projectNavKey Config.KeysHelix ev -> go
     V.EvKey (V.KChar '\t') [] -> State.modify (\s -> s {Types.stTray = not (Types.stTray s)})
     V.EvKey V.KEnter [] -> VerdictAction.acceptSelection
     V.EvKey (V.KChar '!') [] -> actOr ThreadAction.flagKey (NoteAction.markThenNote Store.Flagged)
@@ -695,23 +724,13 @@ helixNormalKey i fv ed ev = do
     V.EvKey (V.KChar 'R') [] -> VerdictAction.clearVerdictBySelection
     V.EvKey (V.KChar ']') [] -> PullAction.walkRun 1
     V.EvKey (V.KChar '[') [] -> PullAction.walkRun (-1)
-    V.EvKey (V.KChar '/') [] -> Search.openSearchPrompt 1
     V.EvKey (V.KChar ':') [] -> Command.openCmdPrompt
-    V.EvKey (V.KChar '*') [] -> Search.searchWordUnderCursor
-    V.EvKey (V.KChar 'n') [] -> Search.searchRepeat 1
-    V.EvKey (V.KChar 'N') [] -> Search.searchRepeat (-1)
-    V.EvKey (V.KChar '\'') [] -> Nav.jumpToAnchor
     V.EvKey (V.KChar 'X') [] -> Nav.selectCurrentHunk
     V.EvKey (V.KChar 'p') [] -> pasteKey deferToModal i ev
     V.EvKey (V.KChar 'P') [] -> pasteKey deferToModal i ev
     V.EvKey (V.KChar ' ') [] -> State.modify (\s -> s {Types.stSpace = True})
     V.EvKey (V.KChar 'E') [] ->
       Types.whenWritable (\grant -> Editor.launchEditor grant (Types.stRoot st </> Types.fvPath fv) (fst (Modal.cursorRC ed) + 1))
-    V.EvKey (V.KChar ')') [] -> Open.switchFile 1
-    V.EvKey (V.KChar '(') [] -> Open.switchFile (-1)
-    V.EvKey (V.KChar 'p') [V.MCtrl] -> TreeAction.openFileFinder
-    V.EvKey (V.KChar '{') [] -> Brick.vScrollBy (Brick.viewportScroll Types.TrayVP) (-8)
-    V.EvKey (V.KChar '}') [] -> Brick.vScrollBy (Brick.viewportScroll Types.TrayVP) 8
     _ -> deferToModal i ed ev
 
 -- Vi keymap: the buffer belongs to vi, and the review verbs live behind
@@ -733,25 +752,13 @@ handleViKey i ed ev = do
     Modal.Normal | Vi.viBusy (Types.stVi st) -> deferToVi i ed ev
     Modal.Normal ->
       case ev of
+        _ | Just go <- projectNavKey Config.KeysVi ev -> go
         V.EvKey (V.KChar '\t') [] ->
           State.modify (\s -> s {Types.stTray = not (Types.stTray s)})
         V.EvKey (V.KChar ']') [] -> PullAction.walkRun 1
         V.EvKey (V.KChar '[') [] -> PullAction.walkRun (-1)
-        V.EvKey (V.KChar ')') [] -> Open.switchFile 1
-        V.EvKey (V.KChar '(') [] -> Open.switchFile (-1)
-        V.EvKey (V.KChar '{') [] ->
-          Brick.vScrollBy (Brick.viewportScroll Types.TrayVP) (-8)
-        V.EvKey (V.KChar '}') [] ->
-          Brick.vScrollBy (Brick.viewportScroll Types.TrayVP) 8
-        V.EvKey (V.KChar '\'') [] -> Nav.jumpToAnchor
         V.EvKey (V.KChar ':') [] -> Command.openCmdPrompt
-        V.EvKey (V.KChar '/') [] -> Search.openSearchPrompt 1
         V.EvKey (V.KChar '?') [] -> Search.openSearchPrompt (-1)
-        V.EvKey (V.KChar 'n') [] -> Search.searchRepeat 1
-        V.EvKey (V.KChar 'N') [] -> Search.searchRepeat (-1)
-        V.EvKey (V.KChar '*') [] -> Search.searchWordUnderCursor
-        V.EvKey (V.KChar '#') [] -> Search.searchWordBackward
-        V.EvKey (V.KChar 'p') [V.MCtrl] -> TreeAction.openFileFinder
         V.EvKey (V.KChar ' ') [] ->
           State.modify (\s -> s {Types.stSpace = True})
         V.EvKey (V.KChar 'p') [] -> pasteKey deferToVi i ev

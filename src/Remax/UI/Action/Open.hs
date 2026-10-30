@@ -127,7 +127,7 @@ openInRoot rel = do
               , Types.stOpened = Set.insert rel (Types.stOpened s)
               }
           grown <- State.get
-          Nav.parkM (length (Types.stFiles grown) - 1) 0
+          Nav.visitHunk (length (Types.stFiles grown) - 1) 0
 
 -- Like loadOne, but the base is the file's own content right now.
 loadOpened ::
@@ -205,6 +205,7 @@ visitFile f mh = do
                   Just prev -> Just (Types.fvPath prev, Types.stCurH s)
                   Nothing -> Types.stAltFile s
             }
+      State.modify Types.hidePullView
       State.modify $ \s ->
         s
           { Types.stCurF = f

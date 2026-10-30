@@ -21,6 +21,8 @@ module Remax.UI.Model.Nav
   , runChanges
   , hunkUnderCursor
   , parkAnchor
+  , visitHunk
+  , visitAnchor
   , jumpToAnchor
   , parkOnLine
   , gotoLine
@@ -444,6 +446,16 @@ parkAnchor f h = do
       State.modify $ \s -> s {Types.stAnchor = Just (Types.anchorAt fv (Types.stCurH st))}
     Nothing -> pure ()
 
+visitHunk :: Int -> Int -> Brick.EventM Types.Name Types.St ()
+visitHunk f h = do
+  State.modify Types.hidePullView
+  parkM f h
+
+visitAnchor :: Int -> Int -> Brick.EventM Types.Name Types.St ()
+visitAnchor f h = do
+  State.modify Types.hidePullView
+  parkAnchor f h
+
 -- ': jump back to the hunk under review, wherever the investigation
 -- wandered — across files included. With no anchor yet, it reframes
 -- the current hunk as before.
@@ -454,10 +466,10 @@ jumpToAnchor = do
     Just an ->
       case anchorTarget st an of
         Just (f, h) -> do
-          parkM f h
+          visitHunk f h
           Types.setMsg "back at the hunk under review"
         Nothing -> Types.setMsg ("anchored file left the session: " <> T.pack (Types.anPath an))
-    Nothing -> parkM (Types.stCurF st) (Types.stCurH st)
+    Nothing -> visitHunk (Types.stCurF st) (Types.stCurH st)
 
 anchorTarget :: Types.St -> Types.Anchor -> Maybe (Int, Int)
 anchorTarget st an = do
@@ -470,7 +482,7 @@ parkOnLine an mark = do
   case anchorTarget st an of
     Nothing -> Types.setMsg ("no longer in the change set: " <> T.pack (Types.anPath an))
     Just (f, h) -> do
-      parkM f h
+      visitHunk f h
       parked <- State.get
       Monad.forM_ (Types.safeIdx (Types.stFiles parked) f) $ \fv ->
         Monad.forM_ (markedRow fv mark) (setEd f . placeAt (Types.fvEd fv) (Types.lmSpan mark))
@@ -503,16 +515,16 @@ gotoLine n = do
   st <- State.get
   case Types.currentFileMay st of
     Nothing -> Types.setMsg "no file on screen"
-    Just fv ->
+    Just fv -> do
       let
         ed = Types.fvEd fv
         move = Z.moveCursor (n - 1, 0)
-      in
-        setEd (Types.stCurF st) $
-          if Config.cfgKeys (Types.stConfig st) == Config.KeysEmacs
-            -- emacs: point moves, the mark stays, so the region grows
-            then ed {Modal.edZipper = move (Modal.edZipper ed), Modal.edInsertEntry = Nothing}
-            else Modal.plainMove move ed
+      State.modify Types.hidePullView
+      setEd (Types.stCurF st) $
+        if Config.cfgKeys (Types.stConfig st) == Config.KeysEmacs
+          -- emacs: point moves, the mark stays, so the region grows
+          then ed {Modal.edZipper = move (Modal.edZipper ed), Modal.edInsertEntry = Nothing}
+          else Modal.plainMove move ed
 
 -- Space h: make the hunk the cursor is standing in the current one —
 -- the current hunk being what a selection-less X, ! or ? acts on, and

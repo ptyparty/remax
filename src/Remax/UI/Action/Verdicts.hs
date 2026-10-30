@@ -109,7 +109,7 @@ gotoTourStep n = do
 landOnTour :: T.Text -> (Int, Int) -> Brick.EventM Types.Name Types.St ()
 landOnTour said (f, h) = do
   State.modify (\s -> s {Types.stWalk = Types.WalkTour, Types.stTourLast = Just (f, h)})
-  Nav.parkAnchor f h
+  Nav.visitAnchor f h
   Nav.scrollTrayToCurrent
   Types.setMsg said
 

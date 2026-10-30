@@ -36,7 +36,7 @@ searchWordBackward = searchWordDir (-1)
 searchWordDir :: Int -> Brick.EventM Types.Name Types.St ()
 searchWordDir dir = do
   st <- State.get
-  case wordUnderCursor (Types.fvEd (Types.currentFile st)) of
+  case Types.currentFileMay st >>= wordUnderCursor . Types.fvEd of
     Nothing -> State.modify (\s -> s {Types.stMsg = "no word under cursor"})
     Just needle -> do
       State.modify
@@ -129,33 +129,35 @@ searchNext dir = do
 searchStep :: Int -> T.Text -> Brick.EventM Types.Name Types.St ()
 searchStep dir needle = do
   st <- State.get
-  let
-    i = Types.stCurF st
-    fv = Types.stFiles st !! i
-    ed = Types.fvEd fv
-    pos = Modal.cursorRC ed
-    matchesInLine (r, l) =
-      map (\(pre, _) -> (r, T.length pre)) (T.breakOnAll needle l)
-    matches = concatMap matchesInLine (zip [0 ..] (Modal.bufferLines ed))
-  case matches of
-    [] -> State.modify (\s -> s {Types.stMsg = "no match: " <> needle})
-    _ -> do
+  case Types.currentFileMay st of
+    Nothing -> Types.setMsg "no file on screen"
+    Just fv -> do
       let
-        after = filter (> pos) matches
-        before = filter (< pos) matches
-        (mr, mc) =
-          if dir > 0
-            then case after ++ matches of
-              (m : _) -> m
-              [] -> pos
-            else case reverse before ++ reverse matches of
-              (m : _) -> m
-              [] -> pos
-        moved =
-          ed
-            { Modal.edZipper = Z.moveCursor (mr, mc + T.length needle - 1) (Modal.edZipper ed)
-            , Modal.edSelAnchor = Just (mr, mc)
-            , Modal.edSelKind = Modal.CharSel
-            }
-      Nav.setEd i moved
-      State.modify (\s -> s {Types.stMsg = " "})
+        i = Types.stCurF st
+        ed = Types.fvEd fv
+        pos = Modal.cursorRC ed
+        matchesInLine (r, l) =
+          map (\(pre, _) -> (r, T.length pre)) (T.breakOnAll needle l)
+        matches = concatMap matchesInLine (zip [0 ..] (Modal.bufferLines ed))
+      case matches of
+        [] -> State.modify (\s -> s {Types.stMsg = "no match: " <> needle})
+        _ -> do
+          let
+            after = filter (> pos) matches
+            before = filter (< pos) matches
+            (mr, mc) =
+              if dir > 0
+                then case after ++ matches of
+                  (m : _) -> m
+                  [] -> pos
+                else case reverse before ++ reverse matches of
+                  (m : _) -> m
+                  [] -> pos
+            moved =
+              ed
+                { Modal.edZipper = Z.moveCursor (mr, mc + T.length needle - 1) (Modal.edZipper ed)
+                , Modal.edSelAnchor = Just (mr, mc)
+                , Modal.edSelKind = Modal.CharSel
+                }
+          Nav.setEd i moved
+          State.modify (\s -> Types.hidePullView s {Types.stMsg = " "})

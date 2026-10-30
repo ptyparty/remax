@@ -599,7 +599,7 @@ are gone they do not draw.
 
 ### The PR view
 
-Opening a pull request lands on its own page, in place of the body. `Esc` and `Space o` (`C-c o` in emacs) go to the diff, and `Space o` returns. A change of review mode or base also goes to the diff. It opens with the title, a line of facts (author, commits,
+Opening a pull request lands on its own page, in place of the body. `Esc` and `Space o` (`C-c o` in emacs) go to the diff, and `Space o` returns. A change of review mode or base also goes to the diff, and so does every move to a place in it: a file or hunk picked in the file finder (`Ctrl-p`, `Space f`), the project tree or the open files, a project search hit, a hunk from `Space m`, `'`, `)` and `(`, `/` with `n` and `N`, `ga` and the other `g` moves, `:open`, `:N`, `:tour N` and `Space e` all land there as they do from the body. It opens with the title, a line of facts (author, commits,
 force-pushes, reviewers, labels, `draft`), the description rendered as
 Markdown, `checks  ✓ N passed · mergeable` (`c`, or `C-c k`, lists the
 checks), then the conversation on one gutter: each PR-level comment and
