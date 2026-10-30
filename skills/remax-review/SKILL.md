@@ -81,7 +81,8 @@ Each conversation is a header line, its lines, and its thread:
 
 - **Header:** the id, the kind, the file (`PR #N` for a conversation
   on the pull request as a whole), the commit after `@`, whose turn it
-  is, and on a wait's wake `new` or `changed`.
+  is, `in file: some` or `in file: none` when the lines have changed,
+  and on a wait's wake `new` or `changed`.
 - **Lines:** a verdict glyph, the line number and the line, at most six
   of them, each cut at 160 characters.
 - **Thread:** the last two posts, with earlier ones counted. A bot's
@@ -177,6 +178,17 @@ which one it landed in.
   comments*. Every post on a conversation, yours and the reviewer's,
   lands where the conversation lives, whatever view either of you is
   in.
+- **in file** — whether the conversation's `+` and unchanged lines
+  still stand together in the working file, spaced as their numbers
+  were. The header shows `in file: some` when only part of them do and
+  `in file: none` when none do; the block may have moved up or down.
+  `none` usually means the code was already changed or deleted, by you
+  or in another commit. Check that the thread's point was met, then say
+  so with `reply` rather than editing again. Nothing shows when they
+  all stand, or when there is nothing distinctive to look for: every
+  line is a `-` line, blank, or only punctuation such as `}`.
+  `lines_in_file` in `list --json` gives `"all"`, `"some"`, `"none"`
+  or `null`.
 - **commit** — the commit the note was written on, when the session
   knew one. Absent otherwise; recover the introducing commit yourself
   from the line text when it matters (`git log -S"<line text>"` or

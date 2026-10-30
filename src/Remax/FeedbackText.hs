@@ -33,6 +33,10 @@ headerLine detail shownId change l =
       (Nothing, WorkStore.RepoWide) -> "PR-level"
     commit = maybe [] (\sha -> ["@" <> T.take 8 sha]) (Feedback.listedCommit l)
     awaiting = ["awaiting " <> Feedback.partyText (Feedback.listedParty l)]
+    standing = case Feedback.listedLinesInFile l of
+      Just Feedback.AllInFile -> []
+      Just f -> ["in file: " <> Feedback.linesInFileText f]
+      Nothing -> []
     whole = case detail of
       Compact -> []
       Whole -> [scopeText (Feedback.listedScope l), Feedback.listedUpdatedAt l]
@@ -41,7 +45,7 @@ headerLine detail shownId change l =
       New -> ["new"]
       Changed -> ["changed"]
   in
-    T.intercalate "  " (filter (not . T.null) ([shownId, Feedback.listedKind l, place] ++ commit ++ awaiting ++ whole ++ mark))
+    T.intercalate "  " (filter (not . T.null) ([shownId, Feedback.listedKind l, place] ++ commit ++ awaiting ++ standing ++ whole ++ mark))
 
 scopeText :: WorkStore.ConversationScope -> T.Text
 scopeText scope =
