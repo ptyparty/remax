@@ -32,6 +32,7 @@ import Remax.GitHub qualified as GitHub
 import Remax.Hunks qualified as Hunks
 import Remax.Json qualified as Json
 import Remax.Key qualified as Key
+import Remax.Remote qualified as Remote
 import Remax.RemoteCache qualified as RemoteCache
 import Remax.Store qualified as Store
 import Remax.UI qualified as UI
@@ -63,6 +64,7 @@ data Cmd
   | TourBegin [String]
   | TourStep [String]
   | TourClear [String]
+  | RunInSession T.Text
   | ShowVersion
 
 -- How a listing is printed, and when.
@@ -124,6 +126,7 @@ main = do
         TourBegin rest -> tourBegin rest
         TourStep rest -> tourStep rest
         TourClear rest -> tourBegin rest
+        RunInSession command -> runInSession command
         ShowVersion -> putStrLn ("remax " ++ Version.showVersion Paths.version)
 
 -- list's flags, in either order and each at most once.
@@ -208,6 +211,13 @@ usage =
   \                                     list the change set as the session sees\n\
   \                                     it, one id per hunk; with no ref flags,\n\
   \                                     whatever the open session is viewing\n\
+  \       remax [-C DIR] do COMMAND     run a : command in the remax session open\n\
+  \                                     on this checkout, in this qmux tab, such\n\
+  \                                     as do :go HUNK_ID; commands that only\n\
+  \                                     look, move or change the view run, and\n\
+  \                                     the rest are the reviewer's; prints what\n\
+  \                                     the session said, or that it is held\n\
+  \                                     until the reviewer is free\n\
   \       remax [-C DIR] tour begin [ref flags]\n\
   \       remax [-C DIR] tour step [ref flags] [--title WORDS] ID[,ID...] NOTE...\n\
   \       remax [-C DIR] tour clear [ref flags]\n\
@@ -247,6 +257,8 @@ parseArgs args0 =
         ("tour" : "step" : rest) -> Right (mDir, TourStep rest)
         ("tour" : "clear" : rest) -> Right (mDir, TourClear rest)
         ["--version"] -> Right (mDir, ShowVersion)
+        ("do" : rest)
+          | not (null rest) -> Right (mDir, RunInSession (T.pack (unwords rest)))
         ("reply" : target : rest)
           | not (null rest) ->
               Right (mDir, Reply (T.pack target) (T.pack (unwords rest)))
@@ -481,6 +493,21 @@ targetRepos = do
   if null found
     then Exit.die (noRepoMessage here ++ ".")
     else pure found
+
+runInSession :: T.Text -> IO ()
+runInSession command = do
+  roots <- reposInReach
+  delivered <- Remote.send Remote.Request {Remote.rqCommand = command, Remote.rqRoots = roots}
+  case delivered of
+    Remote.NobodyOpen -> Exit.die "No remax is open on this checkout here."
+    Remote.Answered answer -> do
+      let
+        said = Remote.replyText answer
+      case answer of
+        Remote.Ran _ -> Monad.unless (T.null said) (TIO.putStrLn said)
+        Remote.Held -> TIO.putStrLn said
+        Remote.Refused _ -> Exit.die (T.unpack said)
+        Remote.NotHere -> Exit.die (T.unpack said)
 
 reposInReach :: IO [FilePath]
 reposInReach = do

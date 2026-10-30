@@ -66,6 +66,7 @@ draw st =
       (_, Just rb) -> [DrawHeader.rebaseBar rb]
       (_, Nothing) -> [DrawHeader.gitBar st]
     tourRows = maybe [] (: []) (DrawHeader.tourBar st)
+    claudeRows = maybe [] (: []) (DrawHeader.claudeBar st)
     helpRows =
       if Types.stHelp st then [DrawHelp.helpLayer (Config.cfgKeys (Types.stConfig st))] else []
     infoRows = case Types.stInfoPopup st of
@@ -79,6 +80,7 @@ draw st =
              ( [DrawHeader.headerBar st]
                  ++ rebaseRows
                  ++ tourRows
+                 ++ claudeRows
                  ++ [Widgets.hairline, Brick.hBox panes, Widgets.hairline]
                  ++ menuRows
                  ++ [DrawStatus.statusBar st]

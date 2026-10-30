@@ -1,6 +1,6 @@
 ---
 name: remax-review
-description: "Act on code-review feedback recorded by remax — read the reviewer's flagged/questioned lines and notes for a repository, fix them, and understand how the review session sees your edits. Use when asked to address review feedback, check for remax flags, or work alongside a human reviewing in remax. Takes an argument: no argument answers what is outstanding once and stops; `watch` keeps waiting on the reviewer and reacting until told to stop; `stop` ends a watch."
+description: "Act on code-review feedback recorded by remax — read the reviewer's flagged/questioned lines and notes for a repository, fix them, and understand how the review session sees your edits. Use when asked to address review feedback, check for remax flags, or work alongside a human reviewing in remax, or to show the reviewer a hunk, file, line or conversation by moving their remax session there (`remax do :go`). Also use whenever the user asks to be shown where some code is: take them there instead of replying with a line number. Takes an argument: no argument answers what is outstanding once and stops; `watch` keeps waiting on the reviewer and reacting until told to stop; `stop` ends a watch."
 ---
 
 # Working with a remax reviewer
@@ -341,6 +341,10 @@ closes the whole conversation. The output says where the post landed,
 `repo-wide` for a note or `on PR #N` for anything bound for GitHub. A
 reply to a verdict with no note yet starts a repo-wide note.
 
+When the answer is "look here", say it with your session pointer as well
+as in the reply: `remax do :go HUNK_ID` or `:go PATH:LINE` puts them on
+the code you mean (see *Pointing the reviewer*).
+
 ## Drafting review comments
 
 ```sh
@@ -526,6 +530,40 @@ Keep notes short and pointed at the code — what to look at and why it
 is there, not a restatement of the diff. The reviewer still reads every
 line; the tour is the order and the context, not the review. Do not
 turn feedback into tour steps: a `!` or `?` is theirs to give.
+
+Once the last step is posted, start them on it with
+`remax -C "$REPO" do :tour 1` (see *Pointing the reviewer*).
+
+## Pointing the reviewer
+
+When you want the reviewer looking at something particular, move their
+session there instead of describing where it is:
+
+```sh
+remax -C "$REPO" do :go HUNK_ID        # an id from remax hunks, or a prefix
+remax -C "$REPO" do :go src/Foo.hs:40  # a line
+remax -C "$REPO" do :go CONV_ID        # a conversation from remax list
+remax -C "$REPO" do :tour 2            # a stop of the tour you posted
+```
+
+When the human asks to be shown where some code is ("show me where…",
+"where does…", "take me to…"), find it and run `do :go PATH:LINE` rather
+than answering with a line number. Say in a sentence what they are
+looking at; a reference in the chat is the fallback when `do` fails.
+
+Point once you have something for them: the code they asked to see,
+the first stop of a tour you just posted, the line your reply to their note is about, the hunk your
+fix landed in. Do not point after every edit; they may have follow mode
+on, and moving them while they read is an interruption.
+
+`do` prints what the session said, such as `at the hunk in src/Foo.hs`,
+or why not. It exits 1 when no remax is open on the checkout in this
+qmux tab; mention the place in your reply instead. Only commands that
+look, move or change the view run; anything that changes the review,
+such as `:submit` or `:revert`, is refused as the reviewer's to run.
+`held for the reviewer` means they are typing or have a popup open:
+they will be asked to run it once they are free, so do not send it
+again.
 
 ## Fixing per-commit feedback
 

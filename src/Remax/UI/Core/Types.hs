@@ -4,6 +4,8 @@
 module Remax.UI.Core.Types
   ( WatchMode (..)
   , FollowMode (..)
+  , ClaudeLine (..)
+  , AgentPlace (..)
   , Name (..)
   , REvent (..)
   , Prompt (..)
@@ -123,6 +125,7 @@ import Remax.GitHub qualified as GitHub
 import Remax.Highlight qualified as Highlight
 import Remax.Modal qualified as Modal
 import Remax.PullPoll qualified as PullPoll
+import Remax.Remote qualified as Remote
 import Remax.Store qualified as Store
 import Remax.Submit qualified as Submit
 import Remax.Tree qualified as Tree
@@ -144,6 +147,16 @@ data WatchMode = NativeWatch | PollingWatch
 data FollowMode = FollowOff | FollowEdits
   deriving (Eq)
 
+data ClaudeLine
+  = ClaudeRan T.Text T.Text AgentPlace
+  | ClaudeOffers T.Text
+
+data AgentPlace = AgentPlace
+  { apPath :: Maybe FilePath
+  , apCursor :: Maybe (Int, Int)
+  }
+  deriving (Eq)
+
 data REvent
   = FileChangedOnDisk FilePath
   | GitStateChanged
@@ -156,6 +169,7 @@ data REvent
   | Settle
   | JobDone T.Text (Brick.EventM Name St ())
   | FromJob (Brick.EventM Name St ())
+  | FromAgent Remote.Request (Remote.Reply -> IO ())
 
 -- The one-line prompt at the bottom of the screen: / search or : command.
 data Prompt = SearchPrompt T.Text | CmdPrompt T.Text | PathPrompt T.Text T.Text (T.Text -> Brick.EventM Name St ())
@@ -585,6 +599,8 @@ data St = St
   , stInbox :: Maybe Inbox
   , stTourOverview :: Maybe TourOverview
   , stFollow :: FollowMode
+  , stAgentHeld :: Maybe T.Text
+  , stClaudeLine :: Maybe ClaudeLine
   , stPullView :: Maybe PullView -- the pull request's own page, over the body
   , stNow :: Clock.UTCTime -- wall clock, for ages; moved on the attending beat
   , stTour :: [Store.TourStep]

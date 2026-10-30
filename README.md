@@ -345,10 +345,11 @@ stays a prefix there too.
 | `:commit REF` | the same, naming the commit (any commit-ish, so `HEAD~2` and tag names work). A branch name stays symbolic, so the review follows the branch when an agent amends or adds to it |
 | `:message` | the full message of the commit under review, as `Space c` shows it |
 | `:walk tour` | follow the tour an agent posted for this view (see *A guided tour*); `]`/`[` step through it and the header counts the steps |
+| `:go TARGET` | go to a hunk (by the id `remax hunks` prints, or a prefix of it), a conversation (by id or prefix), `PATH[:LINE]`, `tour N`, or a surface: `tour` (the stop list), `pr` or `feedback`. A word that names more than one thing says so instead of guessing; `'` comes back |
 | `:tour` / `:tour N` | get back on the tour: `:tour` returns to the stop you last visited (or the one under the cursor, or the first), `:tour N` jumps to stop N. Either way the walk follows the tour again |
 | `:tour list` | the tour's stops in a popup, as `Space T` (`C-c T` in emacs) opens it: each stop's title, its note and the files it covers; `⏎` goes to the stop |
 | `:tour ask [TEXT]` | ask the agent watching this review for a tour of the view you have open, with TEXT as the brief ("schema changes first"). The request shows up in the agent's `remax list`, wakes a `list --wait`, and carries the exact ref flags for the view, so the tour lands where you are looking |
-| `:follow` | follow edits, as `Space F` (`C-c F` in emacs) toggles it: whenever a file in the working tree changes on disk the session takes you to the first line that changed, and a file that newly joins the change set is opened at its first hunk. The header says `following edits` while it is on. Nothing moves you while you are typing or a popup, prompt or menu is open |
+| `:follow` | follow edits, which is on when remax starts; `:follow`, `Space F` and `C-c F` in emacs toggle it: whenever a file in the working tree changes on disk the session takes you to the first line that changed, and a file that newly joins the change set is opened at its first hunk. The header says `following edits` while it is on. Nothing moves you while you are typing or a popup, prompt or menu is open |
 | `:mode head` / `:mode unstaged` / `:mode untracked` | the classic change sets; `:mode tree` returns to the working tree |
 | `:rebase [REF]` | start a commit-by-commit review pass (below) |
 | `:continue` | fold this stop's edits into the stopped commit and advance — *everything* dirty at the stop counts, including edits made through `$EDITOR` or by an agent, since the stop started clean |
@@ -784,6 +785,35 @@ stop you were on, and `:tour 4` jumps to stop four. `Space T` (`C-c T`
 in emacs, or `:tour list`) lays the whole tour out in a popup, every
 stop with its note and files, and `⏎` takes you to the one selected. A tour belongs to the view it was built for; switching the
 subject puts it away and `tour begin` on the same view replaces it.
+
+### Pointing the reviewer
+
+An agent can move your session with `remax do`, which runs a `:` command
+in the remax open on the same checkout, in the same qmux tab:
+
+```sh
+remax -C /path/to/repo do :go 3915dc41      # this hunk
+remax -C /path/to/repo do :go src/Git.hs:40 # this line
+remax -C /path/to/repo do :tour 3           # this stop of the tour
+```
+
+Only commands that look, move or change what you are reviewing run this
+way: `:go`, a line number, `:open`, `:grep`, `:tour N`, `:base`, `:pr N`,
+`:repo` and the like. `:submit`, `:revert`, `:abort!`, `:set`, `:q` and
+everything else that changes something are yours alone, and `remax do`
+says so. Whatever the agent ran shows on a line under the header,
+`↪ Claude ran :go 3915dc41`, until you move away from where it left you.
+A `:go` from an agent also turns `:follow` off, so the next edit does not
+take you somewhere else.
+
+A command that arrives while you are typing, or have a popup open, waits.
+When you are free remax asks `Claude asks to run :go 3915dc41 · y runs ·
+any other key drops`, and nothing runs until you answer. A newer command
+replaces one still waiting.
+
+The session listens on a socket in `$QMUX_TAB_DIR/remax`, or in
+`$XDG_RUNTIME_DIR/remax` outside qmux, so an agent in one tab never
+moves a review open in another.
 
 ## Configuration
 
