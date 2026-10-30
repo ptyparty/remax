@@ -43,6 +43,8 @@ module Remax.Conversation
   , PostState (..)
   , Post (..)
   , isLocalPost
+  , isUnsent
+  , strandedBy
   , newestPost
   , Venue (..)
   , ConversationId (..)
@@ -332,6 +334,20 @@ isLocalPost p =
     Local _ -> True
     _ -> False
 
+isUnsent :: Post -> Bool
+isUnsent p =
+  case postState p of
+    Draft -> True
+    Proposal _ _ -> True
+    _ -> False
+
+strandedBy :: Conversation -> Post -> [WorkId]
+strandedBy conv post =
+  case (convTarget conv, filter isUnsent (convPosts conv)) of
+    (NewThread _ (OnLines _), [only])
+      | only == post -> Maybe.mapMaybe postWork (filter isLocalPost (convPosts conv))
+    _ -> []
+
 newestPost :: [Post] -> Maybe Post
 newestPost posts =
   let
@@ -398,7 +414,7 @@ conversations remote own =
       case target of
         NewThread _ OnPull -> Nothing
         NewThread lid anchor
-          | maybe True (`Map.notMember` rootIds) (Map.lookup lid (workSubmitted own)) ->
+          | maybe (any isUnsent (workPosts items)) (`Map.notMember` rootIds) (Map.lookup lid (workSubmitted own)) ->
               Just (newThreadConversation lid anchor items)
         OnLinesOnly lid lineSpan verdict -> Just (noteConversation lid lineSpan verdict items)
         OnThread tid

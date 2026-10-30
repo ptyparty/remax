@@ -14,6 +14,7 @@ module Remax.WorkStore
   , addEdit
   , editWork
   , discardWork
+  , discardAll
   , takeWork
   , recordSubmitted
   , growNote
@@ -312,6 +313,10 @@ discardWork conn wid =
   case wid of
     Conv.StoredWork i -> SQLite.execute conn "DELETE FROM work WHERE id = ?" (SQLite.Only i)
     Conv.LegacyPost _ _ -> pure ()
+
+discardAll :: SQLite.Connection -> [Conv.WorkId] -> IO ()
+discardAll conn wids =
+  SQLite.withTransaction conn (mapM_ (discardWork conn) wids)
 
 takeWork :: SQLite.Connection -> Conv.WorkId -> IO ()
 takeWork conn wid =
