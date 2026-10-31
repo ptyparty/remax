@@ -217,7 +217,7 @@ workRows st mode width budget wp =
       Conv.Posted {} -> True
       Conv.Local _ -> True
       _ -> False
-    column = max 6 (min 16 (maximum (0 : map (T.length . Threads.authorName . Conv.postAuthor) posts)))
+    column = Threads.nameColumn (map (Threads.authorName . Conv.postAuthor) posts)
     (opening, rest) = splitAt 1 posts
     (older, newest) = splitAt (max 0 (length rest - 2)) rest
     collapsed p =
@@ -249,7 +249,7 @@ workRows st mode width budget wp =
         authorAttr = Threads.authorInk (Conv.postAuthor p)
         row (j, r) =
           Brick.hBox
-            ( [ Brick.withAttr authorAttr (Brick.txt (T.justifyRight column ' ' (if j == (0 :: Int) then Threads.authorName (Conv.postAuthor p) else "")))
+            ( [ Brick.withAttr authorAttr (Brick.txt (Threads.nameCell column (if j == (0 :: Int) then Threads.authorName (Conv.postAuthor p) else "")))
               , Brick.withAttr authorAttr (Brick.txt (" " <> Threads.railGlyph "\9474" height j <> " "))
               ]
                 ++ map (\seg -> Brick.withAttr (Markdown.segAttr seg) (Brick.txt (Markdown.segText seg))) (Markdown.rowSegments r)

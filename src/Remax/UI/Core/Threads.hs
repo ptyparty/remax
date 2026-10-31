@@ -22,6 +22,8 @@ module Remax.UI.Core.Threads
   , anchorPlace
   , takenAs
   , authorName
+  , nameColumn
+  , nameCell
   , authorInk
   , railGlyph
   , ageText
@@ -301,7 +303,13 @@ awaitsYou st conv =
     _ -> False
 
 authorColumn :: [Conv.Post] -> Int
-authorColumn posts = max 6 (min columnCap (maximum (0 : map (T.length . authorLabel) posts)))
+authorColumn = nameColumn . map authorLabel
+
+nameColumn :: [T.Text] -> Int
+nameColumn names = max 6 (min columnCap (maximum (0 : map T.length names)))
+
+nameCell :: Int -> T.Text -> T.Text
+nameCell column name = T.justifyRight column ' ' (clip column name)
 
 columnCap :: Int
 columnCap = 16
@@ -401,7 +409,7 @@ postRows st width column cid bare following i post =
     rows = if null rendered then [Markdown.plainRow ""] else rendered
     height = length rows + length reactionRow + following
     lead j =
-      [ Markdown.Segment (lookAuthorAttr look) (T.justifyRight column ' ' (if j == (0 :: Int) then clip column label else "")) Nothing
+      [ Markdown.Segment (lookAuthorAttr look) (nameCell column (if j == (0 :: Int) then label else "")) Nothing
       , Markdown.Segment (lookRailAttr look) (" " <> railGlyph (lookRail look) height j <> " ") Nothing
       ]
     trailer j row =
