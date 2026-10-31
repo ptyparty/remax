@@ -32,6 +32,7 @@ import Remax.GitHub qualified as GitHub
 import Remax.Hunks qualified as Hunks
 import Remax.Json qualified as Json
 import Remax.Key qualified as Key
+import Remax.LineRange qualified as LineRange
 import Remax.Remote qualified as Remote
 import Remax.RemoteCache qualified as RemoteCache
 import Remax.Store qualified as Store
@@ -58,6 +59,7 @@ data Cmd
   | ShowConversation T.Text
   | Reply T.Text T.Text
   | Comment CommentArgs
+  | Note T.Text T.Text
   | Move T.Text Int
   | Attend
   | Hunks [String]
@@ -120,6 +122,7 @@ main = do
         ShowConversation target -> showConversation target
         Reply target text -> reply target text
         Comment commentArgs -> comment commentArgs
+        Note place text -> openNote place text
         Move target pull -> move target pull
         Attend -> attend
         Hunks rest -> hunks rest
@@ -192,6 +195,11 @@ usage =
   \       remax [-C DIR] show ID        print one conversation whole\n\
   \       remax [-C DIR] reply ID TEXT   answer a conversation; shows in the review\n\
   \                                     session, and never reaches GitHub\n\
+  \       remax [-C DIR] note PATH:LINE[-LINE] TEXT\n\
+  \                                     open a note to the reviewer on changed\n\
+  \                                     lines; it waits for them until they\n\
+  \                                     answer or resolve it, and never\n\
+  \                                     reaches GitHub\n\
   \       remax [-C DIR] comment HUNK TEXT\n\
   \                                     propose a GitHub comment on a hunk; the\n\
   \                                     reviewer takes it with Enter\n\
@@ -262,6 +270,8 @@ parseArgs args0 =
         ("reply" : target : rest)
           | not (null rest) ->
               Right (mDir, Reply (T.pack target) (T.pack (unwords rest)))
+        ("note" : place : rest)
+          | not (null rest) -> Right (mDir, Note (T.pack place) (T.pack (unwords rest)))
         ("comment" : "--revise" : target : rest)
           | not (null rest) ->
               Right (mDir, Comment (Revise (T.pack target) (T.pack (unwords rest))))
@@ -1011,6 +1021,40 @@ move given pull = do
   if WorkStore.Moved `elem` outcomes
     then putStrLn ("draft moved to PR #" ++ show pull)
     else Exit.die "No such draft comment recorded for this repository; only drafts move."
+
+openNote :: T.Text -> T.Text -> IO ()
+openNote place text = do
+  range <- maybe (Exit.die "note wants PATH:LINE or PATH:FIRST-LAST, such as src/Foo.hs:40-52") pure (LineRange.parseLineRange place)
+  path <- maybe (Exit.die "note wants a path before the lines, such as src/Foo.hs:40-52") pure (LineRange.lrPath range)
+  roots <- targetRepos
+  conn <- Store.openStore
+  cfg <- Config.loadConfig
+  let
+    attempt pending =
+      case pending of
+        [] -> Exit.die ("No changed lines at " ++ T.unpack (LineRange.lineRangeText range) ++ " in the view; a note sits on lines remax hunks lists.")
+        (root : rest) -> do
+          mode <- agentMode conn root Map.empty
+          hs <- Hunks.changeSetHunks cfg mode root
+          cached <- RemoteCache.readRemote (T.pack root)
+          noted <- Feedback.noteOnLines conn root (fmap RemoteCache.cachedPull cached) hs path (LineRange.lrLines range) text
+          case noted of
+            Feedback.NoChangedLines -> attempt rest
+            Feedback.Noted cid spanLines -> do
+              let
+                shown = T.unpack (Conv.conversationIdText cid)
+              putStrLn
+                ( "note "
+                    ++ shown
+                    ++ " on "
+                    ++ show (length spanLines)
+                    ++ " changed line(s) of "
+                    ++ T.unpack path
+                    ++ "; remax do :go "
+                    ++ shown
+                    ++ " takes the reviewer there"
+                )
+  attempt roots
 
 -- A comment the agent drafts for the reviewer on a hunk, or new text it
 -- proposes for a conversation; neither reaches GitHub until the

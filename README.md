@@ -734,6 +734,10 @@ your feedback flows back through the store:
    whole conversation** — the thread clears when you mark them
    reviewed, so "read the answer, `X Enter`" is the one-gesture close.
    `Space u` dismisses a conversation without accepting anything.
+   An agent can also open a note of its own with
+   `remax note PATH:FIRST-LAST "text"`, on changed lines of the view you
+   last had open. It draws like a reply, waits for you until you answer
+   or resolve it, and never reaches GitHub.
 4. It fixes the code; the fixed lines automatically come back as pending
    in your session; you accept or push back.
 

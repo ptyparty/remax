@@ -1,6 +1,6 @@
 ---
 name: remax-review
-description: "Act on code-review feedback recorded by remax — read the reviewer's flagged/questioned lines and notes for a repository, fix them (or only answer them in a read-only pull request review), and understand how the review session sees your edits. Use when asked to address review feedback, check for remax flags, or work alongside a human reviewing in remax, or to show the reviewer a hunk, file, line or conversation by moving their remax session there (`remax do :go`) or light up a few lines for them (`remax do :highlight`). Also use whenever the user asks to be shown where some code is: take them there instead of replying with a line number. Takes an argument: no argument answers what is outstanding once and stops; `watch` keeps waiting on the reviewer and reacting until told to stop; `stop` ends a watch."
+description: "Act on code-review feedback recorded by remax — read the reviewer's flagged/questioned lines and notes for a repository, fix them (or only answer them in a read-only pull request review), and understand how the review session sees your edits. Use when asked to address review feedback, check for remax flags, or work alongside a human reviewing in remax, or to show the reviewer a hunk, file, line or conversation by moving their remax session there (`remax do :go`), light up a few lines for them (`remax do :highlight`), or leave them a note on changed lines (`remax note`). Also use whenever the user asks to be shown where some code is: take them there instead of replying with a line number. Takes an argument: no argument answers what is outstanding once and stops; `watch` keeps waiting on the reviewer and reacting until told to stop; `stop` ends a watch."
 ---
 
 # Working with a remax reviewer
@@ -348,6 +348,23 @@ When the answer is "look here", say it with your session pointer as well
 as in the reply: `remax do :go HUNK_ID` or `:go PATH:LINE` puts them on
 the code you mean (see *Pointing the reviewer*).
 
+## Opening a note yourself
+
+```sh
+remax -C /path/to/repo note src/Foo.hs:40-52 "why these lines matter"
+```
+
+`note` starts a local conversation of your own on changed lines of the
+view the session last showed: a heads-up, an explanation the reviewer
+asked for, or something you want them to look at before accepting. Only
+lines `remax hunks` lists can carry one; lines in the range that did not
+change are left out. It draws inline like a reply, waits for the
+reviewer until they answer or resolve it (`list --awaiting reviewer`
+shows it), and never reaches GitHub. The output names the conversation;
+follow it with `remax do :go ID` when you want them there now. Open a
+note when there is something to say about lines nobody asked about; to
+answer a question, reply to it instead.
+
 ## Drafting review comments
 
 ```sh
@@ -580,6 +597,12 @@ the first stop of a tour you just posted, the line your reply to their
 note is about, the hunk your fix landed in. Do not point after every
 edit; they may have follow mode on, and moving them while they read is
 an interruption.
+
+Pick the pointer by how long what you say should last. A highlight is
+gone once they leave the file: use it for "these lines" while you talk
+in the chat. When the explanation belongs with the code and should wait
+for them, open a note (see *Opening a note yourself*) and send them to
+it with `do :go` and the id the note printed.
 
 Run `do` with `-C` on the repository the place is in, even when the
 reviewer is looking at another one. A session opened on a story
