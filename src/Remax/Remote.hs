@@ -2,6 +2,7 @@
 
 module Remax.Remote
   ( Request (..)
+  , Reach (..)
   , Reply (..)
   , Delivery (..)
   , withListener
@@ -14,7 +15,6 @@ import Control.Exception qualified as Exception
 import Control.Monad qualified as Monad
 import Data.ByteString qualified as BS
 import Data.Either qualified as Either
-import Data.List qualified as List
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -31,7 +31,12 @@ import System.Timeout qualified as Timeout
 data Request = Request
   { rqCommand :: T.Text
   , rqRoots :: [FilePath]
+  , rqReach :: Reach
   }
+
+data Reach
+  = OnScreen
+  | AnywhereInStory
 
 data Reply
   = Ran T.Text
@@ -100,16 +105,27 @@ answer conn handle = do
       reply <- handle request
       SocketBS.sendAll conn (TE.encodeUtf8 (encodeReply reply))
 
-send :: Request -> IO Delivery
-send request = do
+send :: T.Text -> [FilePath] -> IO Delivery
+send command roots = do
   dir <- socketDir
   listed <- Exception.try (Directory.listDirectory dir) :: IO (Either Exception.IOException [FilePath])
   let
     sockets = map (dir </>) (filter ((== ".sock") . FilePath.takeExtension) (Either.fromRight [] listed))
-  replies <- mapM (ask request) sockets
-  pure $ case List.find answered (Maybe.catMaybes replies) of
-    Just reply -> Answered reply
-    Nothing -> NobodyOpen
+    request reach = Request {rqCommand = command, rqRoots = roots, rqReach = reach}
+  onScreen <- firstAnswer (request OnScreen) sockets
+  case onScreen of
+    Answered _ -> pure onScreen
+    NobodyOpen -> firstAnswer (request AnywhereInStory) sockets
+
+firstAnswer :: Request -> [FilePath] -> IO Delivery
+firstAnswer request sockets =
+  case sockets of
+    [] -> pure NobodyOpen
+    (path : rest) -> do
+      reply <- ask request path
+      case reply of
+        Just got | answered got -> pure (Answered got)
+        _ -> firstAnswer request rest
 
 answered :: Reply -> Bool
 answered reply =
@@ -125,7 +141,7 @@ ask request path = do
     Right reply -> pure reply
 
 askTimeoutUs :: Int
-askTimeoutUs = 6000000
+askTimeoutUs = 35000000
 
 exchange :: Request -> FilePath -> IO Reply
 exchange request path =
@@ -155,13 +171,25 @@ maxMessage :: Int
 maxMessage = 65536
 
 encodeRequest :: Request -> T.Text
-encodeRequest request = T.unlines (rqCommand request : map T.pack (rqRoots request))
+encodeRequest request =
+  let
+    reach =
+      case rqReach request of
+        OnScreen -> []
+        AnywhereInStory -> [storyMarker]
+  in
+    T.unlines (rqCommand request : reach ++ map T.pack (rqRoots request))
 
 decodeRequest :: BS.ByteString -> Maybe Request
 decodeRequest raw =
   case T.lines (TE.decodeUtf8With TEE.lenientDecode raw) of
-    (command : roots) -> Just Request {rqCommand = command, rqRoots = map T.unpack roots}
+    (command : marker : roots)
+      | marker == storyMarker -> Just Request {rqCommand = command, rqRoots = map T.unpack roots, rqReach = AnywhereInStory}
+    (command : roots) -> Just Request {rqCommand = command, rqRoots = map T.unpack roots, rqReach = OnScreen}
     [] -> Nothing
+
+storyMarker :: T.Text
+storyMarker = "@story"
 
 encodeReply :: Reply -> T.Text
 encodeReply reply =

@@ -497,7 +497,7 @@ targetRepos = do
 runInSession :: T.Text -> IO ()
 runInSession command = do
   roots <- reposInReach
-  delivered <- Remote.send Remote.Request {Remote.rqCommand = command, Remote.rqRoots = roots}
+  delivered <- Remote.send command roots
   case delivered of
     Remote.NobodyOpen -> Exit.die "No remax is open on this checkout here."
     Remote.Answered answer -> do

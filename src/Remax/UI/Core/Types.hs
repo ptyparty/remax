@@ -6,6 +6,7 @@ module Remax.UI.Core.Types
   , FollowMode (..)
   , ClaudeLine (..)
   , AgentPlace (..)
+  , AgentHeld (..)
   , Name (..)
   , REvent (..)
   , Prompt (..)
@@ -156,6 +157,11 @@ data AgentPlace = AgentPlace
   , apCursor :: Maybe (Int, Int)
   }
   deriving (Eq)
+
+data AgentHeld = AgentHeld
+  { ahRoot :: FilePath
+  , ahCommand :: T.Text
+  }
 
 data REvent
   = FileChangedOnDisk FilePath
@@ -599,7 +605,7 @@ data St = St
   , stInbox :: Maybe Inbox
   , stTourOverview :: Maybe TourOverview
   , stFollow :: FollowMode
-  , stAgentHeld :: Maybe T.Text
+  , stAgentHeld :: Maybe AgentHeld
   , stClaudeLine :: Maybe ClaudeLine
   , stPullView :: Maybe PullView -- the pull request's own page, over the body
   , stNow :: Clock.UTCTime -- wall clock, for ages; moved on the attending beat

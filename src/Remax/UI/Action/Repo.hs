@@ -4,6 +4,7 @@
 module Remax.UI.Action.Repo
   ( Arrival (..)
   , arrive
+  , arriveReporting
   , switchRepo
   , rescanRepos
   , describeRepo
@@ -67,15 +68,19 @@ switchRepo :: FilePath -> Brick.EventM Types.Name Types.St ()
 switchRepo target = arrive Arrival {arTarget = target, arMode = Nothing, arThen = pure ()}
 
 arrive :: Arrival -> Brick.EventM Types.Name Types.St ()
-arrive arrival = do
+arrive = arriveReporting (const (pure ()))
+
+arriveReporting :: (T.Text -> Brick.EventM Types.Name Types.St ()) -> Arrival -> Brick.EventM Types.Name Types.St ()
+arriveReporting failed arrival = do
   st <- State.get
   let
     target = arTarget arrival
+    refuse why = Types.setMsg why >> failed why
   if target == Types.stRoot st
-    then Types.setMsg ("already in " <> T.pack (FilePath.takeFileName target))
+    then refuse ("already in " <> T.pack (FilePath.takeFileName target))
     else
       if any ("opening " `T.isPrefixOf`) (Types.stBusy st)
-        then Types.setMsg "still opening the last repository"
+        then refuse "still opening the last repository"
         else do
           let
             remembered = Map.lookup target (Types.stPlaces st)
@@ -109,7 +114,7 @@ arrive arrival = do
               pure (verdicts, threads, own, groups, rebase, branch, headAt, files, tour)
           Jobs.startJob ("opening " <> T.pack (FilePath.takeFileName target)) work $ \outcome ->
             case outcome of
-              Left err -> Jobs.jobFailed "opening" err
+              Left err -> Jobs.jobFailed "opening" err >> failed ("opening " <> T.pack (FilePath.takeFileName target) <> " failed: " <> err)
               Right loaded -> do
                 leaving <- State.get
                 MonadIO.liftIO (Store.finishPass conn (Types.stPassId leaving))
