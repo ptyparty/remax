@@ -20,6 +20,8 @@ module Remax.Feedback
   , replyTo
   , Drafted (..)
   , commentOnHunk
+  , Noted (..)
+  , noteOnLines
   , proposeOn
   , listedJson
   , agentName
@@ -40,6 +42,7 @@ import Remax.Git qualified as Git
 import Remax.Hunks qualified as Hunks
 import Remax.Json qualified as Json
 import Remax.Key qualified as Key
+import Remax.LineRange qualified as LineRange
 import Remax.RemoteCache qualified as RemoteCache
 import Remax.Store qualified as Store
 import Remax.WorkStore qualified as WorkStore
@@ -393,6 +396,29 @@ commentOnHunk conn root pull hunk text = do
         draft = Conv.NewThread lid (Conv.OnLines lineSpan)
       _ <- WorkStore.setProposal conn scope draft agentName (Conv.Markdown text)
       fmap (Drafted lid) (WorkStore.conversationScope conn scope draft)
+
+data Noted = Noted Conv.ConversationId [Conv.SpanLine] | NoChangedLines
+
+noteOnLines :: SQLite.Connection -> FilePath -> Maybe Int -> [Hunks.Hunk] -> T.Text -> LineRange.Lines -> T.Text -> IO Noted
+noteOnLines conn root pull hunks path ls text = do
+  let
+    repo = T.pack root
+    scope = WorkStore.Scope {WorkStore.scopeRepo = repo, WorkStore.scopePull = pull}
+    onHead (number, key, line) =
+      case number of
+        Hunks.OnHead n
+          | LineRange.linesContain ls n -> Just (Conv.SpanLine (Store.LineKey key) n line)
+        _ -> Nothing
+    headLines h = Maybe.mapMaybe onHead (List.zip3 (Hunks.hunkNumbers h) (Hunks.hunkKeys h) (Hunks.hunkLines h))
+    found = List.sortOn Conv.slLineNo (concatMap headLines (filter ((== path) . T.pack . Hunks.hunkFile) hunks))
+  case NEL.nonEmpty found of
+    Nothing -> pure NoChangedLines
+    Just spanLines -> do
+      lid <- WorkStore.newLocalId repo (map Conv.slKey found)
+      let
+        lineSpan = Conv.LineSpan {Conv.spanPath = path, Conv.spanSide = Conv.HeadSide, Conv.spanLines = spanLines, Conv.spanAt = Nothing}
+      _ <- WorkStore.addAside conn scope (Conv.OnLinesOnly lid lineSpan Store.Reviewed) (Conv.Agent agentName) (Conv.Markdown text)
+      pure (Noted (Conv.NoteConversation lid) found)
 
 -- | The agent's proposed text on a conversation; the next replaces it.
 proposeOn :: SQLite.Connection -> FilePath -> T.Text -> T.Text -> IO Reply

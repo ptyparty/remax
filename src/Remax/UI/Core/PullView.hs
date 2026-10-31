@@ -348,12 +348,18 @@ threadRows st width conv =
       then foldedLine : foldedStrip ++ [blank]
       else header : rangeLines ++ logRows ++ [blank]
 
+noteDirection :: Conv.Conversation -> T.Text
+noteDirection conv =
+  case fmap Conv.postAuthor (Maybe.listToMaybe (Conv.convPosts conv)) of
+    Just (Conv.Agent _) -> "note from the agent"
+    _ -> "note to the agent"
+
 conversationRows :: Types.St -> Int -> Conv.Conversation -> [Row]
 conversationRows st width conv =
   let
     cid = Conv.convId conv
     (lead, state) = case Conv.convVenue conv of
-      Conv.LocalOnly _ -> (" \9550 ", "note to the agent")
+      Conv.LocalOnly _ -> (" \9550 ", noteDirection conv)
       _ -> (" \8618 ", Threads.threadState st conv)
     header = Row Branch [Markdown.Segment Attrs.hintAttr lead Nothing, Markdown.Segment Attrs.trayFileAttr (placeOf st conv) Nothing, Markdown.Segment Attrs.hintAttr (" \183 " <> state) Nothing] Nothing Nothing
     logRows = map (\tl -> Row Rail (Markdown.Segment Attrs.msgAttr "  " Nothing : Threads.tlSegs tl) (fmap (Types.PostStop cid) (Threads.tlPost tl)) Nothing) (threadLog st width conv)
