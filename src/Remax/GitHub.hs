@@ -41,6 +41,7 @@ module Remax.GitHub
   , keepPushedHead
   , setThreadResolution
   , CommentKind (..)
+  , ReactionSubject (..)
   , addReaction
   , removeReaction
   , editComment
@@ -257,19 +258,28 @@ commentPath repo kind cid =
   in
     "repos/" <> repo <> middle <> T.pack (show (Store.commentIdToInt64 cid))
 
-addReaction :: FilePath -> T.Text -> CommentKind -> Store.CommentId -> Conv.Reaction -> IO (Either GhFailure ())
-addReaction root repo kind cid reaction =
+data ReactionSubject = CommentReactions CommentKind Store.CommentId | PullReactions Int
+  deriving (Eq, Show)
+
+reactionsPath :: T.Text -> ReactionSubject -> T.Text
+reactionsPath repo subject =
+  case subject of
+    CommentReactions kind cid -> commentPath repo kind cid <> "/reactions"
+    PullReactions n -> "repos/" <> repo <> "/issues/" <> T.pack (show n) <> "/reactions"
+
+addReaction :: FilePath -> T.Text -> ReactionSubject -> Conv.Reaction -> IO (Either GhFailure ())
+addReaction root repo subject reaction =
   fmap
     (fmap (const ()))
-    (runGh root ["api", "-X", "POST", commentPath repo kind cid <> "/reactions", "-f", "content=" <> Conv.reactionText reaction, "--jq", ".id"])
+    (runGh root ["api", "-X", "POST", reactionsPath repo subject, "-f", "content=" <> Conv.reactionText reaction, "--jq", ".id"])
 
 {- | Taking a reaction back means finding the one you left: the list
 names each reaction's author.
 -}
-removeReaction :: FilePath -> T.Text -> CommentKind -> Store.CommentId -> Conv.Login -> Conv.Reaction -> IO (Either GhFailure ())
-removeReaction root repo kind cid (Conv.Login viewer) reaction = do
+removeReaction :: FilePath -> T.Text -> ReactionSubject -> Conv.Login -> Conv.Reaction -> IO (Either GhFailure ())
+removeReaction root repo subject (Conv.Login viewer) reaction = do
   let
-    path = commentPath repo kind cid <> "/reactions"
+    path = reactionsPath repo subject
     jq = ".[] | select(.user.login == \"" <> viewer <> "\" and .content == \"" <> Conv.reactionText reaction <> "\") | .id"
   found <- runGh root ["api", path <> "?per_page=100", "--jq", jq]
   case fmap (Maybe.listToMaybe . T.lines . T.strip) found of

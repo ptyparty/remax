@@ -30,6 +30,6 @@ reactionLayer picker =
     preview = Brick.withAttr Attrs.hintAttr (Brick.txt (Widgets.clipT 70 (Types.rkPreview picker)))
   in
     Widgets.floatFrame
-      ("react \183 " <> Types.rkOwner picker <> " comment")
+      ("react \183 " <> Types.rkOwner picker)
       "1-8 posts at once \183 one of yours again removes it \183 Esc closes"
       (Brick.vBox (preview : Brick.txt " " : map Brick.hBox rows))

@@ -130,6 +130,7 @@ stopConv stop =
   case stop of
     Types.PostStop cid _ -> Just cid
     Types.CommitStop _ -> Nothing
+    Types.DescriptionStop -> Nothing
 
 {- | Moves to the newest post of the next thread awaiting your answer,
 wrapping around the timeline.
