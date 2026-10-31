@@ -129,6 +129,7 @@ executable remax
       Remax.Hunks
       Remax.Json
       Remax.Key
+      Remax.LineRange
       Remax.Modal
       Remax.PullPoll
       Remax.Remote

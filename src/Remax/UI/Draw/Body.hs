@@ -16,6 +16,7 @@ import Graphics.Vty qualified as V
 import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
 import Remax.DiffModel qualified as DiffModel
+import Remax.LineRange qualified as LineRange
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
 import Remax.UI.Core.Anchor qualified as Anchor
@@ -195,6 +196,7 @@ rowImages paneWidth st fv pens numW hOff item =
     inSel = rowSelected (Modal.selectionRows ed) r (riPoint item)
     verdict = Maybe.listToMaybe (Maybe.mapMaybe (`Map.lookup` Types.stVerdicts st) (Verdict.rowFeedbackKeys r))
     settling = Maybe.listToMaybe (Maybe.mapMaybe (`Map.lookup` Types.stSettling st) (Verdict.rowFeedbackKeys r))
+    wash = rowWash st fv r verdict settling
     paint =
       RowPaint
         { rpPens = pens
@@ -204,7 +206,7 @@ rowImages paneWidth st fv pens numW hOff item =
           rpRowPens =
             if inSel
               then Ink.penUnder Attrs.selAttr pens
-              else maybe pens (`Ink.penUnder` pens) (verdictWash r verdict settling)
+              else maybe pens (`Ink.penUnder` pens) wash
         , -- the first gutter column doubles as the border between tray
           -- and body: drawn on every row, in the highlight color across
           -- the current hunk's rows; the second column carries the
@@ -233,7 +235,7 @@ rowImages paneWidth st fv pens numW hOff item =
         , contentInk paint (Modal.charSelection ed) (riEmph item) r
         ]
     lineImg =
-      if inSel || Maybe.isJust (verdictWash r verdict settling)
+      if inSel || Maybe.isJust wash
         then Ink.fitRow (Ink.penPlain (rpRowPens paint)) paneWidth drawn
         else drawn
   in
@@ -241,6 +243,18 @@ rowImages paneWidth st fv pens numW hOff item =
     , lineImg : map (threadInk paneWidth paint selectedPost) (riThreads item)
     , isCursor
     )
+
+rowWash :: Types.St -> Types.FileView -> DiffModel.RowR -> Maybe Store.Verdict -> Maybe Int -> Maybe Brick.AttrName
+rowWash st fv r verdict settling =
+  let
+    lit sp line =
+      Types.spRoot sp == Types.stRoot st
+        && Types.spPath sp == Types.fvPath fv
+        && LineRange.linesContain (Types.spLines sp) line
+  in
+    case (Types.stSpotlight st, DiffModel.rNewRow r) of
+      (Just sp, Just row) | lit sp (row + 1) -> Just Attrs.spotlightWashAttr
+      _ -> verdictWash r verdict settling
 
 verdictWash :: DiffModel.RowR -> Maybe Store.Verdict -> Maybe Int -> Maybe Brick.AttrName
 verdictWash r verdict settling =

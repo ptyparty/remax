@@ -16,6 +16,7 @@ module Remax.UI.Core.Attrs
   , pendingWashAttr
   , flaggedWashAttr
   , questionedWashAttr
+  , spotlightWashAttr
   , settleAttr
   , settleInkAttr
   , settleFrames
@@ -84,6 +85,7 @@ headerAttr
   , pendingWashAttr
   , flaggedWashAttr
   , questionedWashAttr
+  , spotlightWashAttr
   , dimAttr
   , curRunAttr
   , norAttr
@@ -165,6 +167,7 @@ wordChangeAttr = Brick.attrName "wordChange"
 pendingWashAttr = Brick.attrName "pendingWash"
 flaggedWashAttr = Brick.attrName "flaggedWash"
 questionedWashAttr = Brick.attrName "questionedWash"
+spotlightWashAttr = Brick.attrName "spotlightWash"
 
 settleFrames :: Int
 settleFrames = 6
@@ -339,6 +342,7 @@ mkAttrMap mth =
       , (pendingWashAttr, V.defAttr `V.withBackColor` pendingWash)
       , (flaggedWashAttr, V.defAttr `V.withBackColor` flaggedWash)
       , (questionedWashAttr, V.defAttr `V.withBackColor` questionedWash)
+      , (spotlightWashAttr, V.defAttr `V.withBackColor` spotlightWash)
       , (dimAttr, BrickUtil.fg inkDim)
       , (curRunAttr, BrickUtil.fg inkMidBlue)
       , (norAttr, BrickUtil.fg inkText)
@@ -404,7 +408,7 @@ inkText = V.linearColor (0xb4 :: Int) 0xb4 0xaa
 inkFlag = V.linearColor (0xcf :: Int) 0x8a 0x6a
 trayFileInk = V.linearColor (0xd8 :: Int) 0xd3 0xc0
 
-surfFloat, surfSel, surfGuide, inkTeal, cursorWash, wordWash, pendingWash, flaggedWash, questionedWash, hairInk, meterRail, matchGold :: V.Color
+surfFloat, surfSel, surfGuide, inkTeal, cursorWash, wordWash, pendingWash, flaggedWash, questionedWash, spotlightWash, hairInk, meterRail, matchGold :: V.Color
 -- Only used when the theme names no background at all, so there is
 -- nothing to measure a lift from.
 surfFloat = V.linearColor (0x15 :: Int) 0x15 0x15
@@ -416,6 +420,7 @@ wordWash = V.linearColor (0x1e :: Int) 0x2c 0x3e
 pendingWash = V.linearColor (0x0e :: Int) 0x10 0x15
 flaggedWash = V.linearColor (0x24 :: Int) 0x17 0x1b
 questionedWash = V.linearColor (0x22 :: Int) 0x1f 0x14
+spotlightWash = V.linearColor (0x13 :: Int) 0x2a 0x2e
 hairInk = V.linearColor (0x2c :: Int) 0x2c 0x2c
 codeWash :: V.Color
 codeWash = V.linearColor (0x1e :: Int) 0x1e 0x24

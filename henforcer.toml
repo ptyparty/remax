@@ -427,6 +427,12 @@ qualified = { qualifiedPost = true }
 alias = "Hunks"
 
 [[forAnyModule.allowedQualifications]]
+module = "Remax.LineRange"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "LineRange"
+
+[[forAnyModule.allowedQualifications]]
 module = "Remax.UI.Core.Tour"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }

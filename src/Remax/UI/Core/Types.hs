@@ -7,6 +7,7 @@ module Remax.UI.Core.Types
   , ClaudeLine (..)
   , AgentPlace (..)
   , AgentHeld (..)
+  , Spotlight (..)
   , Name (..)
   , REvent (..)
   , Prompt (..)
@@ -124,6 +125,7 @@ import Remax.DiffModel qualified as DiffModel
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.Highlight qualified as Highlight
+import Remax.LineRange qualified as LineRange
 import Remax.Modal qualified as Modal
 import Remax.PullPoll qualified as PullPoll
 import Remax.Remote qualified as Remote
@@ -161,6 +163,13 @@ data AgentPlace = AgentPlace
 data AgentHeld = AgentHeld
   { ahRoot :: FilePath
   , ahCommand :: T.Text
+  }
+
+data Spotlight = Spotlight
+  { spRoot :: FilePath
+  , spPath :: FilePath
+  , spLines :: LineRange.Lines
+  , spText :: [T.Text]
   }
 
 data REvent
@@ -607,6 +616,7 @@ data St = St
   , stFollow :: FollowMode
   , stAgentHeld :: Maybe AgentHeld
   , stClaudeLine :: Maybe ClaudeLine
+  , stSpotlight :: Maybe Spotlight
   , stPullView :: Maybe PullView -- the pull request's own page, over the body
   , stNow :: Clock.UTCTime -- wall clock, for ages; moved on the attending beat
   , stTour :: [Store.TourStep]

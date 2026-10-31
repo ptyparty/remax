@@ -60,6 +60,7 @@ data ArgKind
 commandTable :: [(T.Text, ArgKind, T.Text)]
 commandTable =
   [ ("go", ArgText, "go to a hunk id, a conversation id, PATH[:LINE], tour [N], pr or feedback")
+  , ("highlight", ArgText, "light up [PATH:]LINE[-LINE] until you leave the file or press Esc; bare :highlight clears")
   , ("base", ArgRef, "diff against REF; bare :base picks from history")
   , ("branch", NoArg, "whole-branch view (merge-base base)")
   , ("mode", ArgMode, modeChoices)
@@ -211,6 +212,7 @@ runCommand input =
     [] -> pure ()
     ["q"] -> Brick.halt
     ("go" : rest) -> GoAction.goTo rest
+    ("highlight" : rest) -> GoAction.highlight rest
     ["base"] -> PickerAction.openBasePicker
     ["checkout"] -> PickerAction.openBranchPicker
     ["checkout", branch] -> PickerAction.applyCheckout branch
@@ -284,6 +286,7 @@ agentRule input =
 agentCommands :: [T.Text]
 agentCommands =
   [ "go"
+  , "highlight"
   , "open"
   , "close"
   , "files"
