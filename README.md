@@ -1,4 +1,6 @@
-# remax
+<p align="center"><img src="docs/remax.svg" alt="A glowing eye in a steel ring, its iris half green and half copper like the two sides of a diff" width="160"></p>
+
+<h1 align="center">remax</h1>
 
 > [!WARNING]
 > The current state of this repository is AI-generated and has not yet
