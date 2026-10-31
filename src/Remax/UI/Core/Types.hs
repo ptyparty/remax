@@ -479,13 +479,13 @@ emptyPullView = PullView {pvStop = Nothing, pvDeleting = False}
 data Stop
   = PostStop Conv.ConversationId Int
   | CommitStop T.Text
+  | DescriptionStop
   deriving (Eq)
 
--- | The eight reactions offered on one posted comment.
+-- | The eight reactions offered on one posted comment or the description.
 data ReactionPicker = ReactionPicker
-  { rkKind :: GitHub.CommentKind
-  , rkComment :: Store.CommentId
-  , rkOwner :: T.Text -- "your" or "<login>'s"
+  { rkSubject :: GitHub.ReactionSubject
+  , rkOwner :: T.Text -- "your comment" or "<login>'s description"
   , rkReactions :: Conv.Reactions
   , rkPreview :: T.Text
   }

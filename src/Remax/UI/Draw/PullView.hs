@@ -34,8 +34,9 @@ pullViewBody st =
               (before, rest) = splitAt lead drawn
               (leadIn, fromBand) = splitAt (first - lead) rest
               (focus, after) = splitAt (foldr max first more - first + 1 + rowsBelowSelection) fromBand
+              shownBand = if lead == 0 then focus else [Brick.visible (Brick.vBox focus)]
             in
-              before ++ [Brick.visible (Brick.vBox (leadIn ++ [Brick.visible (Brick.vBox focus)]))] ++ after
+              before ++ [Brick.visible (Brick.vBox (leadIn ++ shownBand))] ++ after
           [] -> drawn
       BrickTypes.render (Brick.vBox shown)
 

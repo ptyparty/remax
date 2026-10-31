@@ -110,6 +110,7 @@ data Snapshot = Snapshot
   , snapshotCommits :: [PullCommit]
   , snapshotForcePushes :: [ForcePush]
   , snapshotRemote :: Conv.Remote
+  , snapshotReactions :: Conv.Reactions
   }
   deriving (Eq, Show)
 
@@ -165,6 +166,7 @@ data GraphAnswer = GraphAnswer
   , graphMergeable :: T.Text
   , graphLabels :: [T.Text]
   , graphReactions :: Map.Map Store.CommentId Conv.Reactions
+  , graphPullReactions :: Conv.Reactions
   }
 
 data Cached a = Cached
@@ -251,6 +253,7 @@ freshSnapshot pr cache = do
       , snapshotCommits = pagedRows (cacheCommits cache)
       , snapshotForcePushes = graphForcePushes graph
       , snapshotRemote = freshRemote cache
+      , snapshotReactions = graphPullReactions graph
       }
 
 freshRemote :: PollCache -> Conv.Remote
@@ -619,11 +622,18 @@ reactionsJq comments =
        \ | select(.reactors.totalCount > 0 or .viewerHasReacted)\
        \ | [\"R\", $d, .content, (.viewerHasReacted | tostring), (.reactors.totalCount | tostring)]]"
 
+pullReactionsJq :: T.Text
+pullReactionsJq =
+  "[$p.reactionGroups[] | select(.reactors.totalCount > 0 or .viewerHasReacted)\
+  \ | [\"D\", .content, (.viewerHasReacted | tostring), (.reactors.totalCount | tostring)]]"
+
 graphQuery :: T.Text
 graphQuery =
   "query($owner: String!, $name: String!, $number: Int!) {\
   \ repository(owner: $owner, name: $name) { pullRequest(number: $number) { "
     <> threadsSelection ""
+    <> " "
+    <> reactionsSelection
     <> " comments(last: 100) { nodes { databaseId "
     <> reactionsSelection
     <> " } }\
@@ -659,6 +669,8 @@ graphJq =
     <> threadsJq "$p.reviewThreads"
     <> " + "
     <> reactionsJq "$p.comments"
+    <> " + "
+    <> pullReactionsJq
     <> " + [$p.timelineItems.nodes[] | [\"F\", (.actor.login // \"\"), (.createdAt // \"\"), (.beforeCommit.oid // \"\"), (.afterCommit.oid // \"\")]]\
        \ + [$p.commits.nodes[] | [\"C\", .commit.oid, (.commit.statusCheckRollup.state // \"\")]]\
        \ + [[\"M\", ($p.mergeable // \"\")]]\
@@ -723,12 +735,18 @@ graphAnswer raw =
     checks cells = case cells of
       ["C", _, state] -> Just (GitHub.checksFromRollup state)
       _ -> Nothing
+    reactionCount content mine count = do
+      r <- graphReaction content
+      n <- Git.readCount count
+      Just Conv.ReactionCount {Conv.rcReaction = r, Conv.rcCount = n, Conv.rcMine = mine == "true"}
     reaction cells = case cells of
       ["R", cid, content, mine, count] -> do
         i <- readId cid
-        r <- graphReaction content
-        n <- Git.readCount count
-        Just (Store.CommentId i, [Conv.ReactionCount {Conv.rcReaction = r, Conv.rcCount = n, Conv.rcMine = mine == "true"}])
+        c <- reactionCount content mine count
+        Just (Store.CommentId i, [c])
+      _ -> Nothing
+    pullReaction cells = case cells of
+      ["D", content, mine, count] -> reactionCount content mine count
       _ -> Nothing
     reacted = Map.fromListWith (flip (++)) (Maybe.mapMaybe reaction rows)
     checkRow cells = case cells of
@@ -750,6 +768,7 @@ graphAnswer raw =
       , graphMergeable = Maybe.fromMaybe "" (Maybe.listToMaybe (Maybe.mapMaybe mergeable rows))
       , graphLabels = Maybe.mapMaybe label rows
       , graphReactions = reacted
+      , graphPullReactions = Maybe.mapMaybe pullReaction rows
       }
 
 checkResultOf :: T.Text -> CheckResult

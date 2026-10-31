@@ -11,6 +11,7 @@ module Remax.UI.Core.PullView
   , hunkBody
   , conversationRows
   , placeOf
+  , gitHubAuthor
   ) where
 
 import Brick qualified as Brick
@@ -161,7 +162,6 @@ headerRows st width =
             ++ (if null reviewers then [] else [T.intercalate ", " reviewers])
             ++ (if null (PullPoll.snapshotLabels snap) then [] else [T.intercalate ", " (PullPoll.snapshotLabels snap)])
             ++ (if PullPoll.pullHeadDraft h == PullPoll.Draft then ["draft"] else [])
-        description = map (\r -> Row Blank (Markdown.rowSegments r) Nothing (Just r)) (Markdown.render Markdown.Folded (width - 4) (Conv.Markdown (PullPoll.pullHeadBody h)))
         emacs = Config.cfgKeys (Types.stConfig st) == Config.KeysEmacs
         checksKey = if emacs then "    C-c k lists them" else "    c lists them"
         conversationKeys = if emacs then "conversation \183 C-n C-p move \183 C-c [ ] threads awaiting you \183 C-c g comment on the PR" else "conversation \183 j/k move \183 [ ] threads awaiting you \183 @ comment on the PR"
@@ -170,12 +170,28 @@ headerRows st width =
         , hint Blank (T.intercalate " \183 " parts)
         , blank {rowGutter = Blank}
         ]
-          ++ description
+          ++ descriptionRows st width snap
           ++ [ blank {rowGutter = Blank}
              , Row Blank [Markdown.Segment Attrs.hintAttr "checks  " Nothing, Markdown.Segment Attrs.msgAttr (checksSummary snap) Nothing, Markdown.Segment Attrs.hintAttr checksKey Nothing] Nothing Nothing
              , blank {rowGutter = Blank}
              , hint Blank conversationKeys
              ]
+
+descriptionRows :: Types.St -> Int -> PullPoll.Snapshot -> [Row]
+descriptionRows st width snap =
+  let
+    body = PullPoll.pullHeadBody (PullPoll.snapshotHead snap)
+    at = Just Types.DescriptionStop
+    rendered
+      | T.null (T.strip body) = [Row Blank [Markdown.Segment Attrs.hintAttr "no description provided" Nothing] at Nothing]
+      | otherwise = map (\r -> Row Blank (Markdown.rowSegments r) at (Just r)) (Markdown.render Markdown.Folded (width - 4) (Conv.Markdown body))
+    reactions = case PullPoll.snapshotReactions snap of
+      [] -> []
+      counts -> [Row Blank (Threads.reactionSegs counts) at Nothing]
+    react = if Config.cfgKeys (Types.stConfig st) == Config.KeysEmacs then "C-c + react" else "+ react"
+    strip = if selectedStop st == at then [(keyStrip Types.DescriptionStop react) {rowGutter = Blank}] else []
+  in
+    rendered ++ reactions ++ strip
 
 checksSummary :: PullPoll.Snapshot -> T.Text
 checksSummary snap =

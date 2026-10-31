@@ -61,6 +61,7 @@ import Remax.Store qualified as Store
 import Remax.UI.Core.Anchor qualified as Anchor
 import Remax.UI.Core.Jobs qualified as Jobs
 import Remax.UI.Core.Markdown qualified as Markdown
+import Remax.UI.Core.PullView qualified as PullView
 import Remax.UI.Core.Threads qualified as Threads
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.View qualified as View
@@ -572,6 +573,12 @@ commentKindOf venue =
 reactKey :: Brick.EventM Types.Name Types.St Handled
 reactKey = do
   st <- State.get
+  case Types.stPullView st >>= Types.pvStop of
+    Just Types.DescriptionStop -> reactToDescription st
+    _ -> reactToPost st
+
+reactToPost :: Types.St -> Brick.EventM Types.Name Types.St Handled
+reactToPost st =
   case bandPost st of
     Just (conv, _, _)
       | Conv.ReviewSummary {} <- Conv.convVenue conv -> do
@@ -584,15 +591,35 @@ reactKey = do
               { Types.stReacting =
                   Just
                     Types.ReactionPicker
-                      { Types.rkKind = commentKindOf (Conv.convVenue conv)
-                      , Types.rkComment = cid
-                      , Types.rkOwner = Threads.possessive (Conv.postAuthor post)
+                      { Types.rkSubject = GitHub.CommentReactions (commentKindOf (Conv.convVenue conv)) cid
+                      , Types.rkOwner = Threads.possessive (Conv.postAuthor post) <> " comment"
                       , Types.rkReactions = Conv.postReactions post
                       , Types.rkPreview = Markdown.firstLine (Conv.postBody post)
                       }
               }
           pure Handled
     _ -> pure Unhandled
+
+reactToDescription :: Types.St -> Brick.EventM Types.Name Types.St Handled
+reactToDescription st =
+  case Types.ppSnapshot (Types.stPullPoll st) of
+    Nothing -> pure Unhandled
+    Just snap -> do
+      let
+        h = PullPoll.snapshotHead snap
+        author = PullView.gitHubAuthor snap (PullPoll.pullHeadAuthor h)
+      State.modify $ \s ->
+        s
+          { Types.stReacting =
+              Just
+                Types.ReactionPicker
+                  { Types.rkSubject = GitHub.PullReactions (PullPoll.snapshotPull snap)
+                  , Types.rkOwner = Threads.possessive author <> " description"
+                  , Types.rkReactions = PullPoll.snapshotReactions snap
+                  , Types.rkPreview = PullPoll.pullHeadTitle h
+                  }
+          }
+      pure Handled
 
 handleReactionKey :: V.Event -> Types.ReactionPicker -> Brick.EventM Types.Name Types.St ()
 handleReactionKey ev picker = do
@@ -606,16 +633,15 @@ handleReactionKey ev picker = do
     (Just reaction, Just pr) -> do
       let
         repo = Git.prRepo pr
-        kind = Types.rkKind picker
-        cid = Types.rkComment picker
+        subject = Types.rkSubject picker
         mine = any (\c -> Conv.rcReaction c == reaction && Conv.rcMine c) (Types.rkReactions picker)
         viewer = Types.ppSnapshot (Types.stPullPoll st) >>= Conv.remoteViewer . PullPoll.snapshotRemote
       case (mine, viewer) of
         (True, Just login) ->
-          githubJob "removing the reaction" (GitHub.removeReaction (Types.stRoot st) repo kind cid login reaction) "reaction removed"
+          githubJob "removing the reaction" (GitHub.removeReaction (Types.stRoot st) repo subject login reaction) "reaction removed"
         (True, Nothing) -> Types.setMsg "who you are on GitHub is still loading"
         (False, _) ->
-          githubJob "reacting" (GitHub.addReaction (Types.stRoot st) repo kind cid reaction) ("reacted " <> Conv.reactionGlyph reaction)
+          githubJob "reacting" (GitHub.addReaction (Types.stRoot st) repo subject reaction) ("reacted " <> Conv.reactionGlyph reaction)
     (Just _, Nothing) -> Types.setMsg "no pull request open"
     (Nothing, _) -> pure ()
 

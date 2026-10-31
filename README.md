@@ -611,7 +611,7 @@ are gone they do not draw.
 
 Opening a pull request lands on its own page, in place of the body. `Esc` and `Space o` (`C-c o` in emacs) go to the diff, and `Space o` returns. A change of review mode or base also goes to the diff, and so does every move to a place in it: a file or hunk picked in the file finder (`Ctrl-p`, `Space f`), the project tree or the open files, a project search hit, a hunk from `Space m`, `'`, `)` and `(`, `/` with `n` and `N`, `ga` and the other `g` moves, `:open`, `:N`, `:tour N` and `Space e` all land there as they do from the body. It opens with the title, a line of facts (author, commits,
 force-pushes, reviewers, labels, `draft`), the description rendered as
-Markdown, `checks  ✓ N passed · mergeable` (`c`, or `C-c k`, lists the
+Markdown with its reactions, `checks  ✓ N passed · mergeable` (`c`, or `C-c k`, lists the
 checks), then the conversation on one gutter: each PR-level comment and
 review as a `●` entry with its author, age and event, each review
 thread nested under the review that started it with `path:range ·
@@ -626,8 +626,8 @@ and the agent's proposed ones as threads, like a posted review. Pending
 replies sit inside their threads, and the last line
 counts `drafts · N to send · :submit sends`.
 
-`j`/`k` move by post and commit, including posts inside threads, and the selected
-post wears its key strip: `r` replies (on a PR-level comment or a
+`j`/`k` move by the description, post and commit, including posts inside threads, and the selected
+post wears its key strip. On the description, `+` reacts and the title stays on screen. On a post, `r` replies (on a PR-level comment or a
 review summary, a quote-reply as a new PR-level comment), `?` asks, `+`
 reacts (not on a review summary, which GitHub gives no reactions), `y`
 copies the link, `Space u` resolves or unresolves a thread, `e` and `dd` act on your pending text, and
