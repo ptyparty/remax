@@ -346,6 +346,7 @@ stays a prefix there too.
 | `:message` | the full message of the commit under review, as `Space c` shows it |
 | `:walk tour` | follow the tour an agent posted for this view (see *A guided tour*); `]`/`[` step through it and the header counts the steps |
 | `:go TARGET` | go to a hunk (by the id `remax hunks` prints, or a prefix of it), a conversation (by id or prefix), `PATH[:LINE]`, `tour N`, or a surface: `tour` (the stop list), `pr` or `feedback`. A word that names more than one thing says so instead of guessing; `'` comes back |
+| `:highlight [PATH:]LINE[-LINE]` | go to those lines and light them up, over any verdict wash, until you leave the file, press Esc in normal mode or something else is highlighted; a bare `:highlight` clears it |
 | `:tour` / `:tour N` | get back on the tour: `:tour` returns to the stop you last visited (or the one under the cursor, or the first), `:tour N` jumps to stop N. Either way the walk follows the tour again |
 | `:tour list` | the tour's stops in a popup, as `Space T` (`C-c T` in emacs) opens it: each stop's title, its note and the files it covers; `⏎` goes to the stop |
 | `:tour ask [TEXT]` | ask the agent watching this review for a tour of the view you have open, with TEXT as the brief ("schema changes first"). The request shows up in the agent's `remax list`, wakes a `list --wait`, and carries the exact ref flags for the view, so the tour lands where you are looking |
@@ -796,6 +797,7 @@ in the remax open on the same checkout, in the same qmux tab:
 ```sh
 remax -C /path/to/repo do :go 3915dc41      # this hunk
 remax -C /path/to/repo do :go src/Git.hs:40 # this line
+remax -C /path/to/repo do :highlight src/Git.hs:40-52 # these lines, lit up
 remax -C /path/to/repo do :tour 3           # this stop of the tour
 ```
 
@@ -805,8 +807,8 @@ way: `:go`, a line number, `:open`, `:grep`, `:tour N`, `:base`, `:pr N`,
 everything else that changes something are yours alone, and `remax do`
 says so. Whatever the agent ran shows on a line under the header,
 `↪ Claude ran :go 3915dc41`, until you move away from where it left you.
-A `:go` from an agent also turns `:follow` off, so the next edit does not
-take you somewhere else.
+A `:go` or `:highlight` from an agent also turns `:follow` off, so the
+next edit does not take you somewhere else.
 
 A command that arrives while you are typing, or have a popup open, waits.
 When you are free remax asks `Claude asks to run :go 3915dc41 · y runs ·

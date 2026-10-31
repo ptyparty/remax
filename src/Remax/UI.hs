@@ -38,6 +38,7 @@ import Remax.Store qualified as Store
 import Remax.Theme qualified as Theme
 import Remax.TreeSitter qualified as TS
 import Remax.UI.Action.Agent qualified as AgentAction
+import Remax.UI.Action.Go qualified as GoAction
 import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Tour qualified as Tour
@@ -225,6 +226,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stFollow = Types.FollowEdits
     , Types.stAgentHeld = Nothing
     , Types.stClaudeLine = Nothing
+    , Types.stSpotlight = Nothing
     , Types.stPullView = fmap (const Types.emptyPullView) pullMeta
     , Types.stNow = suNow startup
     , Types.stConversations = Conv.conversations Conv.emptyRemote (suWork startup)
@@ -391,7 +393,8 @@ app theme =
     , Brick.appChooseCursor = Brick.showFirstCursor
     , Brick.appHandleEvent =
         \ev ->
-          Events.handleEvent ev
+          GoAction.dropSpotlightOnEsc ev
+            >> Events.handleEvent ev
             >> Verdict.recountIfChanged
             >> Load.ensureCurrentHighlighted
             >> Events.reanchorBody
@@ -399,6 +402,7 @@ app theme =
             >> Events.rememberSelector
             >> Events.noteTrayView
             >> AgentAction.afterEvent ev
+            >> GoAction.dropStaleSpotlight
     , Brick.appStartEvent = do
         vty <- Brick.getVtyHandle
         let

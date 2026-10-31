@@ -1,6 +1,6 @@
 ---
 name: remax-review
-description: "Act on code-review feedback recorded by remax — read the reviewer's flagged/questioned lines and notes for a repository, fix them (or only answer them in a read-only pull request review), and understand how the review session sees your edits. Use when asked to address review feedback, check for remax flags, or work alongside a human reviewing in remax, or to show the reviewer a hunk, file, line or conversation by moving their remax session there (`remax do :go`). Also use whenever the user asks to be shown where some code is: take them there instead of replying with a line number. Takes an argument: no argument answers what is outstanding once and stops; `watch` keeps waiting on the reviewer and reacting until told to stop; `stop` ends a watch."
+description: "Act on code-review feedback recorded by remax — read the reviewer's flagged/questioned lines and notes for a repository, fix them (or only answer them in a read-only pull request review), and understand how the review session sees your edits. Use when asked to address review feedback, check for remax flags, or work alongside a human reviewing in remax, or to show the reviewer a hunk, file, line or conversation by moving their remax session there (`remax do :go`) or light up a few lines for them (`remax do :highlight`). Also use whenever the user asks to be shown where some code is: take them there instead of replying with a line number. Takes an argument: no argument answers what is outstanding once and stops; `watch` keeps waiting on the reviewer and reacting until told to stop; `stop` ends a watch."
 ---
 
 # Working with a remax reviewer
@@ -562,19 +562,24 @@ session there instead of describing where it is:
 ```sh
 remax -C "$REPO" do :go HUNK_ID        # an id from remax hunks, or a prefix
 remax -C "$REPO" do :go src/Foo.hs:40  # a line
+remax -C "$REPO" do :highlight src/Foo.hs:40-52  # these lines, lit up
 remax -C "$REPO" do :go CONV_ID        # a conversation from remax list
 remax -C "$REPO" do :tour 2            # a stop of the tour you posted
 ```
 
 When the human asks to be shown where some code is ("show me where…",
 "where does…", "take me to…"), find it and run `do :go PATH:LINE` rather
-than answering with a line number. Say in a sentence what they are
-looking at; a reference in the chat is the fallback when `do` fails.
+than answering with a line number. When what you mean is a few lines
+rather than a place, run `do :highlight PATH:FIRST-LAST` instead: it
+moves them there and lights those lines up until they leave the file.
+Say in a sentence what they are looking at; a reference in the chat is
+the fallback when `do` fails.
 
 Point once you have something for them: the code they asked to see,
-the first stop of a tour you just posted, the line your reply to their note is about, the hunk your
-fix landed in. Do not point after every edit; they may have follow mode
-on, and moving them while they read is an interruption.
+the first stop of a tour you just posted, the line your reply to their
+note is about, the hunk your fix landed in. Do not point after every
+edit; they may have follow mode on, and moving them while they read is
+an interruption.
 
 Run `do` with `-C` on the repository the place is in, even when the
 reviewer is looking at another one. A session opened on a story

@@ -76,13 +76,21 @@ runForAgent :: T.Text -> Brick.EventM Types.Name Types.St T.Text
 runForAgent command = do
   State.modify (\s -> s {Types.stMsg = ""})
   Command.runCommand command
-  Monad.when (T.takeWhile (/= ' ') command == "go") $
+  lit <- fmap (Maybe.isJust . Types.stSpotlight) State.get
+  Monad.when (movedBy (T.takeWhile (/= ' ') command) lit) $
     State.modify (\s -> s {Types.stFollow = Types.FollowOff})
   after <- State.get
   let
     said = T.strip (Types.stMsg after)
   State.modify (\s -> s {Types.stClaudeLine = Just (Types.ClaudeRan command said (placeOf after))})
   pure said
+
+movedBy :: T.Text -> Bool -> Bool
+movedBy command lit =
+  case command of
+    "go" -> True
+    "highlight" -> lit
+    _ -> False
 
 hold :: FilePath -> T.Text -> Brick.EventM Types.Name Types.St ()
 hold root command = do
