@@ -576,11 +576,17 @@ the first stop of a tour you just posted, the line your reply to their note is a
 fix landed in. Do not point after every edit; they may have follow mode
 on, and moving them while they read is an interruption.
 
+Run `do` with `-C` on the repository the place is in, even when the
+reviewer is looking at another one. A session opened on a story
+directory switches to that repository first, as `:repo` would, and runs
+the command once it has loaded; `do` waits for that.
+
 `do` prints what the session said, such as `at the hunk in src/Foo.hs`,
-or why not. It exits 1 when no remax is open on the checkout in this
-qmux tab; mention the place in your reply instead. Only commands that
-look, move or change the view run; anything that changes the review,
-such as `:submit` or `:revert`, is refused as the reviewer's to run.
+or why not. It exits 1 when no remax is open on the checkout or its
+story in this qmux tab; mention the place in your reply instead. Only
+commands that look, move or change the view run; anything that changes
+the review, such as `:submit` or `:revert`, is refused as the
+reviewer's to run.
 `held for the reviewer` means they are typing or have a popup open:
 they will be asked to run it once they are free, so do not send it
 again.

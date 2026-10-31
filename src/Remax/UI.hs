@@ -102,10 +102,10 @@ agentRequest chan request = do
   box <- Concurrent.newEmptyMVar
   BChan.writeBChan chan (Types.FromAgent request (Monad.void . Concurrent.tryPutMVar box))
   got <- Timeout.timeout agentAnswerUs (Concurrent.takeMVar box)
-  pure (Maybe.fromMaybe (Remote.Refused "the session did not answer in time") got)
+  pure (Maybe.fromMaybe (Remote.Refused "the session did not answer in time; it may still run the command once it has loaded") got)
 
 agentAnswerUs :: Int
-agentAnswerUs = 5000000
+agentAnswerUs = 30000000
 
 loadStartup :: Git.ReviewMode -> FilePath -> IO Startup
 loadStartup mode root = do
