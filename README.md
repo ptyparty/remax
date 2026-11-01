@@ -2,10 +2,6 @@
 
 <h1 align="center">remax</h1>
 
-> [!WARNING]
-> The current state of this repository is AI-generated and has not yet
-> been human reviewed. Read accordingly.
-
 Hunk-by-hunk code review with the **whole file on screen**: edit it
 **in place** with modal keys in whichever flavor your fingers already
 know — helix, vi, or emacs — and record per-line, content-keyed verdicts
@@ -13,23 +9,33 @@ that survive rebases.
 
 ![remax reviewing a commit mid-rebase while native Claude answers in the thread](hero.gif)
 
-*A commit-by-commit `:rebase` review, with the agent working the other
-half of it, in a qmux tab. On the right, the bar under the header tracks
-the rebase and the commit under review, the tray lists hunks by file with
-their verdicts, notes and progress meters, removed lines float inline
-beside what replaced them, and the words that differ inside a changed
-line are marked in place. On the left, native Claude in qmux, started
-with `/remax-review watch`, answers the question already waiting, then
-waits until the reviewer flags a line. It reads the note, fixes the file
-and answers in the thread. Nothing is typed at remax after the flag; the
-rewritten line and the answer arrive because the session is watching.*
+*A commit-by-commit review in a qmux tab. The reviewer flags a line, and
+native Claude reads the note, fixes the file and answers in the thread
+while remax follows along.*
 
-*Recorded by `scripts/hero-cast`, which drives both panes for real —
-that is a live Claude Code session, not a reconstruction.*
+## Setup
 
-Prebuilt Linux binaries: every push to main updates the rolling
-[`latest` release](../../releases/tag/latest) — download
-`remax-linux-x86_64`, `chmod +x`, done.
+remax builds with GHC and cabal, from [ghcup](https://www.haskell.org/ghcup/),
+and a C and C++ compiler for its vendored tree-sitter grammars.
+
+```sh
+cabal build exe:remax
+ln -s "$(cabal list-bin exe:remax)" ~/.local/bin/remax   # puts `remax` on PATH
+remax setup --yes                                       # teaches Claude Code to work with your reviews
+```
+
+`remax setup` lists remax's skill for Claude Code and whether it is
+linked into Claude's config. `--yes` links it to this checkout, so it
+follows the checkout as you update it, and `--remove` takes it out
+again.
+
+Prebuilt Linux binaries are on the rolling
+[`latest` release](../../releases/tag/latest): download
+`remax-linux-x86_64` and `chmod +x` it. A downloaded binary has no
+checkout to link the skill from, so copy `skills/remax-review` into
+`~/.claude/skills/` yourself.
+
+## Use
 
 ```sh
 remax                 # review everything uncommitted (working tree vs HEAD)
@@ -60,6 +66,7 @@ remax watching        # hold a mark in the session's header for as long as this
 remax reply ID TEXT   # agent posts in a conversation; shows live in the session
 remax comment HUNK TEXT  # agent proposes a GitHub comment you take with Enter
 remax move ID --pr N  # agent files a draft comment under pull request N
+remax setup [--yes|--remove]  # list, link or remove the skill in Claude's config
 remax -C DIR ...      # any of the above, as if started in DIR
 ```
 
@@ -757,15 +764,12 @@ whose `-C` does not already cover the path follows it, as the skill
 says. Switching among the group's checkouts with `:repo` or `:open`
 records a move too; quitting records none.
 
-`skills/remax-review/SKILL.md` teaches Claude Code this protocol.
-`remax setup` shows whether it is linked into Claude Code's config
-(`~/.claude/skills`, or under `CLAUDE_CONFIG_DIR`); `remax setup --yes`
-links it to the checkout the running remax was built in, so it follows
-the checkout as you update it, and `remax setup --remove` takes the link
-out again. Anything already there under the same name is moved to
-`~/.claude/remax-backup/` and put back by `--remove`. To use it in only
-one workspace, symlink it into that workspace's `.claude/skills/`
-instead.
+`skills/remax-review/SKILL.md` teaches Claude Code this protocol;
+`remax setup --yes` links it into Claude's config (see [Setup](#setup)).
+Anything already there under the same name is moved to
+`~/.claude/remax-backup/` and put back by `remax setup --remove`. To use
+it in only one workspace, symlink it into that workspace's
+`.claude/skills/` instead.
 
 ### A guided tour
 
