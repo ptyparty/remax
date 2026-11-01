@@ -11,18 +11,18 @@ Hunk-by-hunk code review with the **whole file on screen**: edit it
 know — helix, vi, or emacs — and record per-line, content-keyed verdicts
 that survive rebases.
 
-![remax reviewing a commit mid-rebase while an agent answers](hero.gif)
+![remax reviewing a commit mid-rebase while native Claude answers in the thread](hero.gif)
 
 *A commit-by-commit `:rebase` review, with the agent working the other
-half of it. Below: the bar under the header tracks the rebase and the
-commit under review, the tray lists hunks by file with their verdicts,
-notes and progress meters, removed lines float inline beside what
-replaced them, and the words that differ inside a changed line are marked
-in place. Above: Claude Code, started with `/remax-review watch`, blocked
-on `remax list --wait` until the reviewer flags a line — then it reads the
-note, fixes the file and answers in the thread. Nothing is typed at remax
-after the flag; the rewritten line arrives because the session is
-watching the file. Neither of them prompts the other.*
+half of it, in a qmux tab. On the right, the bar under the header tracks
+the rebase and the commit under review, the tray lists hunks by file with
+their verdicts, notes and progress meters, removed lines float inline
+beside what replaced them, and the words that differ inside a changed
+line are marked in place. On the left, native Claude in qmux, started
+with `/remax-review watch`, answers the question already waiting, then
+waits until the reviewer flags a line. It reads the note, fixes the file
+and answers in the thread. Nothing is typed at remax after the flag; the
+rewritten line and the answer arrive because the session is watching.*
 
 *Recorded by `scripts/hero-cast`, which drives both panes for real —
 that is a live Claude Code session, not a reconstruction.*
@@ -971,28 +971,32 @@ the reviewer's side. Open it in a browser; it is self-contained.
 ### The hero recording
 
 `scripts/hero-cast` regenerates `hero.gif` with no human at a terminal:
-it builds the standard state with `scripts/hero --no-launch` (a scratch
-repo at `/tmp/remax-hero` mid-rebase, stopped on its first commit,
-seeded with accepted files, a flagged hunk and a questioned hunk with
-notes, and the current file's hunks left pending — store and config
-sandboxed under the scratch directory), then drives a short review
-through a pty and records the emulated screen.
+it builds the standard state with `scripts/hero
+--no-launch` (a scratch repo at `/tmp/remax-hero` mid-rebase, stopped on
+its first commit, seeded with accepted files, a flagged hunk and a
+questioned hunk with notes, and the current file's hunks left pending —
+store and config sandboxed under the scratch directory), then drives a
+short review through a pty and records the emulated screen.
 
-The recording is scripted in `tour` in `scripts/lib/hero_cast.py`, which
-drives two tmux panes: remax below, and a real Claude Code session above,
-started with `/remax-review watch` and reacting on its own from there.
+The recording is scripted in `tour` in `scripts/lib/hero_cast.py`. It
+starts a qmux session from the qmux checkout beside this one
+(`PTYPARTY_DIR` points elsewhere) with two panes: native Claude on the
+left, started with `/remax-review watch` and reacting on its own from
+there, and remax on the right — `remax` from the PATH, or `REMAX_BIN`.
 Frames are drawn cell by cell with Pillow rather than screenshotted, so
-it needs `python3` and a monospace TTF and no browser; pyte and pillow
-install into a scratch venv on first run.
+it needs `python3`, `fish` and a monospace TTF and no browser; pyte and
+Pillow install into a scratch venv on first run.
 
 That Claude session gets a throwaway `CLAUDE_CONFIG_DIR`
-(`scripts/lib/hero_claude.py`) with the first-run wizard, the trust
-prompt and the permissions already settled, and the skill installed where
-it will look for it — an allowlist rather than
+(`scripts/lib/hero_sandbox.py`) with the first-run wizard, the trust
+prompt and the permissions already settled, qmux's hooks installed, and
+the skill installed where it will look for it — an allowlist rather than
 `--dangerously-skip-permissions`, whose warning screen would otherwise be
 the first thing on camera. Credentials are symlinked, never copied into a
-scratch directory. It costs real model calls, so regenerating is not
-free, and no two takes are alike.
+scratch directory. Nothing is recorded until Claude is ready, so settings
+your organization manages for the whole machine, such as an approval
+prompt or hook output at startup, stay off camera. It costs real model
+calls, so regenerating is not free, and no two takes are alike.
 
 Waiting on a model is most of the elapsed time and none of the interest,
 so those stretches are recorded as a time-lapse: sampled rarely and
