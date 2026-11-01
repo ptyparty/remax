@@ -35,6 +35,17 @@ Prebuilt Linux binaries are on the rolling
 checkout to link the skill from, so copy `skills/remax-review` into
 `~/.claude/skills/` yourself.
 
+With Nix, the flake builds remax without ghcup and ships the skill in
+`share/remax/skills`:
+
+```sh
+nix build github:ptyparty/remax
+```
+
+It provides `packages.<system>.default` and `overlays.default`. Like a
+downloaded binary, a Nix build has no checkout for `remax setup`, so link
+`share/remax/skills/remax-review` into `~/.claude/skills/` yourself.
+
 ## Use
 
 ```sh
