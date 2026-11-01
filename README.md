@@ -757,9 +757,15 @@ whose `-C` does not already cover the path follows it, as the skill
 says. Switching among the group's checkouts with `:repo` or `:open`
 records a move too; quitting records none.
 
-`skills/remax-review/SKILL.md` teaches Claude Code this protocol — copy
-or symlink it into `~/.claude/skills/` (or a workspace `.claude/skills/`)
-so agents pick it up.
+`skills/remax-review/SKILL.md` teaches Claude Code this protocol.
+`remax setup` shows whether it is linked into Claude Code's config
+(`~/.claude/skills`, or under `CLAUDE_CONFIG_DIR`); `remax setup --yes`
+links it to the checkout the running remax was built in, so it follows
+the checkout as you update it, and `remax setup --remove` takes the link
+out again. Anything already there under the same name is moved to
+`~/.claude/remax-backup/` and put back by `--remove`. To use it in only
+one workspace, symlink it into that workspace's `.claude/skills/`
+instead.
 
 ### A guided tour
 

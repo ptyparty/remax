@@ -134,6 +134,7 @@ executable remax
       Remax.PullPoll
       Remax.Remote
       Remax.RemoteCache
+      Remax.Setup
       Remax.SoftWrap
       Remax.Store
       Remax.Submit

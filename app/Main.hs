@@ -35,6 +35,7 @@ import Remax.Key qualified as Key
 import Remax.LineRange qualified as LineRange
 import Remax.Remote qualified as Remote
 import Remax.RemoteCache qualified as RemoteCache
+import Remax.Setup qualified as Setup
 import Remax.Store qualified as Store
 import Remax.UI qualified as UI
 import Remax.WorkStore qualified as WorkStore
@@ -67,6 +68,7 @@ data Cmd
   | TourStep [String]
   | TourClear [String]
   | RunInSession T.Text
+  | SetUp Setup.SetupAction
   | ShowVersion
 
 -- How a listing is printed, and when.
@@ -131,6 +133,7 @@ main = do
         TourStep rest -> tourStep rest
         TourClear rest -> tourBegin rest
         RunInSession command -> runInSession command
+        SetUp action -> Setup.runSetup action
         ShowVersion -> putStrLn ("remax " ++ Version.showVersion Paths.version)
 
 -- list's flags, in either order and each at most once.
@@ -239,6 +242,11 @@ usage =
   \                                     begin empties the tour, each step names\n\
   \                                     hunks and says something about them, and\n\
   \                                     the session walks them in that order\n\
+  \       remax setup [--yes | --remove]\n\
+  \                                     list remax's skill for Claude Code and\n\
+  \                                     whether it is linked into Claude's\n\
+  \                                     config; --yes links it to this\n\
+  \                                     checkout, --remove takes it out again\n\
   \\n\
   \  -C DIR       run as if started in DIR\n\
   \  --base REF   review the working tree against REF (default: HEAD)\n\
@@ -271,6 +279,9 @@ parseArgs args0 =
         ("tour" : "step" : rest) -> Right (mDir, TourStep rest)
         ("tour" : "clear" : rest) -> Right (mDir, TourClear rest)
         ["--version"] -> Right (mDir, ShowVersion)
+        ["setup"] -> Right (mDir, SetUp Setup.SetupList)
+        ["setup", "--yes"] -> Right (mDir, SetUp Setup.SetupApply)
+        ["setup", "--remove"] -> Right (mDir, SetUp Setup.SetupRemove)
         ("do" : rest)
           | not (null rest) -> Right (mDir, RunInSession (T.pack (unwords rest)))
         ("reply" : target : rest)
