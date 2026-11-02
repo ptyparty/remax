@@ -58,7 +58,7 @@ replyText reply =
 
 socketDir :: IO FilePath
 socketDir = do
-  tab <- Env.lookupEnv "QMUX_TAB_DIR"
+  tab <- Env.lookupEnv "KOMUX_TAB_DIR"
   runtime <- Env.lookupEnv "XDG_RUNTIME_DIR"
   temp <- Directory.getTemporaryDirectory
   pure $ case (tab, runtime) of

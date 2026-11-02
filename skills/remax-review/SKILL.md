@@ -616,7 +616,7 @@ the command once it has loaded; `do` waits for that.
 
 `do` prints what the session said, such as `at the hunk in src/Foo.hs`,
 or why not. It exits 1 when no remax is open on the checkout or its
-story in this qmux tab; mention the place in your reply instead. Only
+story in this komux tab; mention the place in your reply instead. Only
 commands that look, move or change the view run; anything that changes
 the review, such as `:submit` or `:revert`, is refused as the
 reviewer's to run.

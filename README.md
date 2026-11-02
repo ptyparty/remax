@@ -9,7 +9,7 @@ that survive rebases.
 
 ![remax reviewing a commit mid-rebase while native Claude answers in the thread](hero.gif)
 
-*A commit-by-commit review in a qmux tab. The reviewer flags a line, and
+*A commit-by-commit review in a komux tab. The reviewer flags a line, and
 native Claude reads the note, fixes the file and answers in the thread
 while remax follows along.*
 
@@ -810,7 +810,7 @@ subject puts it away and `tour begin` on the same view replaces it.
 ### Pointing the reviewer
 
 An agent can move your session with `remax do`, which runs a `:` command
-in the remax open on the same checkout, in the same qmux tab:
+in the remax open on the same checkout, in the same komux tab:
 
 ```sh
 remax -C /path/to/repo do :go 3915dc41      # this hunk
@@ -833,8 +833,8 @@ When you are free remax asks `Claude asks to run :go 3915dc41 · y runs ·
 any other key drops`, and nothing runs until you answer. A newer command
 replaces one still waiting.
 
-The session listens on a socket in `$QMUX_TAB_DIR/remax`, or in
-`$XDG_RUNTIME_DIR/remax` outside qmux, so an agent in one tab never
+The session listens on a socket in `$KOMUX_TAB_DIR/remax`, or in
+`$XDG_RUNTIME_DIR/remax` outside komux, so an agent in one tab never
 moves a review open in another.
 
 ## Configuration
@@ -989,7 +989,7 @@ store and config sandboxed under the scratch directory), then drives a
 short review through a pty and records the emulated screen.
 
 The recording is scripted in `tour` in `scripts/lib/hero_cast.py`. It
-starts a qmux session from the qmux checkout beside this one
+starts a komux session from the komux checkout beside this one
 (`PTYPARTY_DIR` points elsewhere) with two panes: native Claude on the
 left, started with `/remax-review watch` and reacting on its own from
 there, and remax on the right — `remax` from the PATH, or `REMAX_BIN`.
@@ -999,7 +999,7 @@ Pillow install into a scratch venv on first run.
 
 That Claude session gets a throwaway `CLAUDE_CONFIG_DIR`
 (`scripts/lib/hero_sandbox.py`) with the first-run wizard, the trust
-prompt and the permissions already settled, qmux's hooks installed, and
+prompt and the permissions already settled, komux's hooks installed, and
 the skill installed where it will look for it — an allowlist rather than
 `--dangerously-skip-permissions`, whose warning screen would otherwise be
 the first thing on camera. Credentials are symlinked, never copied into a

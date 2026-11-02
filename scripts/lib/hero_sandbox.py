@@ -7,7 +7,7 @@ import subprocess
 
 import term_cast as tc
 
-APPS = ('qmux', 'quoll', 'kowari')
+APPS = ('komux', 'quoll', 'kowari')
 
 KEYRING_DENIES = (
     'Bash(secret-tool *)',
@@ -41,6 +41,7 @@ def environment(root, ptyparty):
             handle.write('#!/bin/sh\nexec bun %s "$@"\n' % cli)
         os.chmod(path, 0o755)
     env['PATH'] = bin_dir + os.pathsep + env['PATH']
+    env['PTYPARTY_DIR'] = ptyparty
     fish = os.path.join(env['XDG_CONFIG_HOME'], 'fish')
     os.makedirs(fish, exist_ok=True)
     with open(os.path.join(fish, 'config.fish'), 'w') as handle:
@@ -48,8 +49,8 @@ def environment(root, ptyparty):
     return sandbox, env
 
 
-def write_qmux_config(env, text, **paths):
-    folder = os.path.join(env['XDG_CONFIG_HOME'], 'qmux')
+def write_komux_config(env, text, **paths):
+    folder = os.path.join(env['XDG_CONFIG_HOME'], 'komux')
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, 'config.ts'), 'w') as handle:
         handle.write(text % {key: json.dumps(value) for key, value in paths.items()})
@@ -131,13 +132,24 @@ def claude_config(sandbox, project, skills, env, deny=(), trim_watch=False):
         if trim_watch:
             without_watch(copy)
     subprocess.run(
-        ['qmux', 'hooks', '--install'],
+        ['komux', 'hooks', '--install'],
         env=dict(env, CLAUDE_CONFIG_DIR=cfg),
         check=True,
         capture_output=True,
     )
+    decline_komux_setup(env)
     env['CLAUDE_CONFIG_DIR'] = cfg
     return cfg
+
+
+def decline_komux_setup(env):
+    komux = os.path.join(env['PTYPARTY_DIR'], 'komux')
+    offered = ['skill:' + name for name in sorted(os.listdir(os.path.join(komux, 'skills')))]
+    offered += ['rule:' + name[:-3] for name in sorted(os.listdir(os.path.join(komux, 'rules'))) if name.endswith('.md')]
+    state = os.path.join(env['XDG_STATE_HOME'], 'komux')
+    os.makedirs(state, exist_ok=True)
+    with open(os.path.join(state, 'setup-declined'), 'w') as handle:
+        handle.write('\n'.join(offered) + '\n')
 
 
 def dock(text):
@@ -150,7 +162,7 @@ def record(argv, cols, rows, cwd, env, session, tour, out_base, max_hold_s=1.2):
         finished = tour(cast)
     finally:
         cast.close()
-        subprocess.run(['qmux', 'kill', session], env=env, capture_output=True)
+        subprocess.run(['komux', 'kill', session], env=env, capture_output=True)
     if not finished:
         raise SystemExit('the tour did not finish; last screen:\n' + cast.text())
     frames = tc.write_gif(cast.frames, out_base + '.gif', max_hold_s=max_hold_s)
