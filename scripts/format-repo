@@ -10,4 +10,4 @@ else
   MODE=inplace
 fi
 
-find . -type f | grep -v -e ".stack-work" -e dist-new | grep ".hs" | xargs fourmolu --mode "$MODE"
+git ls-files -z '*.hs' | xargs -0 fourmolu --mode "$MODE"
