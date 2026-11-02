@@ -229,7 +229,7 @@ usage =
   \                                     it, one id per hunk; with no ref flags,\n\
   \                                     whatever the open session is viewing\n\
   \       remax [-C DIR] do COMMAND     run a : command in the remax session open\n\
-  \                                     on this checkout, in this qmux tab, such\n\
+  \                                     on this checkout, in this komux tab, such\n\
   \                                     as do :go HUNK_ID; commands that only\n\
   \                                     look, move or change the view run, and\n\
   \                                     the rest are the reviewer's; prints what\n\

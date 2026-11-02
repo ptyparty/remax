@@ -60,7 +60,7 @@ def rgb(color, default):
     return hex_rgb('#' + color)
 
 
-INHERITED_PREFIXES = ('QMUX', 'CLAUDE', 'ZELLIJ', 'TMUX', 'QUOLL', 'KOWARI', 'KITTY', 'XDG_', 'PG')
+INHERITED_PREFIXES = ('KOMUX', 'CLAUDE', 'ZELLIJ', 'TMUX', 'QUOLL', 'KOWARI', 'KITTY', 'XDG_', 'PG')
 
 
 def sandbox_env(root, **extra):

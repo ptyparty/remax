@@ -13,15 +13,15 @@ COLS, ROWS = 200, 50
 ALT_O, ESC = '\x1bo', '\x1b'
 NOTE = 'a zero retryCapMs zeroes every delay — floor capMs where it is bound'
 
-QMUX_CONFIG = '''export default {
+KOMUX_CONFIG = '''export default {
   defaultCwd: %(repo)s,
-  untrackedCommands: ["claude", "remax", "hx", "qmux", "quoll"],
+  untrackedCommands: ["claude", "remax", "hx", "komux", "quoll"],
   tabs: { "retry-queue": { cwd: %(repo)s, layout: "review" } },
   startup: ["retry-queue"],
   layouts: {
     review: {
       row: [
-        { command: ["qmux", "claude", "--mode", "auto"], name: "claude", focus: true },
+        { command: ["komux", "claude", "--mode", "auto"], name: "claude", focus: true },
         { command: ["remax"], name: "remax" },
       ],
     },
@@ -42,7 +42,7 @@ def prepare(repo):
         with open(shim, 'w') as handle:
             handle.write('#!/bin/sh\nexec %s "$@"\n' % os.path.abspath(remax_bin))
         os.chmod(shim, 0o755)
-    hs.write_qmux_config(env, QMUX_CONFIG, repo=REPO)
+    hs.write_komux_config(env, KOMUX_CONFIG, repo=REPO)
     hs.claude_config(sandbox, REPO, [os.path.join(repo, 'skills', 'remax-review')], env)
     return env
 
@@ -80,7 +80,7 @@ def main():
     out_base = sys.argv[1]
     repo = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
     env = prepare(repo)
-    hs.record(['qmux', 'attach', SESSION], COLS, ROWS, REPO, env, SESSION, tour, out_base)
+    hs.record(['komux', 'attach', SESSION], COLS, ROWS, REPO, env, SESSION, tour, out_base)
 
 
 if __name__ == '__main__':
