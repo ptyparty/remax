@@ -128,6 +128,7 @@ executable remax
       Remax.Clipboard
       Remax.CommitMessage
       Remax.Config
+      Remax.Context
       Remax.Conversation
       Remax.DiffModel
       Remax.Emacs
@@ -156,6 +157,7 @@ executable remax
       Remax.UI.Action.Agent
       Remax.UI.Action.Cite
       Remax.UI.Action.Command
+      Remax.UI.Action.Context
       Remax.UI.Action.Conversation
       Remax.UI.Action.Editor
       Remax.UI.Action.Files

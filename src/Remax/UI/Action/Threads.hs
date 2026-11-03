@@ -2,6 +2,8 @@
 
 module Remax.UI.Action.Threads
   ( cursorConversations
+  , lineThreads
+  , selectionKeys
   , suggestionFence
   , bandPost
   , enterThread
@@ -328,15 +330,17 @@ suggestionFence lineSpan =
 as content keys with the text and number they have now.
 -}
 selectionSpan :: Types.St -> Types.FileView -> Maybe Conv.LineSpan
-selectionSpan st fv =
+selectionSpan st fv = Anchor.lineSpanFor st fv (selectionKeys fv)
+
+selectionKeys :: Types.FileView -> [T.Text]
+selectionKeys fv =
   let
     ed = Types.fvEd fv
     (lo, hi) = case View.activeSelectionRows ed of
       Just (a, b) -> (a, b)
       Nothing -> let r = fst (Modal.cursorRC ed) in (r, r)
-    keys = map (\(k, _, _) -> k) (Nav.selectedChanges True fv lo hi)
   in
-    Anchor.lineSpanFor st fv keys
+    map (\(k, _, _) -> k) (Nav.selectedChanges True fv lo hi)
 
 declOf :: Types.FileView -> T.Text
 declOf fv =

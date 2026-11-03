@@ -871,6 +871,18 @@ qualified = { qualifiedPost = true }
 alias = "Remote"
 
 [[forAnyModule.allowedQualifications]]
+module = "Remax.Context"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Context"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Context"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "ContextAction"
+
+[[forAnyModule.allowedQualifications]]
 module = "Remax.UI.Action.Go"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }

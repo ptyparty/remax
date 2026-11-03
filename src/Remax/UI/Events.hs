@@ -27,6 +27,7 @@ import Remax.Store qualified as Store
 import Remax.UI.Action.Agent qualified as AgentAction
 import Remax.UI.Action.Cite qualified as CiteAction
 import Remax.UI.Action.Command qualified as Command
+import Remax.UI.Action.Context qualified as ContextAction
 import Remax.UI.Action.Editor qualified as Editor
 import Remax.UI.Action.Inbox qualified as InboxAction
 import Remax.UI.Action.Menus qualified as Menus
@@ -214,6 +215,7 @@ handleEvent brickEvent =
       Monad.unless (FilePath.isAbsolute rel) (Load.reloadFromDisk rel)
     Brick.AppEvent Types.GitStateChanged -> Load.refreshGit
     Brick.AppEvent (Types.FromAgent request respond) -> AgentAction.fromAgent request respond
+    Brick.AppEvent (Types.ContextAsked respond) -> ContextAction.answerContext respond
     Brick.AppEvent Types.StoreChanged -> do
       st <- State.get
       threads <- MonadIO.liftIO (Store.loadThreads (Types.stConn st) (Types.repoText st))
