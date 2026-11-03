@@ -14,6 +14,7 @@ description: |
 
 extra-source-files:
   - README.md
+  - guide/*.md
   - vendor/tree-sitter/include/tree_sitter/api.h
   - vendor/tree-sitter/src/*.h
   - vendor/grammars/*/highlights.scm

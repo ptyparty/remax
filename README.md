@@ -77,6 +77,7 @@ remax watching        # hold a mark in the session's header for as long as this
 remax reply ID TEXT   # agent posts in a conversation; shows live in the session
 remax comment HUNK TEXT  # agent proposes a GitHub comment you take with Enter
 remax move ID --pr N  # agent files a draft comment under pull request N
+remax guide [PAGE]    # a page of the agent's guide; index links to the rest
 remax setup [--yes|--remove]  # list, link or remove the skill in Claude's config
 remax -C DIR ...      # any of the above, as if started in DIR
 ```
@@ -760,12 +761,15 @@ latest, a checkout and its pull request worktrees being one group, and
 `remax list` on any path in the group reports it, as a `moved  PR #N
 review is in …` line and a `review_moves` entry in `--json`; it wakes a
 `list --wait` as a flag does, and each move replaces the last. An agent
-whose `-C` does not already cover the path follows it, as the skill
+whose `-C` does not already cover the path follows it, as the guide
 says. Switching among the group's checkouts with `:repo` or `:open`
 records a move too; quitting records none.
 
-`skills/remax-review/SKILL.md` teaches Claude Code this protocol;
-`remax setup --yes` links it into Claude's config (see [Setup](#setup)).
+`remax guide` teaches an agent this protocol, a page at a time:
+`remax guide index` gives the overview and links to the rest, which
+live in `guide/` and are built into the binary.
+`skills/remax-review/SKILL.md` points Claude Code at it;
+`remax setup --yes` links the skill into Claude's config (see [Setup](#setup)).
 Anything already there under the same name is moved to
 `~/.claude/remax-backup/` and put back by `remax setup --remove`. To use
 it in only one workspace, symlink it into that workspace's

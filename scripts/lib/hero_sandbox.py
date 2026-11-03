@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import shutil
 import stat
 import subprocess
@@ -72,16 +71,7 @@ def project_from_fixture(fixture, target):
     return target
 
 
-def without_watch(skill_dir):
-    path = os.path.join(skill_dir, 'SKILL.md')
-    with open(path) as handle:
-        text = handle.read()
-    text = re.sub(r'\n## Noticing the user\'s edits\n.*?(?=\n## |\Z)', '\n', text, flags=re.S)
-    with open(path, 'w') as handle:
-        handle.write(text)
-
-
-def claude_config(sandbox, project, skills, env, deny=(), trim_watch=False):
+def claude_config(sandbox, project, skills, env, deny=()):
     cfg = os.path.join(sandbox, 'claude')
     shutil.rmtree(cfg, ignore_errors=True)
     os.makedirs(cfg)
@@ -129,8 +119,6 @@ def claude_config(sandbox, project, skills, env, deny=(), trim_watch=False):
     for skill in skills:
         copy = os.path.join(cfg, 'skills', os.path.basename(skill))
         shutil.copytree(skill, copy)
-        if trim_watch:
-            without_watch(copy)
     subprocess.run(
         ['komux', 'hooks', '--install'],
         env=dict(env, CLAUDE_CONFIG_DIR=cfg),

@@ -29,6 +29,7 @@ import Remax.Feedback qualified as Feedback
 import Remax.FeedbackText qualified as FeedbackText
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
+import Remax.Guide qualified as Guide
 import Remax.Hunks qualified as Hunks
 import Remax.Json qualified as Json
 import Remax.Key qualified as Key
@@ -69,6 +70,7 @@ data Cmd
   | TourClear [String]
   | RunInSession T.Text
   | SetUp Setup.SetupAction
+  | ShowGuide T.Text
   | ShowVersion
 
 -- How a listing is printed, and when.
@@ -134,7 +136,14 @@ main = do
         TourClear rest -> tourBegin rest
         RunInSession command -> runInSession command
         SetUp action -> Setup.runSetup action
+        ShowGuide page -> showGuide page
         ShowVersion -> putStrLn ("remax " ++ Version.showVersion Paths.version)
+
+showGuide :: T.Text -> IO ()
+showGuide page =
+  case Guide.guidePage page of
+    Left e -> Exit.die (T.unpack (Guide.renderGuideError e))
+    Right body -> TIO.putStr body
 
 -- list's flags, in either order and each at most once.
 listArgs :: [String] -> Maybe Cmd
@@ -242,6 +251,9 @@ usage =
   \                                     begin empties the tour, each step names\n\
   \                                     hunks and says something about them, and\n\
   \                                     the session walks them in that order\n\
+  \       remax guide [PAGE]            print a page of the guide for agents\n\
+  \                                     working with a reviewer; index (the\n\
+  \                                     default) links to the rest\n\
   \       remax setup [--yes | --remove]\n\
   \                                     list remax's skill for Claude Code and\n\
   \                                     whether it is linked into Claude's\n\
@@ -279,6 +291,8 @@ parseArgs args0 =
         ("tour" : "step" : rest) -> Right (mDir, TourStep rest)
         ("tour" : "clear" : rest) -> Right (mDir, TourClear rest)
         ["--version"] -> Right (mDir, ShowVersion)
+        ["guide"] -> Right (mDir, ShowGuide "index")
+        ["guide", page] -> Right (mDir, ShowGuide (T.pack page))
         ["setup"] -> Right (mDir, SetUp Setup.SetupList)
         ["setup", "--yes"] -> Right (mDir, SetUp Setup.SetupApply)
         ["setup", "--remove"] -> Right (mDir, SetUp Setup.SetupRemove)
