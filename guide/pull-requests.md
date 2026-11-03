@@ -27,10 +27,11 @@ that pull request, and tells you so; see the next section.
 
 ## Reading a pull request
 
-Prefer local git to `gh`. A pull request remax has opened is already
-fetched: its head is `refs/remax/pull/N/head` and its base
-`refs/remax/pull/N/base`, the merge-base, so the diff between them is
-the one GitHub shows. Read it as you would any branch:
+When your remax work needs a pull request's code, such as for a tour
+or to answer a note, read it with local git rather than `gh`. A pull
+request remax has opened is already fetched: its head is
+`refs/remax/pull/N/head` and its base `refs/remax/pull/N/base`, the
+merge-base, so the diff between them is the one GitHub shows. Read it as you would any branch:
 
 ```sh
 git -C "$REPO" log --reverse refs/remax/pull/N/base..refs/remax/pull/N/head
@@ -53,5 +54,6 @@ While a session has the pull request open, its review threads and
 PR-level comments are in `remax list`, and `show` says `on PR #N` for
 each of them.
 
-Use `gh` only for what git does not hold, such as the description or a
-failing check's log, and never for the diff.
+For that work, use `gh` only for what git does not hold, such as the
+description or a failing check's log, and never for the diff. Outside
+remax work, use `gh` as you normally would.
