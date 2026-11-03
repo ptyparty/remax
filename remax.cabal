@@ -21,6 +21,16 @@ license-file:   LICENSE
 build-type:     Simple
 extra-source-files:
     README.md
+    guide/comments.md
+    guide/feedback.md
+    guide/index.md
+    guide/moves.md
+    guide/per-commit.md
+    guide/pointing.md
+    guide/pull-requests.md
+    guide/reply.md
+    guide/tour.md
+    guide/watch.md
     vendor/tree-sitter/include/tree_sitter/api.h
     vendor/tree-sitter/src/alloc.h
     vendor/tree-sitter/src/array.h
@@ -125,6 +135,7 @@ executable remax
       Remax.FeedbackText
       Remax.Git
       Remax.GitHub
+      Remax.Guide
       Remax.Highlight
       Remax.Hunks
       Remax.Json

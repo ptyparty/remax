@@ -919,6 +919,12 @@ qualified = { qualifiedPost = true }
 alias = "Watch"
 
 [[forAnyModule.allowedQualifications]]
+module = "Remax.Guide"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Guide"
+
+[[forAnyModule.allowedQualifications]]
 module = "Remax.Setup"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }
