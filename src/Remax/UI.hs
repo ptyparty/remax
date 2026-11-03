@@ -30,6 +30,7 @@ import Graphics.Vty qualified as V
 import Graphics.Vty.CrossPlatform qualified as VtyPlatform
 import Remax.Clipboard qualified as Clipboard
 import Remax.Config qualified as Config
+import Remax.Context qualified as Context
 import Remax.Conversation qualified as Conv
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
@@ -81,7 +82,7 @@ runReview mode pullMeta root roots story = do
   startup <- loadStartup mode root
   let
     chan = suChan startup
-  final <- Remote.withListener (agentRequest chan) . Watch.withWatcher $ \mgr watchMode -> do
+  final <- Remote.withListener (agentRequest chan) . Context.withListener (contextRequest chan) . Watch.withWatcher $ \mgr watchMode -> do
     dirWatch <- Watch.installWatches mgr chan root watchMode
     -- probed once: doing it per yank would be a process spawn a keystroke
     clip <- Clipboard.discoverClipboard
@@ -107,6 +108,16 @@ agentRequest chan request = do
 
 agentAnswerUs :: Int
 agentAnswerUs = 30000000
+
+contextRequest :: BChan.BChan Types.REvent -> IO Context.Answer
+contextRequest chan = do
+  box <- Concurrent.newEmptyMVar
+  BChan.writeBChan chan (Types.ContextAsked (Monad.void . Concurrent.tryPutMVar box))
+  got <- Timeout.timeout contextAnswerUs (Concurrent.takeMVar box)
+  pure (Maybe.fromMaybe (Context.NoContext "remax is busy; try again in a moment") got)
+
+contextAnswerUs :: Int
+contextAnswerUs = 800000
 
 loadStartup :: Git.ReviewMode -> FilePath -> IO Startup
 loadStartup mode root = do

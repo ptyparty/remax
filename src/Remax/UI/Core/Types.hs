@@ -120,6 +120,7 @@ import Database.SQLite.Simple qualified as SQLite
 import Graphics.Vty qualified as V
 import Remax.Clipboard qualified as Clipboard
 import Remax.Config qualified as Config
+import Remax.Context qualified as Context
 import Remax.Conversation qualified as Conv
 import Remax.DiffModel qualified as DiffModel
 import Remax.Git qualified as Git
@@ -185,6 +186,7 @@ data REvent
   | JobDone T.Text (Brick.EventM Name St ())
   | FromJob (Brick.EventM Name St ())
   | FromAgent Remote.Request (Remote.Reply -> IO ())
+  | ContextAsked (Context.Answer -> IO ())
 
 -- The one-line prompt at the bottom of the screen: / search or : command.
 data Prompt = SearchPrompt T.Text | CmdPrompt T.Text | PathPrompt T.Text T.Text (T.Text -> Brick.EventM Name St ())

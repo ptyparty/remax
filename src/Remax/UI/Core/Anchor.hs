@@ -7,6 +7,8 @@ module Remax.UI.Core.Anchor
   , conversationsIn
   , survives
   , lineSpanFor
+  , numberedLinesFor
+  , NumberedLine (..)
   , Survival (..)
   ) where
 
@@ -147,6 +149,28 @@ lineSpanFor st fv keys =
             }
       )
       (NEL.nonEmpty (map spanLine picked))
+
+data NumberedLine = NumberedLine
+  { nlMark :: Char
+  , nlBase :: Maybe Int
+  , nlHead :: Maybe Int
+  , nlText :: T.Text
+  }
+
+numberedLinesFor :: Types.FileView -> [T.Text] -> [NumberedLine]
+numberedLinesFor fv keys =
+  let
+    wanted = Set.fromList keys
+    picked = filter (any (`Set.member` wanted) . rowKeys . locRow) (locate (Types.fvRows fv))
+    numbered l =
+      NumberedLine
+        { nlMark = DiffModel.rMark (locRow l)
+        , nlBase = locBase l
+        , nlHead = locHead l
+        , nlText = DiffModel.rText (locRow l)
+        }
+  in
+    map numbered picked
 
 data Located = Located
   { locRow :: DiffModel.RowR
