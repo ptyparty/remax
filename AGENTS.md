@@ -53,7 +53,8 @@ imports its internals. The order within a tree is convention.
    name), `Tree`, `Files`,
    `TreeKeys`, `Editor`, `Go` (`:go`), `Command`, `Agent` (commands that
    arrive from `remax do`), `Context` (what komux attaches to a message
-   for Claude), `Menus`.
+   for Claude), `Menus`, `Keys` (the keys komux offers for what is on
+   screen).
 4. `Draw` — one module per surface, composed by `Remax.UI.Draw`.
 5. `Events` — key and event dispatch, the top of the session.
 
@@ -75,7 +76,7 @@ Placement rules:
   `Remax.Submit`, `Remax.RemoteCache`, `Remax.Feedback`, `Remax.Json`,
   `Remax.DiffModel`, `Remax.Modal`, `Remax.Remote` (the socket `remax do`
   reaches a session through), `Remax.Context` (the socket komux asks
-  for context on) and the
+  for context and keys on) and the
   other `Remax.*` modules are below all of `Remax.UI.*` and know nothing
   about the session state.
 

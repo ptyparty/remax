@@ -3,6 +3,7 @@
 
 module Remax.UI.Action.Menus
   ( helpGroups
+  , finderEntries
   , spaceMenuEntries
   ) where
 
@@ -55,22 +56,20 @@ aroundGroups :: Config.KeyMode -> [(T.Text, [(T.Text, T.Text)])]
 aroundGroups mode =
   [
     ( "getting around"
-    ,
-      [ ("Ctrl-p", "find a file, flat and ranked")
+    , [ ("Ctrl-p", "find a file, flat and ranked")
       , ("\9251 '", "the last selector again, as you left it")
       , ("\9251 t", "the same dialog, as a tree")
-      , ("\8633", "in either: flat \8596 tree, filter kept")
-      , ("Ctrl-a", "in either: show the ignored files too")
-      , ("Ctrl-x", "in either: new / rename / duplicate / delete")
-      , ("gr", "switch repository, starting on the next")
-      , ("gn gp", "the next / previous file, as ) and ( do")
-      , ("\9251 b", "files already open in the session")
-      , ("Tab", "collapse / expand the tray")
-      , ("{ }", "scroll the tray")
-      , -- vi wants E for the WORD motion, so the leader carries $EDITOR
-        (if mode == Config.KeysVi then "\9251 e" else "E", "suspend into $EDITOR here")
-      , ("\9251 a", "the alternate file")
       ]
+        ++ finderEntries
+        ++ [ ("gr", "switch repository, starting on the next")
+           , ("gn gp", "the next / previous file, as ) and ( do")
+           , ("\9251 b", "files already open in the session")
+           , ("Tab", "collapse / expand the tray")
+           , ("{ }", "scroll the tray")
+           , -- vi wants E for the WORD motion, so the leader carries $EDITOR
+             (if mode == Config.KeysVi then "\9251 e" else "E", "suspend into $EDITOR here")
+           , ("\9251 a", "the alternate file")
+           ]
     )
   ,
     ( "the " <> Types.promptKeys mode <> " line"
@@ -85,6 +84,13 @@ aroundGroups mode =
     )
   ]
 
+finderEntries :: [(T.Text, T.Text)]
+finderEntries =
+  [ ("\8633", "in either: flat \8596 tree, filter kept")
+  , ("Ctrl-a", "in either: show the ignored files too")
+  , ("Ctrl-x", "in either: new / rename / duplicate / delete")
+  ]
+
 reviewGroup :: Config.KeyMode -> (T.Text, [(T.Text, T.Text)])
 reviewGroup mode =
   let
@@ -93,7 +99,6 @@ reviewGroup mode =
       , ("'", "back to the hunk under review")
       , ("\9251 h", "make this hunk the current one")
       , ("\9251 p", "show only hunks still pending")
-      , ("\9251 k", "walk all / code / comment hunks")
       , ("\9251 T", "the tour's stops; \9166 goes to one")
       , ("\9251 F", "follow edits to each file as they land")
       ]
@@ -114,7 +119,6 @@ reviewGroup mode =
           , ("C-c x", "select the whole hunk")
           , ("C-c ] [", "next / previous hunk")
           , ("C-c p", "show only hunks still pending")
-          , ("C-c k", "walk all / code / comment hunks")
           , ("C-c T", "the tour's stops; \9166 goes to one")
           , ("C-c F", "follow edits to each file as they land")
           ]

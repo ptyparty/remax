@@ -63,6 +63,7 @@ module Remax.UI.Core.Types
   , AmendTarget (..)
   , MarkUndo (..)
   , FileView (..)
+  , OldToks (..)
   , St (..)
   , repoText
   , subjectCrumb
@@ -193,6 +194,7 @@ data REvent
   | FromJob (Brick.EventM Name St ())
   | FromAgent Remote.Request (Remote.Reply -> IO ())
   | ContextAsked (Context.Answer -> IO ())
+  | KeysAsked ([Context.KeyGroup] -> IO ())
 
 -- The one-line prompt at the bottom of the screen: / search or : command.
 data Prompt = SearchPrompt T.Text | CmdPrompt T.Text | PathPrompt T.Text T.Text (T.Text -> Brick.EventM Name St ())
@@ -557,6 +559,7 @@ data FileView = FileView
   , fvOrigin :: !Int -- first display row the body draws; see bodyWindow
   , fvRuns :: [DiffModel.Run]
   , fvToks :: [[Highlight.Seg]]
+  , fvOldToks :: Maybe OldToks
   , fvStale :: Bool
   , fvDeleted :: Bool -- the change set removed this file; there is no working copy
   , fvHighlighted :: Bool -- real syntax colors computed yet? plain until shown
@@ -566,6 +569,11 @@ data FileView = FileView
   , fvThreads :: Map.Map Int [Conv.ConversationId] -- display row -> the conversations drawn under it
   , fvPending :: !Int
   , fvMtime :: Maybe Clock.UTCTime
+  }
+
+data OldToks = OldToks
+  { otBase :: [T.Text]
+  , otLines :: [[Highlight.Seg]]
   }
 
 data St = St

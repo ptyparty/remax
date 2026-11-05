@@ -82,7 +82,7 @@ runReview mode pullMeta root roots story = do
   startup <- loadStartup mode root
   let
     chan = suChan startup
-  final <- Remote.withListener (agentRequest chan) . Context.withListener (contextRequest chan) . Watch.withWatcher $ \mgr watchMode -> do
+  final <- Remote.withListener (agentRequest chan) . Context.withListener (contextHandlers chan) . Watch.withWatcher $ \mgr watchMode -> do
     dirWatch <- Watch.installWatches mgr chan root watchMode
     -- probed once: doing it per yank would be a process spawn a keystroke
     clip <- Clipboard.discoverClipboard
@@ -108,6 +108,20 @@ agentRequest chan request = do
 
 agentAnswerUs :: Int
 agentAnswerUs = 30000000
+
+contextHandlers :: BChan.BChan Types.REvent -> Context.Handlers
+contextHandlers chan =
+  Context.Handlers
+    { Context.handlersContext = contextRequest chan
+    , Context.handlersKeys = keysRequest chan
+    }
+
+keysRequest :: BChan.BChan Types.REvent -> IO [Context.KeyGroup]
+keysRequest chan = do
+  box <- Concurrent.newEmptyMVar
+  BChan.writeBChan chan (Types.KeysAsked (Monad.void . Concurrent.tryPutMVar box))
+  got <- Timeout.timeout contextAnswerUs (Concurrent.takeMVar box)
+  pure (Maybe.fromMaybe [] got)
 
 contextRequest :: BChan.BChan Types.REvent -> IO Context.Answer
 contextRequest chan = do
