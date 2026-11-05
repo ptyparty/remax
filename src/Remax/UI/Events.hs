@@ -33,6 +33,7 @@ import Remax.UI.Action.Command qualified as Command
 import Remax.UI.Action.Context qualified as ContextAction
 import Remax.UI.Action.Editor qualified as Editor
 import Remax.UI.Action.Inbox qualified as InboxAction
+import Remax.UI.Action.Keys qualified as KeysAction
 import Remax.UI.Action.Menus qualified as Menus
 import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Open qualified as Open
@@ -229,6 +230,7 @@ handleEvent brickEvent =
     Brick.AppEvent Types.GitStateChanged -> Load.refreshGit
     Brick.AppEvent (Types.FromAgent request respond) -> AgentAction.fromAgent request respond
     Brick.AppEvent (Types.ContextAsked respond) -> ContextAction.answerContext respond
+    Brick.AppEvent (Types.KeysAsked respond) -> KeysAction.answerKeys respond
     Brick.AppEvent Types.StoreChanged -> do
       st <- State.get
       threads <- MonadIO.liftIO (Store.loadThreads (Types.stConn st) (Types.repoText st))

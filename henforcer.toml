@@ -883,6 +883,12 @@ qualified = { qualifiedPost = true }
 alias = "ContextAction"
 
 [[forAnyModule.allowedQualifications]]
+module = "Remax.UI.Action.Keys"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "KeysAction"
+
+[[forAnyModule.allowedQualifications]]
 module = "Remax.UI.Action.Go"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }

@@ -33,7 +33,7 @@ data RowR = RowR
   { rMark :: !Char
   , rNewRow :: !(Maybe Int) -- buffer row this display row shows, if any
   , rText :: !T.Text -- old text for '-' rows, buffer text otherwise
-  , rToks :: [(Brick.AttrName, T.Text)] -- [] for old-side rows
+  , rToks :: [(Brick.AttrName, T.Text)] -- removed rows carry the base side's, once highlighted
   , rRunIx :: !(Maybe Int)
   , rKey :: !(Maybe T.Text) -- content key for changed rows
   , -- content key for rows that exist on the base side (context and

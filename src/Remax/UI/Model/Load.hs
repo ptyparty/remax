@@ -136,12 +136,13 @@ freshView hls path deleted base newLs =
     , Types.fvOrigin = 0
     , Types.fvRuns = []
     , Types.fvToks = []
+    , Types.fvOldToks = Nothing
     , Types.fvStale = False
     , Types.fvDeleted = deleted
     , Types.fvHighlighted = False
     , -- the shebang is the fallback for a file with no
       -- extension to go on, so the first line comes along
-      Types.fvHl = TS.highlighterFor hls path (Maybe.listToMaybe newLs)
+      Types.fvHl = TS.highlighterFor hls path (Maybe.listToMaybe (if null newLs then base else newLs))
     , Types.fvRunDecls = []
     , Types.fvRemarks = []
     , Types.fvThreads = Map.empty
@@ -167,9 +168,14 @@ rebuildFV cfg repo fv = do
     if Types.fvHighlighted fv
       then tokensFor fv newLs
       else pure (Highlight.plainLines newLs)
+  oldToks <-
+    if Types.fvHighlighted fv
+      then baseTokens fv
+      else pure Nothing
   (rows3, degraded) <- diffIO ws (Types.fvBase fv) newLs
   let
-    (rows, runs) = DiffModel.assemble sc repo (T.pack (Types.fvPath fv)) rows3 toks
+    (newRows, runs) = DiffModel.assemble sc repo (T.pack (Types.fvPath fv)) rows3 toks
+    rows = threadOldTokens newRows (maybe [] Types.otLines oldToks)
     decls = View.declsForAnchors newLs (map DiffModel.runAnchor runs)
   pure
     ( fv
@@ -177,6 +183,7 @@ rebuildFV cfg repo fv = do
         , Types.fvRowCount = length rows
         , Types.fvRuns = runs
         , Types.fvToks = toks
+        , Types.fvOldToks = oldToks
         , Types.fvStale = False
         , Types.fvRunDecls = decls
         , Types.fvEmph = emphFor cfg rows
@@ -185,18 +192,44 @@ rebuildFV cfg repo fv = do
     )
 
 tokensFor :: Types.FileView -> [T.Text] -> IO [[Highlight.Seg]]
-tokensFor fv newLs =
+tokensFor fv ls =
+  Maybe.fromMaybe (Highlight.plainLines ls) <$> scopedTokens fv ls
+
+scopedTokens :: Types.FileView -> [T.Text] -> IO (Maybe [[Highlight.Seg]])
+scopedTokens fv ls =
   case Types.fvHl fv of
-    Nothing -> pure (Highlight.plainLines newLs)
+    Nothing -> pure Nothing
     Just hl -> do
-      got <- TS.tsHighlight hl newLs
+      got <- TS.tsHighlight hl ls
       case got of
-        Nothing -> pure (Highlight.plainLines newLs)
+        Nothing -> pure Nothing
         Just scoped -> do
           let
             segs = map (map (\(scope, t) -> (Highlight.scopeSeg scope, t))) scoped
           _ <- Exception.evaluate (DiffModel.forceTokLines segs `seq` segs)
-          pure segs
+          pure (Just segs)
+
+baseTokens :: Types.FileView -> IO (Maybe Types.OldToks)
+baseTokens fv =
+  let
+    base = Types.fvBase fv
+  in
+    case Types.fvOldToks fv of
+      Just known | Types.otBase known == base -> pure (Just known)
+      _
+        | null base -> pure Nothing
+        | otherwise -> fmap (Types.OldToks base) <$> scopedTokens fv base
+
+threadOldTokens :: [DiffModel.RowR] -> [[Highlight.Seg]] -> [DiffModel.RowR]
+threadOldTokens rows ts =
+  case (rows, ts) of
+    (_, []) -> rows
+    ([], _) -> []
+    (row : rest, tl : more) ->
+      case DiffModel.rMark row of
+        '+' -> row : threadOldTokens rest ts
+        '-' -> row {DiffModel.rToks = tl} : threadOldTokens rest more
+        _ -> row : threadOldTokens rest more
 
 threadTokens :: [DiffModel.RowR] -> [[Highlight.Seg]] -> [DiffModel.RowR]
 threadTokens rows ts =
@@ -270,19 +303,21 @@ ensureCurrentHighlighted = do
   st <- State.get
   let
     i = Types.stCurF st
-    withTokensOf toks current =
+    withTokensOf (toks, oldToks) current =
       current
-        { Types.fvRows = threadTokens (Types.fvRows current) toks
+        { Types.fvRows = threadOldTokens (threadTokens (Types.fvRows current) toks) (maybe [] Types.otLines oldToks)
         , Types.fvToks = toks
+        , Types.fvOldToks = oldToks
         , Types.fvHighlighted = True
         }
+    bothSides fv = (,) <$> tokensFor fv (View.newSideLines fv) <*> baseTokens fv
   case Types.safeIdx (Types.stFiles st) i of
     Nothing -> pure ()
     Just fv
       | Types.fvHighlighted fv -> pure ()
       | Types.fvRowCount fv <= highlightInlineRows -> do
-          toks <- MonadIO.liftIO (tokensFor fv (View.newSideLines fv))
-          State.modify (Verdict.updateFile i (withTokensOf toks))
+          got <- MonadIO.liftIO (bothSides fv)
+          State.modify (Verdict.updateFile i (withTokensOf got))
       | Types.stHighlighting st == Just (Types.fvPath fv) -> pure ()
       | otherwise -> do
           State.modify (\s -> s {Types.stHighlighting = Just (Types.fvPath fv)})
@@ -290,14 +325,16 @@ ensureCurrentHighlighted = do
             before = View.newSideLines fv
             epoch = Types.stEpoch st
             label = "highlighting " <> T.pack (FilePath.takeFileName (Types.fvPath fv))
-          Jobs.startJob label (Jobs.withSlot (Types.stWorkSlots st) (tokensFor fv before)) $ \outcome -> do
+          Jobs.startJob label (Jobs.withSlot (Types.stWorkSlots st) (bothSides fv)) $ \outcome -> do
             latest <- State.get
             Monad.when (Types.stEpoch latest == epoch) $ do
               State.modify (\s -> s {Types.stHighlighting = Nothing})
               case (outcome, List.find ((== Types.fvPath fv) . Types.fvPath . snd) (zip [0 :: Int ..] (Types.stFiles latest))) of
                 (Left err, _) -> Jobs.jobFailed label err
                 (Right toks, Just (j, current))
-                  | not (Types.fvHighlighted current) && View.newSideLines current == before ->
+                  | not (Types.fvHighlighted current)
+                      && View.newSideLines current == before
+                      && Types.fvBase current == Types.fvBase fv ->
                       State.modify (Verdict.updateFile j (withTokensOf toks))
                 _ -> pure ()
 

@@ -16,6 +16,7 @@ import Graphics.Vty qualified as V
 import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
 import Remax.DiffModel qualified as DiffModel
+import Remax.Highlight qualified as Highlight
 import Remax.LineRange qualified as LineRange
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
@@ -354,7 +355,7 @@ contentInk paint charSel emph r left =
     sliced = snd (Ink.splitAtCol hOff (Verdict.effRuns r))
   in
     if DiffModel.rMark r == '-'
-      then removedInk rowPens marks (Widgets.padT (T.drop hOff (DiffModel.rText r))) left
+      then removedInk rowPens marks (removedSegs hOff r) left
       else case rowSpan charSel r of
         -- a live selection outranks the marks: it is what the
         -- reader is pointing at this instant
@@ -368,11 +369,17 @@ contentInk paint charSel emph r left =
             [] -> Ink.inkT left (Ink.penPlain rowPens) " "
             filled -> Ink.segsInk rowPens left filled
 
-removedInk :: Ink.PenSet -> [(Int, Int)] -> T.Text -> Int -> V.Image
+removedSegs :: Int -> DiffModel.RowR -> [Highlight.Seg]
+removedSegs hOff r =
+  case Widgets.nonEmptySegs (snd (Ink.splitAtCol hOff (DiffModel.rToks r))) of
+    [] -> [(Attrs.removedTextAttr, Widgets.padT (T.drop hOff (DiffModel.rText r)))]
+    filled -> filled
+
+removedInk :: Ink.PenSet -> [(Int, Int)] -> [Highlight.Seg] -> Int -> V.Image
 removedInk rowPens marks shown left =
   if null marks
-    then Ink.inkT left (Ink.penFor rowPens Attrs.removedTextAttr) shown
-    else Ink.emphInk Attrs.removedWordAttr rowPens left marks [(Attrs.removedTextAttr, shown)]
+    then Ink.segsInk rowPens left shown
+    else Ink.emphInk Attrs.removedWordAttr rowPens left marks shown
 
 -- the reviewer's note renders inline as virtual rows under
 -- the line it annotates — visible where the feedback lives

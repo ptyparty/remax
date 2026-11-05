@@ -165,6 +165,7 @@ executable remax
       Remax.UI.Action.Fuzzy
       Remax.UI.Action.Go
       Remax.UI.Action.Inbox
+      Remax.UI.Action.Keys
       Remax.UI.Action.Menus
       Remax.UI.Action.Notes
       Remax.UI.Action.Open

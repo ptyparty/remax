@@ -3,6 +3,9 @@
 module Remax.Context
   ( Attachment (..)
   , Answer (..)
+  , KeyGroup (..)
+  , KeyCommand (..)
+  , Handlers (..)
   , withListener
   ) where
 
@@ -12,7 +15,6 @@ import Control.Monad qualified as Monad
 import Data.ByteString qualified as BS
 import Data.Char qualified as Char
 import Data.List.NonEmpty qualified as NEL
-import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Text.Encoding.Error qualified as TEE
@@ -34,6 +36,24 @@ data Answer
   = Attach (NEL.NonEmpty Attachment)
   | NoContext T.Text
 
+data KeyGroup = KeyGroup
+  { keyGroupName :: T.Text
+  , keyGroupCommands :: [KeyCommand]
+  }
+
+data KeyCommand = KeyCommand
+  { keyCommandLabel :: T.Text
+  , keyCommandKeys :: T.Text
+  , keyCommandSend :: Maybe T.Text
+  }
+
+data Handlers = Handlers
+  { handlersContext :: IO Answer
+  , handlersKeys :: IO [KeyGroup]
+  }
+
+data Request = AskContext | AskKeys
+
 socketPath :: IO (Maybe FilePath)
 socketPath = do
   tab <- Env.lookupEnv "KOMUX_TAB_DIR"
@@ -46,8 +66,8 @@ socketPath = do
           Just (dir </> "context" </> (paneId <> ".sock"))
     _ -> Nothing
 
-withListener :: IO Answer -> IO a -> IO a
-withListener answer action = do
+withListener :: Handlers -> IO a -> IO a
+withListener handlers action = do
   found <- socketPath
   case found of
     Nothing -> action
@@ -59,7 +79,7 @@ withListener answer action = do
         Left _ -> action
         Right sock ->
           Exception.bracket
-            (Concurrent.forkIO (acceptLoop sock answer))
+            (Concurrent.forkIO (acceptLoop sock handlers))
             (\loop -> Concurrent.killThread loop >> Socket.close sock >> removeQuietly path)
             (const action)
 
@@ -70,22 +90,35 @@ bindAt path = do
   Socket.listen sock 4
   pure sock
 
-acceptLoop :: Socket.Socket -> IO Answer -> IO ()
-acceptLoop sock answer =
+acceptLoop :: Socket.Socket -> Handlers -> IO ()
+acceptLoop sock handlers =
   Monad.forever $ do
     (conn, _) <- Socket.accept sock
-    Concurrent.forkFinally (serve conn answer) (const (Socket.close conn))
+    Concurrent.forkFinally (serve conn handlers) (const (Socket.close conn))
 
-serve :: Socket.Socket -> IO Answer -> IO ()
-serve conn answer = do
+serve :: Socket.Socket -> Handlers -> IO ()
+serve conn handlers = do
   line <- receiveLine conn
-  Monad.when (asksForContext line) $ do
-    reply <- answer
-    SocketBS.sendAll conn (TE.encodeUtf8 (Json.encode (encodeAnswer reply) <> "\n"))
+  case requestOf line of
+    Nothing -> pure ()
+    Just AskContext -> do
+      reply <- handlersContext handlers
+      sendLine conn (encodeAnswer reply)
+    Just AskKeys -> do
+      groups <- handlersKeys handlers
+      sendLine conn (encodeKeys groups)
 
-asksForContext :: T.Text -> Bool
-asksForContext line =
-  Maybe.isJust (Json.field "context" =<< Json.decode line)
+sendLine :: Socket.Socket -> Json.Json -> IO ()
+sendLine conn json =
+  SocketBS.sendAll conn (TE.encodeUtf8 (Json.encode json <> "\n"))
+
+requestOf :: T.Text -> Maybe Request
+requestOf line = do
+  json <- Json.decode line
+  case (Json.field "context" json, Json.field "keys" json) of
+    (Just _, _) -> Just AskContext
+    (Nothing, Just _) -> Just AskKeys
+    (Nothing, Nothing) -> Nothing
 
 receiveLine :: Socket.Socket -> IO T.Text
 receiveLine sock =
@@ -111,6 +144,34 @@ encodeAnswer reply =
   case reply of
     Attach attachments -> Json.JObject [("attach", Json.JArray (map encodeAttachment (NEL.toList attachments)))]
     NoContext reason -> Json.JObject [("none", Json.JString reason)]
+
+encodeKeys :: [KeyGroup] -> Json.Json
+encodeKeys groups =
+  Json.JObject
+    [
+      ( "keys"
+      , Json.JObject
+          [ ("app", Json.JString "remax")
+          , ("groups", Json.JArray (map encodeGroup groups))
+          ]
+      )
+    ]
+
+encodeGroup :: KeyGroup -> Json.Json
+encodeGroup group =
+  Json.JObject
+    [ ("name", Json.JString (keyGroupName group))
+    , ("commands", Json.JArray (map encodeCommand (keyGroupCommands group)))
+    ]
+
+encodeCommand :: KeyCommand -> Json.Json
+encodeCommand command =
+  Json.JObject
+    ( [ ("label", Json.JString (keyCommandLabel command))
+      , ("keys", Json.JString (keyCommandKeys command))
+      ]
+        ++ maybe [] (\send -> [("send", Json.JString send)]) (keyCommandSend command)
+    )
 
 encodeAttachment :: Attachment -> Json.Json
 encodeAttachment attachment =
