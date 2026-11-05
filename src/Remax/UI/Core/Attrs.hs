@@ -498,23 +498,23 @@ mkAttrMap mth =
     Brick.attrMap baseAttr (tsPairs ++ uiPairs ++ settlePairs)
 
 harborBg, harborText, harborMuted, harborFaint, harborSurface, harborLine, harborSel, harborRemax :: V.Color
-harborBg = V.linearColor (0x15 :: Int) 0x17 0x1d
-harborText = V.linearColor (0xd5 :: Int) 0xd8 0xe0
-harborMuted = V.linearColor (0x86 :: Int) 0x8c 0x9c
-harborFaint = V.linearColor (0x4f :: Int) 0x55 0x66
-harborSurface = V.linearColor (0x1b :: Int) 0x1e 0x26
-harborLine = V.linearColor (0x2c :: Int) 0x31 0x3d
-harborSel = V.linearColor (0x28 :: Int) 0x33 0x50
-harborRemax = V.linearColor (0x9f :: Int) 0xd0 0x7e
+harborBg = V.linearColor (0x0f :: Int) 0x11 0x17
+harborText = V.linearColor (0xe8 :: Int) 0xeb 0xf2
+harborMuted = V.linearColor (0x92 :: Int) 0x98 0xab
+harborFaint = V.linearColor (0x56 :: Int) 0x5e 0x72
+harborSurface = V.linearColor (0x18 :: Int) 0x1b 0x24
+harborLine = V.linearColor (0x32 :: Int) 0x39 0x49
+harborSel = V.linearColor (0x2c :: Int) 0x3a 0x68
+harborRemax = V.linearColor (0xa2 :: Int) 0xe2 0x7a
 
 harborAdded, harborRemoved, harborAddedWash, harborRemovedWash, harborAddedWord, harborRemovedWord, harborWarning :: V.Color
-harborAdded = V.linearColor (0x9f :: Int) 0xd0 0x7e
-harborRemoved = V.linearColor (0xec :: Int) 0x7b 0x7b
-harborAddedWash = V.linearColor (0x1d :: Int) 0x2a 0x20
-harborRemovedWash = V.linearColor (0x2d :: Int) 0x1d 0x22
-harborAddedWord = V.linearColor (0x2c :: Int) 0x46 0x30
-harborRemovedWord = V.linearColor (0x4b :: Int) 0x2a 0x31
-harborWarning = V.linearColor (0xf0 :: Int) 0xa3 0x6a
+harborAdded = V.linearColor (0xa2 :: Int) 0xe2 0x7a
+harborRemoved = V.linearColor (0xff :: Int) 0x7f 0x86
+harborAddedWash = V.linearColor (0x18 :: Int) 0x2b 0x1c
+harborRemovedWash = V.linearColor (0x30 :: Int) 0x19 0x20
+harborAddedWord = V.linearColor (0x2b :: Int) 0x4e 0x30
+harborRemovedWord = V.linearColor (0x5a :: Int) 0x27 0x31
+harborWarning = V.linearColor (0xff :: Int) 0xa8 0x63
 
 -- The Quiet Ink · Tinted palette: jellybeans-adjacent literals, chosen
 -- in the temperaments mockups. linearColor keeps true 24-bit values;
