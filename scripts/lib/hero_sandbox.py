@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -141,7 +142,7 @@ def decline_komux_setup(env):
 
 
 def dock(text):
-    return next((line for line in text.splitlines() if 'claude │' in line), '')
+    return next((line for line in text.splitlines() if re.match(r'^\s*\S{1,2}\s+claude\s{2}', line)), '')
 
 
 def record(argv, cols, rows, cwd, env, session, tour, out_base, max_hold_s=1.2):
