@@ -66,7 +66,6 @@ module Remax.UI.Core.Types
   , OldToks (..)
   , St (..)
   , repoText
-  , subjectCrumb
   , titleCrumb
   , currentFile
   , currentFileMay

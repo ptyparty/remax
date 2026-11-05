@@ -52,6 +52,7 @@ import Remax.UI.Model.Watch qualified as Watch
 import Remax.UI.Model.Work qualified as WorkModel
 import Remax.Vi qualified as Vi
 import System.Environment qualified as Env
+import System.IO qualified as SysIO
 import System.Timeout qualified as Timeout
 
 data Startup = Startup
@@ -96,6 +97,7 @@ runReview mode pullMeta root roots story = do
     startBeats chan
     vty <- buildVty
     Brick.customMain vty buildVty (Just chan) app (parkAtStart (Tour.installTour (suTour startup) st0))
+  Monad.unless (T.null (Types.stTitle final)) clearTitle
   Store.finishPass (suConn startup) (Types.stPassId final)
   printSummary final
 
@@ -399,6 +401,11 @@ trueColorTerms =
   , "contour"
   , "rio"
   ]
+
+clearTitle :: IO ()
+clearTitle = do
+  SysIO.putStr "\ESC]2;\a"
+  SysIO.hFlush SysIO.stdout
 
 printSummary :: Types.St -> IO ()
 printSummary st = do

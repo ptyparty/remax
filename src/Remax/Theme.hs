@@ -65,10 +65,10 @@ loadTheme choice = do
     Config.ThemeNamed n -> pure (Just ([remaxThemes], n))
   found <- case chosen of
     Nothing -> pure Nothing
-    Just (dirs, n) -> loadChain home dirs n 0
+    Just (dirs, n) -> loadChain home dirs [] n 0
   case found of
     Just th -> pure (Just th)
-    Nothing -> loadChain home [] defaultThemeName 0
+    Nothing -> loadChain home [] [] defaultThemeName 0
 
 themeName :: FilePath -> IO (Maybe T.Text)
 themeName home = do
@@ -77,21 +77,21 @@ themeName home = do
     body <- got
     lookup "theme" (topLevelStrings body)
 
-loadChain :: FilePath -> [FilePath] -> T.Text -> Int -> IO (Maybe HelixTheme)
-loadChain home dirs name depth
+loadChain :: FilePath -> [FilePath] -> [FilePath] -> T.Text -> Int -> IO (Maybe HelixTheme)
+loadChain home dirs skipped name depth
   | depth > 5 = pure Nothing
   | otherwise = do
-      got <- themeBody home dirs name
+      got <- themeBody home dirs skipped name
       case got of
         Nothing -> pure Nothing
-        Just body -> do
+        Just (source, body) -> do
           let
             (scopes, palette, inherits) = parseTheme body
             self = HelixTheme scopes palette
           case inherits of
             Nothing -> pure (Just self)
             Just parent -> do
-              up <- loadChain home dirs parent (depth + 1)
+              up <- loadChain home dirs (Maybe.maybeToList source ++ skipped) parent (depth + 1)
               pure . Just $ case up of
                 Nothing -> self
                 Just p ->
@@ -101,12 +101,12 @@ loadChain home dirs name depth
 
 -- The theme's text, from the first place that has it: a theme file on
 -- disk, or the vendored copy embedded in the binary.
-themeBody :: FilePath -> [FilePath] -> T.Text -> IO (Maybe T.Text)
-themeBody home dirs name = do
-  found <- findThemeFile home dirs name
+themeBody :: FilePath -> [FilePath] -> [FilePath] -> T.Text -> IO (Maybe (Maybe FilePath, T.Text))
+themeBody home dirs skipped name = do
+  found <- findThemeFile home dirs skipped name
   case found of
-    Just path -> readMaybeFile path
-    Nothing -> pure (lookup name vendoredThemes)
+    Just path -> fmap ((,) (Just path)) <$> readMaybeFile path
+    Nothing -> pure ((,) Nothing <$> lookup name vendoredThemes)
 
 vendoredThemes :: [(T.Text, T.Text)]
 vendoredThemes =
@@ -114,8 +114,8 @@ vendoredThemes =
   , ("harbor", TE.decodeUtf8 $(FileEmbed.embedFile "vendor/themes/harbor.toml"))
   ]
 
-findThemeFile :: FilePath -> [FilePath] -> T.Text -> IO (Maybe FilePath)
-findThemeFile home dirs name = do
+findThemeFile :: FilePath -> [FilePath] -> [FilePath] -> T.Text -> IO (Maybe FilePath)
+findThemeFile home dirs skipped name = do
   runtimeEnv <- Env.lookupEnv "HELIX_RUNTIME"
   let
     file = T.unpack name ++ ".toml"
@@ -134,7 +134,7 @@ findThemeFile home dirs name = do
     go (p : ps) = do
       ok <- Directory.doesFileExist p
       if ok then pure (Just p) else go ps
-  go candidates
+  go (filter (`notElem` skipped) candidates)
 
 readMaybeFile :: FilePath -> IO (Maybe T.Text)
 readMaybeFile p = do
@@ -353,8 +353,6 @@ scopeStyleAttr mth name base =
         Just s -> styleToAttr th s base
         Nothing -> base
 
--- The attr for a scope only when the theme names that exact scope, with
--- no falling back through the dots.
 scopeExact :: Maybe HelixTheme -> T.Text -> Maybe V.Attr
 scopeExact mth name = do
   th <- mth

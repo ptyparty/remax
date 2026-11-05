@@ -46,8 +46,11 @@ statusBar st =
         <+> Brick.padLeft Brick.Max (Brick.txt "  " <+> hintsW (statusHint st) <+> Brick.txt " ")
 
 chip :: Brick.AttrName -> T.Text -> Brick.Widget Types.Name
-chip pillAttr label =
-  Brick.withAttr pillAttr (Brick.txt (" " <> T.toUpper label <> " "))
+chip pillAttr label = keyChip pillAttr (T.toUpper label)
+
+keyChip :: Brick.AttrName -> T.Text -> Brick.Widget Types.Name
+keyChip pillAttr label =
+  Brick.withAttr pillAttr (Brick.txt (" " <> label <> " "))
 
 hintsW :: T.Text -> Brick.Widget Types.Name
 hintsW hint =
@@ -87,9 +90,9 @@ modeChip st
         (if Modal.edMode (Types.npEd np) == Modal.Insert then Attrs.modePillInsAttr else Attrs.modePillNorAttr)
         ((if Modal.edMode (Types.npEd np) == Modal.Insert then "ins " else "nor ") <> popupWord wp)
   | Types.stSpace st = chip Attrs.modePillNorAttr "spc\8230"
-  | Types.stIdleGo st = chip Attrs.modePillNorAttr "g\8230"
+  | Types.stIdleGo st = keyChip Attrs.modePillNorAttr "g\8230"
   | otherwise = case Types.stEmacsPrefix st of
-      Just pfx -> chip Attrs.modePillNorAttr ("C-" <> T.singleton pfx <> "\8230")
+      Just pfx -> keyChip Attrs.modePillNorAttr ("C-" <> T.singleton pfx <> "\8230")
       Nothing -> case Config.cfgKeys (Types.stConfig st) of
         Config.KeysEmacs -> chip Attrs.modePillNorAttr "emx"
         Config.KeysVi -> viChip st
@@ -102,7 +105,7 @@ viChip st =
     Just fv -> case Modal.edMode (Types.fvEd fv) of
       Modal.Insert -> chip Attrs.modePillInsAttr "ins"
       Modal.Normal -> case Vi.viLabel (Types.stVi st) of
-        Just p -> chip Attrs.modePillNorAttr (p <> "\8230")
+        Just p -> keyChip Attrs.modePillNorAttr (p <> "\8230")
         Nothing
           | Modal.edExtend (Types.fvEd fv) -> chip Attrs.modePillNorAttr "vis"
           | otherwise -> chip Attrs.modePillNorAttr "vi"
@@ -114,7 +117,7 @@ helixChip st =
     Just fv -> case Modal.edMode (Types.fvEd fv) of
       Modal.Insert -> chip Attrs.modePillInsAttr "ins"
       Modal.Normal -> case Modal.pendingLabel (Types.fvEd fv) of
-        Just p -> chip Attrs.modePillNorAttr (p <> "\8230")
+        Just p -> keyChip Attrs.modePillNorAttr (p <> "\8230")
         Nothing -> chip Attrs.modePillNorAttr "nor"
 
 -- the startup warning scrolls away with the next message; this keeps

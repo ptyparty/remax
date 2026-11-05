@@ -45,8 +45,8 @@ launchEditor _ file line = do
       ) ::
         IO (Either Exception.IOException ())
     pure $ case got of
-      Left _ -> st {Types.stMsg = "could not launch " <> T.pack cmd}
-      Right () -> st
+      Left _ -> st {Types.stMsg = "could not launch " <> T.pack cmd, Types.stTitle = ""}
+      Right () -> st {Types.stTitle = ""}
 
 {- $EDITOR, hx-aware: helix takes file:line, the classic editors take
 +line, anything unrecognized just gets the file.

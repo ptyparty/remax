@@ -288,6 +288,7 @@ tsDeepScopes =
 
 data Chrome = Chrome
   { chBg :: V.Color
+  , chPaint :: V.MaybeDefault V.Color
   , chText :: V.Color
   , chMuted :: V.Color
   , chFaint :: V.Color
@@ -313,7 +314,13 @@ chromeOf mth =
     fgOr scope fallback = Maybe.fromMaybe fallback (Theme.scopeFg mth scope)
     bgOr scope fallback = Maybe.fromMaybe fallback (Theme.scopeBg mth scope)
     exactBg scope = Theme.scopeExact mth scope >>= backOf
-    bg = bgOr "ui.background" harborBg
+    exactFg scope = Theme.scopeExact mth scope >>= foreOf
+    named = Theme.scopeBg mth "ui.background"
+    bg = Maybe.fromMaybe harborBg named
+    paint = case (mth, named) of
+      (Nothing, _) -> V.SetTo harborBg
+      (Just _, Just c) -> V.SetTo c
+      (Just _, Nothing) -> V.Default
     text = fgOr "ui.text" harborText
     surface = bgOr "ui.statusline" harborSurface
     added = fgOr "diff.plus" harborAdded
@@ -326,18 +333,19 @@ chromeOf mth =
   in
     Chrome
       { chBg = bg
+      , chPaint = paint
       , chText = text
-      , chMuted = fgOr "ui.text.inactive" (mixOr 0.55 bg text harborMuted)
+      , chMuted = Maybe.fromMaybe (mixOr 0.55 bg text harborMuted) (exactFg "ui.text.inactive")
       , chFaint = fgOr "ui.linenr" harborFaint
       , chSurface = surface
-      , chSurface2 = bgOr "markup.raw.inline" (lighten 0x09 bg)
+      , chSurface2 = Maybe.fromMaybe (lighten 0x09 bg) (exactBg "markup.raw.inline")
       , -- A popup sits a hair above the body, and "a hair" has to be
         -- measured from the body when the theme names no popup surface:
         -- the body colour comes from the theme's ui.background, so a
         -- hardcoded surface drifts as far from it as the theme happens
         -- to be dark.
         chRaised = bgOr "ui.popup" (lighten 0x11 bg)
-      , chLine = fgOr "ui.virtual.indent-guide" (mixOr 0.12 bg text harborLine)
+      , chLine = Maybe.fromMaybe (mixOr 0.12 bg text harborLine) (exactFg "ui.virtual.indent-guide")
       , chSel = bgOr "ui.selection.primary" harborSel
       , chAccent = accent
       , chInsert = Maybe.fromMaybe accent (keepIf stands insertBg)
@@ -366,14 +374,18 @@ contrast a b =
         abs (lum r1 g1 b1 - lum r2 g2 b2)
     _ -> if a == b then 0 else 1
 
+foreOf :: V.Attr -> Maybe V.Color
+foreOf a =
+  case V.attrForeColor a of
+    V.SetTo c -> Just c
+    _ -> Nothing
+
 backOf :: V.Attr -> Maybe V.Color
 backOf a =
   case V.attrBackColor a of
     V.SetTo c -> Just c
     _ -> Nothing
 
--- A share of the way from one colour to another. Only truecolor values
--- have channels to blend; anything else takes the fallback.
 mixOr :: Double -> V.Color -> V.Color -> V.Color -> V.Color
 mixOr amount from to fallback =
   case (from, to) of
@@ -384,13 +396,15 @@ mixOr amount from to fallback =
         V.linearColor (step r1 r2) (step g1 g2) (step b1 b2)
     _ -> fallback
 
--- The attr the body's raw border fills are drawn in.
 borderFill :: Maybe Theme.HelixTheme -> V.Attr
 borderFill mth =
   let
     ch = chromeOf mth
   in
-    BrickUtil.fg (chLine ch) `V.withBackColor` chBg ch
+    withPaint ch (BrickUtil.fg (chLine ch))
+
+withPaint :: Chrome -> V.Attr -> V.Attr
+withPaint ch a = a {V.attrBackColor = chPaint ch}
 
 mkAttrMap :: Maybe Theme.HelixTheme -> Brick.AttrMap
 mkAttrMap mth =
@@ -404,7 +418,7 @@ mkAttrMap mth =
           (\s -> (Highlight.tsScopeAttr s, Theme.scopeAttr mth s V.defAttr))
           (filter (Theme.hasScope th) tsDeepScopes)
     tsPairs = map topPair tsTopScopes ++ deepPairs
-    baseAttr = V.defAttr `V.withForeColor` chText ch `V.withBackColor` chBg ch
+    baseAttr = withPaint ch (V.defAttr `V.withForeColor` chText ch)
     onRaised a = a `V.withBackColor` chRaised ch
     fgOf c = BrickUtil.fg c
     washOf c = V.defAttr `V.withBackColor` c
