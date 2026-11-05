@@ -7,6 +7,7 @@ module Remax.UI.Draw.Status
 
 import Brick ((<+>))
 import Brick qualified as Brick
+import Data.Char qualified as Char
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
@@ -35,22 +36,45 @@ statusBar st =
       (_, Just (Types.PathPrompt label input _)) -> Brick.txt (label <> input <> "\9612")
       (_, Nothing) -> Brick.withAttr Attrs.msgAttr (Brick.txt (Widgets.padT (Types.stMsg st)))
   in
-    Brick.withDefAttr Attrs.statusAttr $
+    Brick.withDefAttr Attrs.statusLineAttr $
       modeChip st
         <+> (if Maybe.isJust (Types.stPullView st) then Brick.withAttr Attrs.hintAttr (Brick.txt " PR view ") else Brick.txt "")
         <+> pollChip st
         <+> placeSeg st
         <+> Brick.txt "  "
         <+> middle
-        <+> Brick.padLeft Brick.Max (Brick.withAttr Attrs.hintAttr (Brick.txt ("  " <> statusHint st)))
+        <+> Brick.padLeft Brick.Max (Brick.txt "  " <+> hintsW (statusHint st) <+> Brick.txt " ")
 
 chip :: Brick.AttrName -> T.Text -> Brick.Widget Types.Name
-chip dotAttr label =
-  Brick.hBox
-    [ Brick.txt " "
-    , Brick.withAttr dotAttr (Brick.txt "\9679")
-    , Brick.withAttr Attrs.statusAttr (Brick.txt (" " <> label <> " "))
-    ]
+chip pillAttr label =
+  Brick.withAttr pillAttr (Brick.txt (" " <> T.toUpper label <> " "))
+
+hintsW :: T.Text -> Brick.Widget Types.Name
+hintsW hint =
+  let
+    pieces = filter (not . T.null) (map T.strip (concatMap (T.splitOn "   ") (T.splitOn "\183" hint)))
+  in
+    Brick.hBox (List.intersperse (Brick.txt "  ") (map hintPiece pieces))
+
+hintPiece :: T.Text -> Brick.Widget Types.Name
+hintPiece piece =
+  let
+    ws = T.words piece
+    (keys, label) = case List.span keyLike ws of
+      (k, []) | length k > 1 -> (init k, [last k])
+      split -> split
+  in
+    if null keys || null label
+      then Brick.withAttr Attrs.hintAttr (Brick.txt piece)
+      else
+        Brick.hBox
+          [ Brick.withAttr Attrs.hintKeyAttr (Brick.txt (T.unwords keys))
+          , Brick.withAttr Attrs.hintAttr (Brick.txt (" " <> T.unwords label))
+          ]
+
+keyLike :: T.Text -> Bool
+keyLike w =
+  T.length w <= 2 || T.any (not . Char.isAlpha) w || w `elem` ["esc", "Esc", "tab", "enter"]
 
 -- what the buffer is waiting for, most specific first: the space
 -- menu, an emacs chord, a half-typed vi command, insert, then plain
@@ -60,38 +84,38 @@ modeChip st
   | Just np <- Types.stNotePopup st
   , Types.WorkFor wp <- Types.npPurpose np =
       chip
-        (if Modal.edMode (Types.npEd np) == Modal.Insert then Attrs.modeDotInsAttr else Attrs.modeDotNorAttr)
+        (if Modal.edMode (Types.npEd np) == Modal.Insert then Attrs.modePillInsAttr else Attrs.modePillNorAttr)
         ((if Modal.edMode (Types.npEd np) == Modal.Insert then "ins " else "nor ") <> popupWord wp)
-  | Types.stSpace st = chip Attrs.modeDotNorAttr "spc\8230"
-  | Types.stIdleGo st = chip Attrs.modeDotNorAttr "g\8230"
+  | Types.stSpace st = chip Attrs.modePillNorAttr "spc\8230"
+  | Types.stIdleGo st = chip Attrs.modePillNorAttr "g\8230"
   | otherwise = case Types.stEmacsPrefix st of
-      Just pfx -> chip Attrs.modeDotNorAttr ("C-" <> T.singleton pfx <> "\8230")
+      Just pfx -> chip Attrs.modePillNorAttr ("C-" <> T.singleton pfx <> "\8230")
       Nothing -> case Config.cfgKeys (Types.stConfig st) of
-        Config.KeysEmacs -> chip Attrs.modeDotNorAttr "emx"
+        Config.KeysEmacs -> chip Attrs.modePillNorAttr "emx"
         Config.KeysVi -> viChip st
         Config.KeysHelix -> helixChip st
 
 viChip :: Types.St -> Brick.Widget Types.Name
 viChip st =
   case Types.currentFileMay st of
-    Nothing -> chip Attrs.modeDotNorAttr "vi"
+    Nothing -> chip Attrs.modePillNorAttr "vi"
     Just fv -> case Modal.edMode (Types.fvEd fv) of
-      Modal.Insert -> chip Attrs.modeDotInsAttr "ins"
+      Modal.Insert -> chip Attrs.modePillInsAttr "ins"
       Modal.Normal -> case Vi.viLabel (Types.stVi st) of
-        Just p -> chip Attrs.modeDotNorAttr (p <> "\8230")
+        Just p -> chip Attrs.modePillNorAttr (p <> "\8230")
         Nothing
-          | Modal.edExtend (Types.fvEd fv) -> chip Attrs.modeDotNorAttr "vis"
-          | otherwise -> chip Attrs.modeDotNorAttr "vi"
+          | Modal.edExtend (Types.fvEd fv) -> chip Attrs.modePillNorAttr "vis"
+          | otherwise -> chip Attrs.modePillNorAttr "vi"
 
 helixChip :: Types.St -> Brick.Widget Types.Name
 helixChip st =
   case Types.currentFileMay st of
-    Nothing -> chip Attrs.modeDotNorAttr "nor"
+    Nothing -> chip Attrs.modePillNorAttr "nor"
     Just fv -> case Modal.edMode (Types.fvEd fv) of
-      Modal.Insert -> chip Attrs.modeDotInsAttr "ins"
+      Modal.Insert -> chip Attrs.modePillInsAttr "ins"
       Modal.Normal -> case Modal.pendingLabel (Types.fvEd fv) of
-        Just p -> chip Attrs.modeDotNorAttr (p <> "\8230")
-        Nothing -> chip Attrs.modeDotNorAttr "nor"
+        Just p -> chip Attrs.modePillNorAttr (p <> "\8230")
+        Nothing -> chip Attrs.modePillNorAttr "nor"
 
 -- the startup warning scrolls away with the next message; this keeps
 -- "the watcher is a second behind" on screen for the whole session
@@ -105,7 +129,7 @@ placeSeg :: Types.St -> Brick.Widget Types.Name
 placeSeg st =
   case Maybe.catMaybes [declSeg st, meterSeg st] of
     [] -> Brick.txt ""
-    segs -> Brick.hBox (Brick.txt " " : List.intersperse (Brick.withAttr Attrs.trayDeclAttr (Brick.txt " \183  ")) segs)
+    segs -> Brick.hBox (Brick.txt " " : List.intersperse (Brick.withAttr Attrs.hintAttr (Brick.txt "  \183  ")) segs)
 
 declSeg :: Types.St -> Maybe (Brick.Widget Types.Name)
 declSeg st =
@@ -114,7 +138,7 @@ declSeg st =
       -- nearest decl at or above the cursor, found by walking up
       -- from it rather than rebuilding the buffer every frame
       case List.find View.isDeclLine (Modal.bufferUpward (Types.fvEd fv)) of
-        Just d -> Just (Brick.withAttr Attrs.trayDeclAttr (Brick.txt (T.take 32 (View.declName d))))
+        Just d -> Just (Brick.withAttr Attrs.statusPlaceAttr (Brick.txt (T.take 32 (View.declName d))))
         Nothing -> Nothing
     Nothing -> Nothing
 

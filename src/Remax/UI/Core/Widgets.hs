@@ -18,8 +18,6 @@ module Remax.UI.Core.Widgets
 
 import Brick qualified as Brick
 import Brick.Types qualified as BrickTypes
-import Brick.Widgets.Border qualified as Border
-import Brick.Widgets.Border.Style qualified as BorderStyle
 import Brick.Widgets.Center qualified as Center
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
@@ -33,22 +31,30 @@ import Remax.UI.Core.Types qualified as Types
 hairline :: BrickTypes.Widget Types.Name
 hairline = Brick.vLimit 1 (Brick.withAttr Attrs.hairAttr (Brick.fill '\9472'))
 
--- Shared float chrome: rounded frame with the title in the border, an
--- elevated surface, inner breathing room, and a dim hint as the last
--- interior row.
--- The bordered box every popup is drawn in, without saying where it goes.
+-- Shared float chrome: a card on the raised surface with a stripe down
+-- its left edge, the title in bold as its first row, inner breathing
+-- room, and a dim hint as the last interior row.
+-- The card every popup is drawn in, without saying where it goes.
 frameBox :: T.Text -> T.Text -> BrickTypes.Widget Types.Name -> BrickTypes.Widget Types.Name
 frameBox title hint body =
-  Brick.withDefAttr Attrs.floatAttr
-    . Brick.withBorderStyle BorderStyle.unicodeRounded
-    . Border.borderWithLabel (Brick.withAttr Attrs.floatTitleAttr (Brick.txt (" " <> title <> " ")))
-    . Brick.padTop (Brick.Pad 1)
-    . Brick.padLeft (Brick.Pad 2)
-    . Brick.padRight (Brick.Pad 2)
-    $ Brick.vBox
-      [ body
-      , Brick.padTop (Brick.Pad 1) (Brick.withAttr Attrs.hintAttr (Brick.txt hint))
-      ]
+  let
+    inner =
+      Brick.padTopBottom 1
+        . Brick.padLeft (Brick.Pad 2)
+        . Brick.padRight (Brick.Pad 2)
+        $ Brick.vBox
+          [ Brick.withAttr Attrs.floatTitleAttr (Brick.txt title)
+          , Brick.padTop (Brick.Pad 1) body
+          , Brick.padTop (Brick.Pad 1) (Brick.withAttr Attrs.hintAttr (Brick.txt hint))
+          ]
+  in
+    Brick.withDefAttr Attrs.floatAttr $
+      BrickTypes.Widget BrickTypes.Fixed BrickTypes.Fixed $ do
+        drawn <- BrickTypes.render inner
+        let
+          rows = V.imageHeight (Brick.image drawn)
+          stripe = Brick.withAttr Attrs.floatStripeAttr (Brick.vLimit rows (Brick.hLimit 1 (Brick.fill '\9614')))
+        BrickTypes.render (Brick.hBox [stripe, BrickTypes.Widget BrickTypes.Fixed BrickTypes.Fixed (pure drawn)])
 
 floatFrame :: T.Text -> T.Text -> BrickTypes.Widget Types.Name -> BrickTypes.Widget Types.Name
 floatFrame title hint = Center.centerLayer . frameBox title hint

@@ -110,6 +110,7 @@ extra-source-files:
     vendor/grammars/typescript/src/tree_sitter/parser.h
     vendor/grammars/yaml/src/tree_sitter/parser.h
     vendor/grammars/QUERY-LICENSE.md
+    vendor/themes/harbor.toml
     vendor/themes/jellybeans.toml
     vendor/themes/THEME-LICENSE.md
 

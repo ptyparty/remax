@@ -1,0 +1,165 @@
+# Harbor
+# A deep ink-navy theme with lifted surfaces, shared by komux, quoll,
+# remax and kowari. Works as a helix theme too.
+#
+# remax also reads four scopes helix does not use: diff.plus.line and
+# diff.minus.line wash a whole changed line, diff.plus.word and
+# diff.minus.word the changed words inside it.
+
+"attribute" = "type"
+"type" = "type"
+"type.builtin" = "type"
+"type.enum.variant" = "number"
+"constructor" = "type"
+"constant" = "number"
+"constant.builtin" = "number"
+"constant.builtin.boolean" = "number"
+"constant.character" = "string"
+"constant.character.escape" = "operator"
+"constant.numeric" = "number"
+"string" = "string"
+"string.regexp" = "operator"
+"string.special" = "operator"
+"string.special.url" = { fg = "string", modifiers = ["underlined"] }
+"comment" = { fg = "comment", modifiers = ["italic"] }
+"comment.block.documentation" = { fg = "comment", modifiers = ["italic"] }
+
+"variable" = "text"
+"variable.builtin" = "keyword"
+"variable.parameter" = "text"
+"variable.other.member" = "text"
+"label" = "operator"
+"punctuation" = "punctuation"
+"punctuation.bracket" = "punctuation"
+"punctuation.delimiter" = "punctuation"
+"punctuation.special" = "operator"
+"keyword" = "keyword"
+"keyword.control" = "keyword"
+"keyword.control.import" = "keyword"
+"keyword.control.exception" = "keyword"
+"keyword.operator" = "keyword"
+"keyword.directive" = "keyword"
+"keyword.storage" = "keyword"
+"operator" = "operator"
+"function" = "function"
+"function.builtin" = "function"
+"function.method" = "function"
+"function.macro" = "keyword"
+"function.special" = "function"
+"tag" = "keyword"
+"special" = "operator"
+"namespace" = "type"
+
+"markup.heading" = { fg = "quoll", modifiers = ["bold"] }
+"markup.bold" = { fg = "text", modifiers = ["bold"] }
+"markup.italic" = { modifiers = ["italic"] }
+"markup.strikethrough" = { modifiers = ["crossed_out"] }
+"markup.list" = "muted"
+"markup.list.numbered" = "muted"
+"markup.list.unnumbered" = "muted"
+"markup.list.checked" = "added"
+"markup.list.unchecked" = "muted"
+"markup.link.url" = { fg = "function", modifiers = ["underlined"] }
+"markup.link.text" = "function"
+"markup.link.label" = "type"
+"markup.quote" = { fg = "muted", modifiers = ["italic"] }
+"markup.raw" = "string"
+"markup.raw.inline" = { fg = "text", bg = "surface2" }
+"markup.raw.block" = "text"
+
+"diff.plus" = "added"
+"diff.minus" = "removed"
+"diff.delta" = "warning"
+"diff.delta.moved" = "function"
+"diff.plus.line" = { bg = "added_wash" }
+"diff.minus.line" = { bg = "removed_wash" }
+"diff.plus.word" = { bg = "added_word" }
+"diff.minus.word" = { bg = "removed_word" }
+
+"ui.background" = { fg = "text", bg = "bg" }
+"ui.background.separator" = { bg = "surface" }
+"ui.text" = "text"
+"ui.text.focus" = { fg = "text", bg = "selection" }
+"ui.text.inactive" = "muted"
+"ui.text.info" = { fg = "text", bg = "raised" }
+"ui.cursor" = { fg = "bg", bg = "muted" }
+"ui.cursor.primary" = { fg = "bg", bg = "text" }
+"ui.cursor.insert" = { fg = "bg", bg = "remax" }
+"ui.cursor.select" = { fg = "bg", bg = "komux" }
+"ui.cursor.match" = { fg = "text", bg = "line", modifiers = ["bold"] }
+"ui.cursorline.primary" = { bg = "surface" }
+"ui.cursorline.secondary" = { bg = "surface" }
+"ui.linenr" = "faint"
+"ui.linenr.selected" = "text"
+"ui.gutter" = { bg = "bg" }
+"ui.statusline" = { fg = "text", bg = "surface" }
+"ui.statusline.inactive" = { fg = "muted", bg = "surface" }
+"ui.statusline.normal" = { fg = "bg", bg = "remax", modifiers = ["bold"] }
+"ui.statusline.insert" = { fg = "bg", bg = "remax", modifiers = ["bold"] }
+"ui.statusline.select" = { fg = "bg", bg = "komux", modifiers = ["bold"] }
+"ui.statusline.separator" = "faint"
+"ui.bufferline" = { fg = "muted", bg = "surface" }
+"ui.bufferline.active" = { fg = "text", bg = "raised" }
+"ui.bufferline.background" = { bg = "surface" }
+"ui.popup" = { fg = "text", bg = "raised" }
+"ui.popup.info" = { fg = "text", bg = "raised" }
+"ui.window" = { fg = "line" }
+"ui.help" = { fg = "text", bg = "raised" }
+"ui.menu" = { fg = "text", bg = "raised" }
+"ui.menu.selected" = { fg = "text", bg = "selection" }
+"ui.menu.scroll" = { fg = "faint", bg = "raised" }
+"ui.selection" = { bg = "selection" }
+"ui.selection.primary" = { bg = "selection" }
+"ui.highlight" = { bg = "surface2" }
+"ui.virtual" = "faint"
+"ui.virtual.ruler" = { bg = "surface" }
+"ui.virtual.whitespace" = "line"
+"ui.virtual.indent-guide" = "line"
+"ui.virtual.inlay-hint" = "faint"
+"ui.virtual.jump-label" = { fg = "quoll", modifiers = ["bold"] }
+
+"hint" = "kowari"
+"info" = "komux"
+"warning" = "warning"
+"error" = "error"
+"diagnostic.hint" = { underline = { color = "kowari", style = "curl" } }
+"diagnostic.info" = { underline = { color = "komux", style = "curl" } }
+"diagnostic.warning" = { underline = { color = "warning", style = "curl" } }
+"diagnostic.error" = { underline = { color = "error", style = "curl" } }
+"diagnostic.unnecessary" = { modifiers = ["dim"] }
+"diagnostic.deprecated" = { modifiers = ["crossed_out"] }
+
+[palette]
+bg = "#15171d"
+surface = "#1b1e26"
+surface2 = "#20242d"
+raised = "#262a35"
+line = "#2c313d"
+text = "#d5d8e0"
+muted = "#868c9c"
+faint = "#4f5566"
+selection = "#283350"
+
+komux = "#8ea8ff"
+quoll = "#e9b765"
+remax = "#9fd07e"
+kowari = "#66c7c2"
+
+added = "#9fd07e"
+removed = "#ec7b7b"
+added_wash = "#1d2a20"
+removed_wash = "#2d1d22"
+added_word = "#2c4630"
+removed_word = "#4b2a31"
+ok = "#9fd07e"
+warning = "#f0a36a"
+error = "#ef6b6b"
+
+keyword = "#b99cf0"
+function = "#8ea8ff"
+type = "#66c7c2"
+string = "#a9d48a"
+number = "#f2a2c0"
+operator = "#c9b27f"
+comment = "#6b7285"
+punctuation = "#9aa0b0"
