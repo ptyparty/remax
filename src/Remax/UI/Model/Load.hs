@@ -315,7 +315,7 @@ ensureCurrentHighlighted = do
     Nothing -> pure ()
     Just fv
       | Types.fvHighlighted fv -> pure ()
-      | Types.fvRowCount fv <= highlightInlineRows -> do
+      | Modal.bufferLineCount (Types.fvEd fv) + length (Types.fvBase fv) <= highlightInlineRows -> do
           got <- MonadIO.liftIO (bothSides fv)
           State.modify (Verdict.updateFile i (withTokensOf got))
       | Types.stHighlighting st == Just (Types.fvPath fv) -> pure ()

@@ -166,8 +166,9 @@ another file is picked up when you visit it.
   theme directories. Colors render as exact 24-bit values when
   `COLORTERM` says the terminal can (the same signal helix trusts) —
   otherwise the terminal's palette approximation applies. Hunks are decorated in place by a live diff
-  against the base: removed lines float inline in a muted rose, and
-  reviewed lines keep their full syntax colors on the plain background.
+  against the base: removed lines float inline in their own syntax
+  colors (a muted rose for files with no grammar), and reviewed lines
+  keep their full syntax colors on the plain background.
   Lines still waiting on a verdict sit on a green wash when added and a
   red one when removed (the words that changed inside them a shade
   deeper), flagged lines on an orange one and questioned lines on an

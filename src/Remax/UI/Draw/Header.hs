@@ -181,7 +181,7 @@ headerBar st place =
     lead = case Types.stTitleHost st of
       Types.HostShowsTitle -> []
       Types.HostHidesTitle ->
-        [ Brick.withAttr Attrs.headerFileAttr (Brick.txt (" " <> crumbPath st))
+        [ Brick.withAttr Attrs.headerFileAttr (Brick.txt (" " <> Types.titleCrumb st))
         , Brick.withAttr Attrs.headerAttr (Brick.txt " \183")
         ]
     trailing = filter (not . T.null . fst) (fileSegs st ++ [rebaseSeg st, watchSeg st, busySeg st])
@@ -189,10 +189,6 @@ headerBar st place =
   in
     Brick.withDefAttr Attrs.headerAttr $
       Brick.hBox (lead ++ [place, Brick.txt "  ", Brick.hBox shown, Brick.txt " "])
-
-crumbPath :: Types.St -> T.Text
-crumbPath st =
-  Types.subjectCrumb st <> " \8250 " <> maybe "all clear" (T.pack . Types.fvPath) (Types.currentFileMay st)
 
 rebaseSeg :: Types.St -> (T.Text, Brick.Widget Types.Name)
 rebaseSeg st =
