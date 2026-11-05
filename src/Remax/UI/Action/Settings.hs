@@ -26,6 +26,8 @@ import Remax.Config qualified as Config
 import Remax.DiffModel qualified as DiffModel
 import Remax.Git qualified as Git
 import Remax.Store qualified as Store
+import Remax.Theme qualified as Theme
+import Remax.UI.Core.Attrs qualified as Attrs
 import Remax.UI.Core.Tour qualified as Tour
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Model.Load qualified as Load
@@ -48,6 +50,7 @@ settingNames =
   , "piece-min"
   , "piece-max"
   , "pr-worktree"
+  , "theme"
   ]
 
 settingValue :: Config.Config -> T.Text -> T.Text
@@ -65,6 +68,7 @@ settingValue cfg key =
     "piece-min" -> Types.tshow (DiffModel.pieceMin (Config.cfgSplit cfg))
     "piece-max" -> Types.tshow (DiffModel.pieceMax (Config.cfgSplit cfg))
     "pr-worktree" -> Config.cfgPrWorktree cfg
+    "theme" -> Config.themeChoiceToText (Config.cfgTheme cfg)
     _ -> "?"
 
 showSettings :: Brick.EventM Types.Name Types.St ()
@@ -136,7 +140,17 @@ applySet key val = do
         (\n -> cfg {Config.cfgSplit = splitWith (\sc -> sc {DiffModel.pieceMax = max 2 n})})
         Load.rebuildAllFiles
     "pr-worktree" -> finish cfg {Config.cfgPrWorktree = val} (pure ())
+    "theme" ->
+      let
+        choice = Config.themeChoiceFromText val
+      in
+        finish cfg {Config.cfgTheme = choice} (applyTheme choice)
     _ -> Types.setMsg ("unknown setting: " <> key)
+
+applyTheme :: Config.ThemeChoice -> Brick.EventM Types.Name Types.St ()
+applyTheme choice = do
+  theme <- MonadIO.liftIO (Theme.loadTheme choice)
+  State.modify (\s -> s {Types.stAttrs = Attrs.mkAttrMap theme, Types.stBorder = Attrs.borderFill theme})
 
 toggleIgnoreWs :: Brick.EventM Types.Name Types.St ()
 toggleIgnoreWs = do

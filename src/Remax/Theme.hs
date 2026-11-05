@@ -1,16 +1,21 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 
--- Load the user's helix theme so the review colors match the editor they
--- live in. Themes are simple TOML: scope keys mapping to a color name or
+-- Load the theme remax draws in: the vendored Harbor by default, the
+-- user's helix theme when asked to follow helix, or any theme by name.
+-- Themes are helix's simple TOML: scope keys mapping to a color name or
 -- an inline { fg, bg, modifiers } table, a [palette] of named colors, and
 -- an optional `inherits` chain. Only that subset is parsed; anything
--- unrecognized is skipped, and any failure falls back to Nothing so the
--- caller can use its built-in palette.
+-- unrecognized is skipped, and a theme that cannot be loaded falls back
+-- to Harbor.
 module Remax.Theme
   ( HelixTheme
-  , loadHelixTheme
+  , loadTheme
+  , defaultThemeName
   , scopeAttr
+  , scopeExact
+  , scopeFg
+  , scopeBg
   , scopeStyleAttr
   , hasScope
   ) where
@@ -25,6 +30,7 @@ import Data.Text.Encoding qualified as TE
 import Data.Text.IO qualified as TIO
 import Graphics.Vty qualified as V
 import Numeric qualified as Numeric
+import Remax.Config qualified as Config
 import System.Directory qualified as Directory
 import System.Environment qualified as Env
 import System.FilePath ((</>))
@@ -40,18 +46,29 @@ data HelixTheme = HelixTheme
   , htPalette :: Map.Map T.Text T.Text
   }
 
--- ~/.config/helix/config.toml names the theme; the theme file is looked
--- up in the user's theme directory first, then in any helix runtime on
--- the machine, and finally in the themes vendored into the binary — so
--- an inherits chain resolves even with no helix runtime installed
--- (helix AppImages mount theirs only while helix runs).
-loadHelixTheme :: IO (Maybe HelixTheme)
-loadHelixTheme = do
+defaultThemeName :: T.Text
+defaultThemeName = "harbor"
+
+-- Following helix, ~/.config/helix/config.toml names the theme; a
+-- named theme is looked up in remax's own theme directory first. Either
+-- way the theme file is then looked up in the user's helix theme
+-- directory, then in any helix runtime on the machine, and finally in
+-- the themes vendored into the binary — so an inherits chain resolves
+-- even with no helix runtime installed (helix AppImages mount theirs
+-- only while helix runs). A theme found nowhere leaves Harbor in charge.
+loadTheme :: Config.ThemeChoice -> IO (Maybe HelixTheme)
+loadTheme choice = do
   home <- Directory.getHomeDirectory
-  name <- themeName home
-  case name of
+  remaxThemes <- Directory.getXdgDirectory Directory.XdgConfig ("remax" </> "themes")
+  chosen <- case choice of
+    Config.ThemeFollowsHelix -> fmap (fmap ((,) [])) (themeName home)
+    Config.ThemeNamed n -> pure (Just ([remaxThemes], n))
+  found <- case chosen of
     Nothing -> pure Nothing
-    Just n -> loadChain home n 0
+    Just (dirs, n) -> loadChain home dirs n 0
+  case found of
+    Just th -> pure (Just th)
+    Nothing -> loadChain home [] defaultThemeName 0
 
 themeName :: FilePath -> IO (Maybe T.Text)
 themeName home = do
@@ -60,11 +77,11 @@ themeName home = do
     body <- got
     lookup "theme" (topLevelStrings body)
 
-loadChain :: FilePath -> T.Text -> Int -> IO (Maybe HelixTheme)
-loadChain home name depth
+loadChain :: FilePath -> [FilePath] -> T.Text -> Int -> IO (Maybe HelixTheme)
+loadChain home dirs name depth
   | depth > 5 = pure Nothing
   | otherwise = do
-      got <- themeBody home name
+      got <- themeBody home dirs name
       case got of
         Nothing -> pure Nothing
         Just body -> do
@@ -74,7 +91,7 @@ loadChain home name depth
           case inherits of
             Nothing -> pure (Just self)
             Just parent -> do
-              up <- loadChain home parent (depth + 1)
+              up <- loadChain home dirs parent (depth + 1)
               pure . Just $ case up of
                 Nothing -> self
                 Just p ->
@@ -84,9 +101,9 @@ loadChain home name depth
 
 -- The theme's text, from the first place that has it: a theme file on
 -- disk, or the vendored copy embedded in the binary.
-themeBody :: FilePath -> T.Text -> IO (Maybe T.Text)
-themeBody home name = do
-  found <- findThemeFile home name
+themeBody :: FilePath -> [FilePath] -> T.Text -> IO (Maybe T.Text)
+themeBody home dirs name = do
+  found <- findThemeFile home dirs name
   case found of
     Just path -> readMaybeFile path
     Nothing -> pure (lookup name vendoredThemes)
@@ -94,10 +111,11 @@ themeBody home name = do
 vendoredThemes :: [(T.Text, T.Text)]
 vendoredThemes =
   [ ("jellybeans", TE.decodeUtf8 $(FileEmbed.embedFile "vendor/themes/jellybeans.toml"))
+  , ("harbor", TE.decodeUtf8 $(FileEmbed.embedFile "vendor/themes/harbor.toml"))
   ]
 
-findThemeFile :: FilePath -> T.Text -> IO (Maybe FilePath)
-findThemeFile home name = do
+findThemeFile :: FilePath -> [FilePath] -> T.Text -> IO (Maybe FilePath)
+findThemeFile home dirs name = do
   runtimeEnv <- Env.lookupEnv "HELIX_RUNTIME"
   let
     file = T.unpack name ++ ".toml"
@@ -105,7 +123,8 @@ findThemeFile home name = do
       Just rt -> [rt </> "themes" </> file]
       Nothing -> []
     candidates =
-      [home </> ".config" </> "helix" </> "themes" </> file]
+      map (</> file) dirs
+        ++ [home </> ".config" </> "helix" </> "themes" </> file]
         ++ envCandidates
         ++ [ home </> ".config" </> "helix" </> "runtime" </> "themes" </> file
            , "/usr/lib/helix/runtime/themes" </> file
@@ -333,3 +352,29 @@ scopeStyleAttr mth name base =
       case lookupScope th name of
         Just s -> styleToAttr th s base
         Nothing -> base
+
+-- The attr for a scope only when the theme names that exact scope, with
+-- no falling back through the dots.
+scopeExact :: Maybe HelixTheme -> T.Text -> Maybe V.Attr
+scopeExact mth name = do
+  th <- mth
+  s <- Map.lookup name (htScopes th)
+  pure (styleToAttr th s V.defAttr)
+
+scopeFg :: Maybe HelixTheme -> T.Text -> Maybe V.Color
+scopeFg mth name = setColor . V.attrForeColor =<< scopeResolved mth name
+
+scopeBg :: Maybe HelixTheme -> T.Text -> Maybe V.Color
+scopeBg mth name = setColor . V.attrBackColor =<< scopeResolved mth name
+
+scopeResolved :: Maybe HelixTheme -> T.Text -> Maybe V.Attr
+scopeResolved mth name = do
+  th <- mth
+  s <- lookupScope th name
+  pure (styleToAttr th s V.defAttr)
+
+setColor :: V.MaybeDefault V.Color -> Maybe V.Color
+setColor m =
+  case m of
+    V.SetTo c -> Just c
+    _ -> Nothing

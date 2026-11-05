@@ -115,12 +115,15 @@ another file is picked up when you visit it.
 
 ## The screen
 
-- Header: mode, current file, file/hunk position, pending count.
-- Git bar: its own full-width line under the header, always there —
-  the branch you're on (or `detached`), and the sha and subject of the
-  commit HEAD is at, with `Space c` for the full message. During a
-  rebase the same line becomes the rebase bar (step, sha, subject),
-  because it answers the same question.
+- Header: one quiet row over a hairline. On the left, the branch you're
+  on (or `detached`) and the sha and subject of the commit HEAD is at
+  (`Space c` shows the full message); during a rebase the same place
+  holds the rebase bar (step, sha, subject), because it answers the same
+  question. On the right, the hunk and file position, the pending count
+  and whatever is going on (`following edits`, a tour stop, a job).
+  The mode and current file (`uncommitted › src/coupons.ts`, or
+  `PR #12 › src/coupons.ts`) go in the terminal title, which komux shows
+  on the pane's header strip; outside komux they also lead the row.
 - Tray (left, `Tab` collapses): hunks grouped by file, with per-hunk
   marks — `·` pending, `✓` reviewed, `!` flagged, `?` questioned. The
   tool starts in **pending-only** mode: fully *reviewed* hunks fold under
@@ -137,7 +140,7 @@ another file is picked up when you visit it.
   way. `{` / `}` scroll the tray; it auto-centers on the current hunk
   when you jump. Long paths compress like `s/R/Quote.hs` so the file
   name always survives.
-- The tray/body divider (thin `▎`, in the darker `ui.linenr` gray) runs
+- The tray/body divider (thin `▎`, in the theme's hairline colour) runs
   the full pane height and doubles as the current-hunk indicator: across
   the current hunk's rows it widens to a half-block `▌` in the highlight
   color, so the hunk's extent reads at a glance. Next to it, a status
@@ -151,29 +154,34 @@ another file is picked up when you visit it.
   (picked by extension, or by the **shebang** when there isn't one — so
   `scripts/build` highlights as bash on the strength of its first line,
   and `#!/usr/bin/env -S bash --norc` names bash rather than env)
-  with **your helix theme** (the `theme` from `~/.config/helix/config.toml`,
-  `inherits` followed, palette resolved; a built-in scope palette covers
-  users without helix). The jellybeans base theme is embedded in the
-  binary, so an `inherits = "jellybeans"` chain resolves even with no
-  helix runtime on disk (AppImage installs mount theirs only while helix
-  runs); other parents are found via `$HELIX_RUNTIME` or the usual helix
+  in **Harbor**, the theme remax ships with (see `theme` under
+  *Configuration* to follow your helix theme or name another). Themes
+  are helix themes, `inherits` followed and palette resolved; the chrome
+  takes its surfaces from the theme's `ui.*` scopes, so another theme
+  still looks of a piece. Harbor and the jellybeans base theme are
+  embedded in the binary, so an `inherits = "jellybeans"` chain resolves
+  even with no helix runtime on disk (AppImage installs mount theirs
+  only while helix runs); other parents are found in
+  `~/.config/remax/themes`, via `$HELIX_RUNTIME` or in the usual helix
   theme directories. Colors render as exact 24-bit values when
   `COLORTERM` says the terminal can (the same signal helix trusts) —
   otherwise the terminal's palette approximation applies. Hunks are decorated in place by a live diff
   against the base: removed lines float inline in a muted rose, and
   reviewed lines keep their full syntax colors on the plain background.
-  Lines still waiting on a verdict sit on a faint cool wash, flagged
-  lines on a rose one and questioned lines on an amber one, all light
-  enough that the syntax colors read through — so on a re-review the
+  Lines still waiting on a verdict sit on a green wash when added and a
+  red one when removed (the words that changed inside them a shade
+  deeper), flagged lines on an orange one and questioned lines on an
+  amber one, all light enough that the syntax colors read through — so on a re-review the
   eye lands on what still needs attention without reading the gutter.
   Accepting lines gives them a brief green glow that fades into the
   plain background over a quarter of a second, and the progress meters
   in the status line and the file's tray row glow with it — so the
   reward is on screen even when the jump lands in another file
   (`settle = 0` turns it off).
-- Status line: a quiet mode chip (`● nor` / `● ins`), the top-level
+- Status line: a mode pill (` NOR ` / ` INS `), the top-level
   declaration the cursor is inside, the overall progress meter
-  (`▰▰▰▰▱▱▱▱▱ 4/9`), transient messages, and a short hint. The tray shows each hunk's enclosing
+  (`▰▰▰▰▱▱▱▱▱ 4/9`), transient messages, and the keys worth knowing
+  right now on the right, each key bright and its label dim. The tray shows each hunk's enclosing
   declaration next to its line number, so hunks read as "which
   function", not just "which line". (Both use the column-zero heuristic
   the hunk splitter trusts; a tree-sitter-exact version can come later.)
@@ -843,7 +851,7 @@ moves a review open in another.
 
 ## Configuration
 
-`~/.config/remax/config.toml` — flat `key = number` lines, `#` comments,
+`~/.config/remax/config.toml` — flat `key = value` lines, `#` comments,
 every key optional (defaults shown):
 
 ```toml
@@ -856,7 +864,23 @@ split-threshold = 20  # hunks at or under this never split
 piece-min = 6         # smaller pieces merge forward (within a function)
 piece-max = 32        # bigger pieces keep splitting
 pr-worktree = ../<repo>-pr-<N>  # where :pr edit puts a pull request's worktree
+theme = harbor        # harbor | helix | the name of any helix theme
 ```
+
+`theme = harbor` (default) draws in Harbor, the theme vendored into
+remax. `theme = helix` follows the `theme` in
+`~/.config/helix/config.toml`, and falls back to Harbor when helix names
+none. Any other value names a theme, looked up as
+`~/.config/remax/themes/<name>.toml` first, then in the helix theme
+directories, then among the themes built into remax (`harbor`,
+`jellybeans`); a name found nowhere falls back to Harbor. Themes there
+are helix themes, and `inherits` works across all of those places, so a
+file in `~/.config/remax/themes` can start from `inherits = "harbor"`
+and change a few colours. Besides the usual helix scopes remax reads
+`diff.plus.line` and `diff.minus.line` for the wash behind an added or
+removed line, and `diff.plus.word` and `diff.minus.word` for the changed
+words inside one; a theme without them gets washes blended from its
+`diff.plus` and `diff.minus` colours.
 
 `pr-worktree` is a path template: `<repo>` is the GitHub repository's
 name and `<N>` the pull request number, and a relative path resolves

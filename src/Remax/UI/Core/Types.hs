@@ -3,6 +3,7 @@
 
 module Remax.UI.Core.Types
   ( WatchMode (..)
+  , TitleHost (..)
   , FollowMode (..)
   , ClaudeLine (..)
   , AgentPlace (..)
@@ -64,6 +65,8 @@ module Remax.UI.Core.Types
   , FileView (..)
   , St (..)
   , repoText
+  , subjectCrumb
+  , titleCrumb
   , currentFile
   , currentFileMay
   , currentBand
@@ -147,6 +150,9 @@ data Name = BodyVP | TrayVP | PullVP | PopupLogVP | TheCursor
 -- know, relativizes on arrival.
 data WatchMode = NativeWatch | PollingWatch
   deriving (Eq, Show)
+
+data TitleHost = HostShowsTitle | HostHidesTitle
+  deriving (Eq)
 
 data FollowMode = FollowOff | FollowEdits
   deriving (Eq)
@@ -584,6 +590,7 @@ data St = St
   , stPrompt :: Maybe Prompt -- the / search or : command prompt, while open
   , stLastSearch :: T.Text
   , stBorder :: V.Attr -- concrete attr for raw border fills
+  , stAttrs :: Brick.AttrMap
   , stHls :: TS.HighlighterTable
   , stWalk :: WalkFilter -- which hunks ]/[ and the tray admit
   , stFileScope :: Git.FileScope -- does the file dialog list ignored files too
@@ -598,6 +605,8 @@ data St = St
     -- first row on screen and how many fit. Only the band around it is
     -- actually drawn; see tray.
     stTraySeen :: (Int, Int)
+  , stTitleHost :: TitleHost
+  , stTitle :: T.Text
   , stNotePopup :: Maybe NotePopup
   , stThreads :: Map.Map T.Text [Store.Post] -- note conversations by line key, posts in order
   , stWork :: Conv.OwnWork
@@ -731,6 +740,16 @@ openPullState st =
 
 repoText :: St -> T.Text
 repoText = T.pack . stRoot
+
+subjectCrumb :: St -> T.Text
+subjectCrumb st =
+  case Git.subjectOf (stMode st) of
+    Git.Pull pr _ -> "PR #" <> tshow (Git.prNumber pr)
+    _ -> Git.modeLabel (stMode st)
+
+titleCrumb :: St -> T.Text
+titleCrumb st =
+  subjectCrumb st <> " \8250 " <> maybe "all clear" (T.pack . fvPath) (currentFileMay st)
 
 currentFile :: St -> FileView
 currentFile st = stFiles st !! stCurF st

@@ -12,3 +12,5 @@ https://www.mozilla.org/en-US/MPL/2.0/.
 
 This mirrors the arrangement for the helix highlight queries — see
 `vendor/grammars/QUERY-LICENSE.md`.
+
+`harbor.toml` is remax's own theme and is covered by remax's license.

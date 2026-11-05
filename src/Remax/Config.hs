@@ -9,6 +9,9 @@ module Remax.Config
   ( Config (..)
   , KeyMode (..)
   , TrayStart (..)
+  , ThemeChoice (..)
+  , themeChoiceFromText
+  , themeChoiceToText
   , keyModeFromText
   , keyModeToText
   , keyModeNames
@@ -69,7 +72,12 @@ data Config = Config
   , cfgTray :: TrayStart
   , cfgSplit :: DiffModel.SplitConfig
   , cfgPrWorktree :: T.Text -- where :pr edit puts a pull request's worktree; <repo> and <N> are filled in
+  , cfgTheme :: ThemeChoice
   }
+
+data ThemeChoice
+  = ThemeFollowsHelix
+  | ThemeNamed T.Text
 
 data TrayStart = TrayOpen | TrayClosed
   deriving (Eq)
@@ -87,6 +95,7 @@ defaultConfig =
     , cfgTray = TrayOpen
     , cfgSplit = DiffModel.defaultSplitConfig
     , cfgPrWorktree = defaultPrWorktree
+    , cfgTheme = ThemeNamed "harbor"
     }
 
 defaultPrWorktree :: T.Text
@@ -207,4 +216,18 @@ fromEntries entries =
       , cfgPrWorktree = case lookup "pr-worktree" entries of
           Just raw | not (T.null raw) -> raw
           _ -> defaultPrWorktree
+      , cfgTheme = maybe (cfgTheme base) themeChoiceFromText (lookup "theme" entries)
       }
+
+themeChoiceFromText :: T.Text -> ThemeChoice
+themeChoiceFromText raw =
+  case T.strip (T.dropAround (== '"') (T.strip raw)) of
+    "helix" -> ThemeFollowsHelix
+    "" -> cfgTheme defaultConfig
+    name -> ThemeNamed name
+
+themeChoiceToText :: ThemeChoice -> T.Text
+themeChoiceToText choice =
+  case choice of
+    ThemeFollowsHelix -> "helix"
+    ThemeNamed name -> name

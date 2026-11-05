@@ -261,7 +261,7 @@ verdictWash r verdict settling =
   if DiffModel.rMark r == ' '
     then Nothing
     else case verdict of
-      Nothing -> Just Attrs.pendingWashAttr
+      Nothing -> Just (if DiffModel.rMark r == '-' then Attrs.removedWashAttr else Attrs.addedWashAttr)
       Just Store.Flagged -> Just Attrs.flaggedWashAttr
       Just Store.Questioned -> Just Attrs.questionedWashAttr
       Just Store.Reviewed -> fmap Attrs.settleAttr settling
@@ -337,7 +337,10 @@ numInk paint r left =
 
 markInk :: RowPaint -> DiffModel.RowR -> Int -> V.Image
 markInk paint r left =
-  Ink.inkT left (Ink.penFor (rpRowPens paint) (Ink.markerAttrFor (DiffModel.rMark r))) (T.pack [DiffModel.rMark r, ' '])
+  let
+    glyph = if DiffModel.rMark r == '-' then '\8722' else DiffModel.rMark r
+  in
+    Ink.inkT left (Ink.penFor (rpRowPens paint) (Ink.markerAttrFor (DiffModel.rMark r))) (T.pack [glyph, ' '])
 
 -- content shifted hOff columns left, for reading long lines:
 -- the view follows the cursor horizontally while the gutter
@@ -359,7 +362,7 @@ contentInk paint charSel emph r left =
           | Maybe.fromMaybe maxBound mEnd >= hOff ->
               Ink.selInk rowPens left sliced (max 0 (s - hOff)) (fmap (subtract hOff) mEnd)
         _
-          | not (null marks) -> Ink.emphInk rowPens left marks sliced
+          | not (null marks) -> Ink.emphInk Attrs.addedWordAttr rowPens left marks sliced
         _ ->
           case Widgets.nonEmptySegs sliced of
             [] -> Ink.inkT left (Ink.penPlain rowPens) " "
@@ -369,7 +372,7 @@ removedInk :: Ink.PenSet -> [(Int, Int)] -> T.Text -> Int -> V.Image
 removedInk rowPens marks shown left =
   if null marks
     then Ink.inkT left (Ink.penFor rowPens Attrs.removedTextAttr) shown
-    else Ink.emphInk rowPens left marks [(Attrs.removedTextAttr, shown)]
+    else Ink.emphInk Attrs.removedWordAttr rowPens left marks [(Attrs.removedTextAttr, shown)]
 
 -- the reviewer's note renders inline as virtual rows under
 -- the line it annotates — visible where the feedback lives

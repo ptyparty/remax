@@ -60,11 +60,10 @@ gitBar st =
     commitSeg = case Types.stHead st of
       Nothing -> [Brick.withAttr Attrs.hintAttr (Brick.txt "   no commits yet")]
       Just (sha, subject) ->
-        [ Brick.txt "  "
+        [ Brick.txt " \183 "
         , Brick.withAttr Attrs.rebaseShaAttr (Brick.txt sha)
         , Brick.txt "  "
         , Brick.txt subject
-        , Brick.withAttr Attrs.hintAttr (Brick.txt "   \9251c full message")
         ]
   in
     Brick.withDefAttr Attrs.headerRebaseAttr . Brick.padRight Brick.Max $
@@ -176,24 +175,33 @@ rebaseBar rb =
         , Brick.withAttr Attrs.hintAttr (Brick.txt "   \9251c full message")
         ]
 
-headerBar :: Types.St -> Brick.Widget Types.Name
-headerBar st =
+headerBar :: Types.St -> Brick.Widget Types.Name -> Brick.Widget Types.Name
+headerBar st place =
   let
-    lead = case Git.subjectOf (Types.stMode st) of
-      Git.Pull {} -> " remax · "
-      _ -> " remax · " <> Git.modeLabel (Types.stMode st) <> " · "
-    trailing = [rebaseSeg st, watchSeg st, busySeg st]
+    lead = case Types.stTitleHost st of
+      Types.HostShowsTitle -> []
+      Types.HostHidesTitle ->
+        [ Brick.withAttr Attrs.headerFileAttr (Brick.txt (" " <> crumbPath st))
+        , Brick.withAttr Attrs.headerAttr (Brick.txt " \183")
+        ]
+    trailing = filter (not . T.null . fst) (fileSegs st ++ [rebaseSeg st, watchSeg st, busySeg st])
+    shown = List.intersperse (Brick.withAttr Attrs.headerAttr (Brick.txt " \183 ")) (map snd trailing)
   in
-    Brick.withDefAttr Attrs.headerAttr . Brick.padRight Brick.Max $
-      case Types.currentFileMay st of
-        Nothing -> Brick.hBox (Brick.txt (lead <> "all clear") : trailing)
-        Just fv -> Brick.hBox (fileHeader st lead fv ++ trailing)
+    Brick.withDefAttr Attrs.headerAttr $
+      Brick.hBox (lead ++ [place, Brick.txt "  ", Brick.hBox shown, Brick.txt " "])
 
-rebaseSeg :: Types.St -> Brick.Widget Types.Name
+crumbPath :: Types.St -> T.Text
+crumbPath st =
+  Types.subjectCrumb st <> " \8250 " <> maybe "all clear" (T.pack . Types.fvPath) (Types.currentFileMay st)
+
+rebaseSeg :: Types.St -> (T.Text, Brick.Widget Types.Name)
 rebaseSeg st =
   case Types.stRebase st of
-    Nothing -> Brick.txt ""
-    Just _ -> Brick.withAttr Attrs.headerRebaseAttr (Brick.txt "  ·  rebasing")
+    Nothing -> ("", Brick.emptyWidget)
+    Just _ -> seg Attrs.headerRebaseAttr "rebasing"
+
+seg :: Brick.AttrName -> T.Text -> (T.Text, Brick.Widget Types.Name)
+seg attr label = (label, Brick.withAttr attr (Brick.txt label))
 
 -- Somebody is waiting on this review. Worth saying, because the
 -- alternative is flagging a line and wondering whether anyone is
@@ -201,7 +209,7 @@ rebaseSeg st =
 --
 -- It breathes rather than sits still: a mark that never moves is one
 -- you stop believing, and this one is a claim about right now.
-watchSeg :: Types.St -> Brick.Widget Types.Name
+watchSeg :: Types.St -> (T.Text, Brick.Widget Types.Name)
 watchSeg st =
   let
     (waiting, working) = Types.stAttending st
@@ -212,68 +220,68 @@ watchSeg st =
       | otherwise = Nothing
   in
     case mine of
-      Nothing -> Brick.txt ""
+      Nothing -> ("", Brick.emptyWidget)
       Just (glyph, label) -> glyphSeg glyph label
 
-busySeg :: Types.St -> Brick.Widget Types.Name
+busySeg :: Types.St -> (T.Text, Brick.Widget Types.Name)
 busySeg st =
   case Types.stBusy st of
-    [] -> Brick.txt ""
+    [] -> ("", Brick.emptyWidget)
     (label : _) -> glyphSeg (Widgets.busyGlyph (Types.stThrob st)) label
 
-glyphSeg :: T.Text -> T.Text -> Brick.Widget Types.Name
+glyphSeg :: T.Text -> T.Text -> (T.Text, Brick.Widget Types.Name)
 glyphSeg glyph label =
-  Brick.hBox
-    [ Brick.withAttr Attrs.headerAttr (Brick.txt "  ·  ")
-    , Brick.withAttr Attrs.watchingAttr (Brick.txt glyph)
-    , Brick.withAttr Attrs.headerAttr (Brick.txt (" " <> label))
-    ]
+  ( label
+  , Brick.hBox
+      [ Brick.withAttr Attrs.watchingAttr (Brick.txt glyph)
+      , Brick.withAttr Attrs.headerAttr (Brick.txt (" " <> label))
+      ]
+  )
 
-fileHeader :: Types.St -> T.Text -> Types.FileView -> [Brick.Widget Types.Name]
-fileHeader st lead fv =
+fileSegs :: Types.St -> [(T.Text, Brick.Widget Types.Name)]
+fileSegs st =
+  case Types.currentFileMay st of
+    Nothing -> [seg Attrs.headerAttr "all clear"]
+    Just fv -> fileHeader st fv
+
+fileHeader :: Types.St -> Types.FileView -> [(T.Text, Brick.Widget Types.Name)]
+fileHeader st fv =
   let
     rs = Types.fvRuns fv
     h = Types.clampH rs (Types.stCurH st)
     shownH = if null rs then 0 else h + 1
-    counts =
-      "  ·  file "
-        <> Types.tshow (Types.stCurF st + 1)
-        <> "/"
-        <> Types.tshow (length (Types.stFiles st))
-        <> "  ·  hunk "
-        <> Types.tshow shownH
-        <> "/"
-        <> Types.tshow (length rs)
-        <> pendingSeg st fv
+    fileCount =
+      if length (Types.stFiles st) > 1
+        then [seg Attrs.headerCountAttr ("file " <> Types.tshow (Types.stCurF st + 1) <> "/" <> Types.tshow (length (Types.stFiles st)))]
+        else []
     doneBadge = case Types.safeIdx rs h of
       Just r
         | not (Verdict.runPending (Types.stVerdicts st) r) ->
-            Brick.withAttr Attrs.headerOkAttr (Brick.txt "  ✓ done")
-      _ -> Brick.txt " "
+            [seg Attrs.headerOkAttr "\10003 done"]
+      _ -> []
     -- no working copy behind this screen: what is on it is the
     -- file as it was, every line of it on its way out
     deletedSeg =
       if Types.fvDeleted fv
-        then Brick.withAttr Attrs.removedMarkAttr (Brick.txt "  ·  deleted")
-        else Brick.txt ""
+        then [seg Attrs.removedMarkAttr "deleted"]
+        else []
     -- a filtered session hides hunks; say so, or an empty-looking
     -- tray reads as a finished review
     walkSeg = case Types.stWalk st of
-      Types.WalkUnresolved -> Brick.withAttr Attrs.headerRebaseAttr (Brick.txt "  ·  unresolved only")
-      Types.WalkTour -> Brick.withAttr Attrs.headerRebaseAttr (Brick.txt ("  ·  " <> tourPosition st))
-      _ -> Brick.txt ""
+      Types.WalkUnresolved -> [seg Attrs.headerRebaseAttr "unresolved only"]
+      Types.WalkTour -> [seg Attrs.headerRebaseAttr (tourPosition st)]
+      _ -> []
     followSeg = case Types.stFollow st of
-      Types.FollowEdits -> Brick.withAttr Attrs.headerRebaseAttr (Brick.txt "  \183  following edits")
-      Types.FollowOff -> Brick.txt ""
+      Types.FollowEdits -> [seg Attrs.headerRebaseAttr "following edits"]
+      Types.FollowOff -> []
   in
-    [ Brick.txt lead
-    , Brick.withAttr Attrs.headerFileAttr (Brick.txt (T.pack (Types.fvPath fv)))
-    , deletedSeg
-    , walkSeg
-    , followSeg
-    , Brick.withAttr Attrs.headerCountAttr (Brick.txt counts)
-    , doneBadge
-    ]
+    deletedSeg
+      ++ walkSeg
+      ++ followSeg
+      ++ [seg Attrs.headerCountAttr ("hunk " <> Types.tshow shownH <> "/" <> Types.tshow (length rs))]
+      ++ fileCount
+      ++ [seg Attrs.headerCountAttr (pendingSeg st fv)]
+      ++ doneBadge
 
 -- The tour's own bar, under the git bar for as long as the walk follows
 -- a tour: which stop this is, where in the stop the cursor sits, and
@@ -338,9 +346,8 @@ pendingSeg st fv =
   in
     if length (Types.stFiles st) > 1
       then
-        "  ·  "
-          <> Types.tshow (Types.fvPending fv)
+        Types.tshow (Types.fvPending fv)
           <> " pending here · "
           <> Types.tshow pendingAll
           <> " overall"
-      else "  ·  " <> Types.tshow pendingAll <> " pending"
+      else Types.tshow pendingAll <> " pending"

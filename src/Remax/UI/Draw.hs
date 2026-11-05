@@ -61,10 +61,10 @@ draw st =
     menuRows = case DrawPrompt.promptMenu st of
       Just menu -> [menu]
       Nothing -> []
-    rebaseRows = case (Git.subjectOf (Types.stMode st), Types.rebaseShown st) of
-      (Git.Pull pr editing, _) -> [DrawHeader.pullBar st pr editing]
-      (_, Just rb) -> [DrawHeader.rebaseBar rb]
-      (_, Nothing) -> [DrawHeader.gitBar st]
+    placeRow = case (Git.subjectOf (Types.stMode st), Types.rebaseShown st) of
+      (Git.Pull pr editing, _) -> DrawHeader.pullBar st pr editing
+      (_, Just rb) -> DrawHeader.rebaseBar rb
+      (_, Nothing) -> DrawHeader.gitBar st
     tourRows = maybe [] (: []) (DrawHeader.tourBar st)
     claudeRows = maybe [] (: []) (DrawHeader.claudeBar st)
     helpRows =
@@ -77,11 +77,10 @@ draw st =
       ++ infoRows
       ++ overlays
       ++ [ Brick.vBox
-             ( [DrawHeader.headerBar st]
-                 ++ rebaseRows
+             ( [DrawHeader.headerBar st placeRow]
                  ++ tourRows
                  ++ claudeRows
-                 ++ [Widgets.hairline, Brick.hBox panes, Widgets.hairline]
+                 ++ [Widgets.hairline, Brick.hBox panes]
                  ++ menuRows
                  ++ [DrawStatus.statusBar st]
              )

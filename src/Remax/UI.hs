@@ -12,7 +12,6 @@ module Remax.UI
 
 import Brick qualified as Brick
 import Brick.BChan qualified as BChan
-import Brick.Util qualified as BrickUtil
 import Control.Concurrent qualified as Concurrent
 import Control.Monad qualified as Monad
 import Control.Monad.IO.Class qualified as MonadIO
@@ -70,6 +69,7 @@ data Startup = Startup
   , suHead :: Maybe (T.Text, T.Text)
   , suPassId :: DataInt.Int64
   , suTheme :: Maybe Theme.HelixTheme
+  , suTitleHost :: Types.TitleHost
   , suChan :: BChan.BChan Types.REvent
   , suJobs :: IORef.IORef Int
   , suSettleBeat :: IORef.IORef Int
@@ -95,7 +95,7 @@ runReview mode pullMeta root roots story = do
       st0 = initialState startup mode pullMeta root roots story watchMode dirWatch clip alreadyThere
     startBeats chan
     vty <- buildVty
-    Brick.customMain vty buildVty (Just chan) (app (suTheme startup)) (parkAtStart (Tour.installTour (suTour startup) st0))
+    Brick.customMain vty buildVty (Just chan) app (parkAtStart (Tour.installTour (suTour startup) st0))
   Store.finishPass (suConn startup) (Types.stPassId final)
   printSummary final
 
@@ -138,7 +138,8 @@ loadStartup mode root = do
   tour0 <- Tour.loadTourFor conn root (Types.rebaseEffMode rebase0 mode)
   (branch0, head0) <- Git.subjectPlace (Types.rebaseEffMode rebase0 mode) root
   passId <- Store.beginPass conn (T.pack root) (Git.modeLabel mode)
-  theme <- Theme.loadHelixTheme
+  theme <- Theme.loadTheme (Config.cfgTheme cfg)
+  komuxPane <- Env.lookupEnv "KOMUX_PANE_ID"
   chan <- BChan.newBChan 64
   jobs <- IORef.newIORef (0 :: Int)
   settleBeat <- IORef.newIORef (0 :: Int)
@@ -160,6 +161,7 @@ loadStartup mode root = do
       , suHead = head0
       , suPassId = passId
       , suTheme = theme
+      , suTitleHost = maybe Types.HostHidesTitle (const Types.HostShowsTitle) komuxPane
       , suChan = chan
       , suJobs = jobs
       , suSettleBeat = settleBeat
@@ -207,7 +209,8 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stWatch = Watch.dirWatchFollow dirWatch
     , Types.stPrompt = Nothing
     , Types.stLastSearch = ""
-    , Types.stBorder = Attrs.fgOnly (Theme.scopeAttr (suTheme startup) "ui.linenr" (BrickUtil.fg V.brightBlack))
+    , Types.stBorder = Attrs.borderFill (suTheme startup)
+    , Types.stAttrs = Attrs.mkAttrMap (suTheme startup)
     , Types.stHls = suHighlighters startup
     , Types.stWalk = Types.WalkPending
     , Types.stFileScope = Git.VisibleFiles
@@ -219,6 +222,8 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stPicker = Nothing
     , Types.stLastSelector = Nothing
     , Types.stTraySeen = (0, 0)
+    , Types.stTitleHost = suTitleHost startup
+    , Types.stTitle = ""
     , Types.stNotePopup = Nothing
     , Types.stThreads = suThreads startup
     , Types.stWork = suWork startup
@@ -397,8 +402,8 @@ printSummary st = do
   Monad.forM_ (reverse (Types.stPunch st)) $ \(path, line, v) ->
     putStrLn ("  " ++ T.unpack (Store.verdictText v) ++ ": " ++ path ++ ":" ++ show line)
 
-app :: Maybe Theme.HelixTheme -> Brick.App Types.St Types.REvent Types.Name
-app theme =
+app :: Brick.App Types.St Types.REvent Types.Name
+app =
   Brick.App
     { Brick.appDraw = Draw.draw
     , Brick.appChooseCursor = Brick.showFirstCursor
@@ -410,6 +415,7 @@ app theme =
             >> Load.ensureCurrentHighlighted
             >> Events.reanchorBody
             >> Events.syncComposing
+            >> Events.syncTitle
             >> Events.rememberSelector
             >> Events.noteTrayView
             >> AgentAction.afterEvent ev
@@ -427,7 +433,8 @@ app theme =
         seeded <- State.gets Types.stPullMeta
         Monad.when (Maybe.isNothing seeded) PullAction.refreshPullMeta
         PullAction.pollPullNow
-    , Brick.appAttrMap = const (Attrs.mkAttrMap theme)
+        Events.syncTitle
+    , Brick.appAttrMap = Types.stAttrs
     }
 
 -- Drawing ------------------------------------------------------------------------

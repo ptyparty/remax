@@ -3,6 +3,7 @@
 
 module Remax.UI.Events
   ( syncComposing
+  , syncTitle
   , rememberSelector
   , noteTrayView
   , reanchorBody
@@ -13,10 +14,12 @@ import Brick qualified as Brick
 import Control.Monad qualified as Monad
 import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
+import Data.Char qualified as Char
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time.Clock qualified as Clock
 import Graphics.Vty qualified as V
 import Remax.Clipboard qualified as Clipboard
@@ -84,6 +87,16 @@ syncComposing = do
     Monad.forM_ (Types.stComposing st) (\was -> MonadIO.liftIO (Store.setComposing (Types.stConn st) was False))
     Monad.forM_ writing (\now -> MonadIO.liftIO (Store.setComposing (Types.stConn st) now True))
     State.modify (\s -> s {Types.stComposing = writing})
+
+syncTitle :: Brick.EventM Types.Name Types.St ()
+syncTitle = do
+  st <- State.get
+  let
+    title = Types.titleCrumb st
+  Monad.unless (title == Types.stTitle st) $ do
+    vty <- Brick.getVtyHandle
+    MonadIO.liftIO (V.outputByteBuffer (V.outputIface vty) (TE.encodeUtf8 ("\ESC]2;" <> T.filter Char.isPrint title <> "\a")))
+    State.modify (\s -> s {Types.stTitle = title})
 
 talksToAgent :: Types.WorkAction -> Bool
 talksToAgent action =

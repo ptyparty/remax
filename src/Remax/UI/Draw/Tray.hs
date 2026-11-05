@@ -27,28 +27,29 @@ tray :: Types.St -> BrickTypes.Widget Types.Name
 tray st =
   Brick.hLimit TrayModel.trayWidth $
     Brick.padRight (Brick.Pad 1) $
-      Brick.viewport Types.TrayVP Brick.Vertical $
-        BrickTypes.Widget BrickTypes.Greedy BrickTypes.Fixed $ do
-          ctx <- BrickTypes.getContext
-          let
-            pens = Ink.PenSet (BrickTypes.ctxAttrName ctx) (BrickTypes.ctxAttrMap ctx)
-            width = BrickTypes.availWidth ctx
-            rows = TrayModel.trayRows st
-            total = length rows
-            (lo, hi) = trayBand st total
-            -- The rows outside the band are still *there* — the tray
-            -- holds a row per hunk in the change set, and the viewport
-            -- has to keep measuring the whole thing or scrolling would
-            -- stop short of the end. They are one background fill
-            -- apiece rather than an image per row, which costs nothing
-            -- to build and is never rasterized: the viewport crops it
-            -- away. Drawing all of them cost thirteen milliseconds a
-            -- keystroke on a change set of thirteen thousand hunks,
-            -- which is most of a frame spent on rows nobody can see.
-            blank n = if n <= 0 then V.emptyImage else V.backgroundFill width n
-            band = map (trayEntryImage st pens width) (take (hi - lo) (drop lo rows))
-          BrickTypes.render . Brick.raw . V.vertCat $
-            [blank lo] ++ band ++ [blank (total - hi)]
+      Brick.withDefAttr Attrs.trayAttr $
+        Brick.viewport Types.TrayVP Brick.Vertical $
+          BrickTypes.Widget BrickTypes.Greedy BrickTypes.Fixed $ do
+            ctx <- BrickTypes.getContext
+            let
+              pens = Ink.PenSet (BrickTypes.ctxAttrName ctx) (BrickTypes.ctxAttrMap ctx)
+              width = BrickTypes.availWidth ctx
+              rows = TrayModel.trayRows st
+              total = length rows
+              (lo, hi) = trayBand st total
+              -- The rows outside the band are still *there* — the tray
+              -- holds a row per hunk in the change set, and the viewport
+              -- has to keep measuring the whole thing or scrolling would
+              -- stop short of the end. They are one background fill
+              -- apiece rather than an image per row, which costs nothing
+              -- to build and is never rasterized: the viewport crops it
+              -- away. Drawing all of them cost thirteen milliseconds a
+              -- keystroke on a change set of thirteen thousand hunks,
+              -- which is most of a frame spent on rows nobody can see.
+              blank n = if n <= 0 then V.emptyImage else V.backgroundFill width n
+              band = map (trayEntryImage st pens width) (take (hi - lo) (drop lo rows))
+            BrickTypes.render . Brick.raw . V.vertCat $
+              [blank lo] ++ band ++ [blank (total - hi)]
 
 -- The rows worth drawing: a band around what the viewport showed last
 -- frame and the hunk under review.

@@ -121,10 +121,10 @@ runsInk width parts =
 -- Segments with the given columns wearing the word-change wash. The wash
 -- sets only a background, so a token keeps whatever colour the grammar
 -- gave it and gains the mark on top.
-emphInk :: PenSet -> Int -> [(Int, Int)] -> [Highlight.Seg] -> V.Image
-emphInk pens width spans segs =
+emphInk :: Brick.AttrName -> PenSet -> Int -> [(Int, Int)] -> [Highlight.Seg] -> V.Image
+emphInk wash pens width spans segs =
   let
-    washed = penUnder Attrs.wordChangeAttr pens
+    washed = penUnder wash pens
     go _ [] rest = [(pens, rest)]
     go col ((s, e) : more) rest =
       let
