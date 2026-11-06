@@ -12,14 +12,26 @@ renders inline, in order and under your name, in the reviewer's live
 session — this is the primary way to answer a `?`, because the answer
 appears exactly where the question was asked. A reply never reaches
 GitHub: on a GitHub thread it is talk beside the thread that only the
-reviewer sees. Also summarize the answer in your chat reply when
-you're in a conversation with the human. The thread is ordered: the
+reviewer sees. The thread is ordered: the
 reviewer may answer your post with another of theirs, so re-check
 `list` for posts newer than yours instead of assuming your
 answer was the last word. Accepting the hunk (or resolving the note)
 closes the whole conversation. The output says where the post landed,
 `repo-wide` for a note or `on PR #N` for anything bound for GitHub. A
 reply to a verdict with no note yet starts a repo-wide note.
+
+**Do not say it twice.** The human in your chat is usually the
+reviewer, and they read your reply in remax, next to the line it is
+about. Repeating it in the chat, whether word for word or reworded
+into bullets, makes them read everything twice and buries whatever
+only the chat carries. In the chat, give a terse account of what you
+did in remax: one line per conversation, naming it and the action,
+such as `Replied on the DatabaseRetry.hs note: recommend removing the
+retry.` or `Fixed the two hlint flags and replied on both.` Use the
+chat for what remax does not show: build and test results, what you
+are doing next, and anything you need from the human that is not a
+reply to a conversation. Give the full answer in the chat only when
+the human there is not the one reviewing in remax.
 
 When the answer is "look here", say it with your session pointer as well
 as in the reply: `remax do :go HUNK_ID` or `:go PATH:LINE` puts them on

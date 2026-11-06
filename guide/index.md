@@ -59,13 +59,17 @@ The watch holds a mark in the reviewer's header for as long as it runs, so they 
 ## Rules
 
 - Anything you have to say back to the reviewer goes through
-  `remax reply` (and the chat when one is open): an answer to a `?`,
+  `remax reply`: an answer to a `?`,
   pushback on a `!` you think is wrong, a heads-up that you fixed it a
   different way than they suggested. The reviewer opened a conversation,
   so reply in the conversation, where it renders next to the line they
   asked about — never as comments in source files unless the reviewer
   explicitly asks for a comment, and never by editing the reviewer's
   note text.
+- Never repeat in the chat what you posted in remax with
+  `reply`, `note` or `comment`. The reviewer reads it there. In
+  the chat, say in a line per conversation what you did, as
+  [Replying](reply.md#replying-to-notes) describes.
 - Fix by editing the files normally. The reviewer's session updates
   itself; the fixed lines go back to pending and they re-review.
 - In a `PR #N review` view, never edit files or offer fixes: answer
