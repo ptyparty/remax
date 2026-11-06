@@ -178,11 +178,13 @@ handleNotePopupKey :: V.Event -> Types.NotePopup -> Brick.EventM Types.Name Type
 handleNotePopupKey ev np0 = do
   st0 <- State.get
   columns <- View.terminalColumns
+  body <- Brick.lookupViewport Types.BodyVP
   let
-    boxWidth = case View.popupPlacement st0 np0 of
-      View.Floating -> popupBoxWidth columns
-      View.InInbox -> View.igPreview (View.inboxGeometry columns)
-    layout = SoftWrap.WrappedRows (popupRowWidth boxWidth)
+    rowWidth = case (View.popupPlacement st0 np0, body, Types.currentFileMay st0) of
+      (View.Inline _, Just vp, Just fv) -> View.inlineEditorWidth (fst (Brick._vpSize vp)) fv
+      (View.InInbox, _, _) -> popupRowWidth (View.igPreview (View.inboxGeometry columns))
+      _ -> popupRowWidth (popupBoxWidth columns)
+    layout = SoftWrap.WrappedRows rowWidth
     np =
       np0
         { Types.npEd =

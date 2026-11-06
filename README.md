@@ -576,13 +576,15 @@ never take the band. In the emacs keymap the same verbs sit under
 `C-c u`, `C-c C-c` takes a proposal, `C-c z` folds, and `C-n` enters
 the thread.
 
-`r` from a code line with a thread replies to that thread; when the
-line holds several threads the popup lists them under `goes to`, oldest
-first, and `Tab`/`S-Tab` in normal mode (`M-n`/`M-p` in emacs) pick one.
+`r` from a code line with a thread replies to that thread, in a box
+drawn under the thread the way a note's reply is (see [Notes to the
+agent](#notes-to-the-agent)); when the line holds several threads,
+`Tab`/`S-Tab` in normal mode (`M-n`/`M-p` in emacs) pick one, oldest
+first. A floating popup lists them under `goes to` instead.
 `?` asks the agent about the thread; on a line with none, `?` questions
 the lines as anywhere else. `@` comments on the selection or the cursor's line as
 a new thread, and `C-s` in its popup inserts a ````suggestion```` fence
-with the commented lines as the head has them. Each popup shows where it is, the thread's log above the editor
+with the commented lines as the head has them. A box in the body has the thread's log right above it already. A floating popup shows where it is, the thread's log above the editor
 (its first post and newest two in full, the rest collapsed to one line
 each; `za` in normal mode, or `C-c z` in emacs, unfolds them all; it
 opens at its newest post, and `↑`, or `k` in normal mode, from the text's
@@ -603,18 +605,23 @@ enters it; on a noted line the status line reads `? reply to the agent
 one line stack oldest first, each after the first labelled with its
 range, such as `╶ 78–80`.
 
-`!` or `?` over lines that already hold a note opens the note popup in
-insert mode. When the selection touches one note, the reply to it is
-chosen; otherwise *new note* is. A `goes to` list under the text
-offers, for each note the selection touches, a reply that leaves the
-note's lines alone and, when the selection reaches past the note's
-lines, a join that adds the post and grows the note to cover the
-selection. To ask the agent about a GitHub thread, use `?` on
-its highlighted row instead. `Tab`
-and `S-Tab` in normal mode (`M-n`/`M-p` in emacs) change the target,
-and the title names it. The popup discards with `C-c` (`C-c C-k` in emacs), or `Esc` in
-normal mode. Notes written by earlier versions of remax are read in
-place and take replies like any other.
+The note you write opens in a box in the body, in insert mode, at the
+place it will draw once saved, so a reply is typed under the
+conversation it answers. When the selection touches one note, the box
+opens as the reply to it, under that note's log; otherwise it opens as
+a *new note* under the selection's last line. For each note the
+selection touches there is a reply that leaves the note's lines alone
+and, when the selection reaches past the note's lines, a join that adds
+the post and grows the note to cover the selection; a join's box sits
+under the line the grown note will end on. The box's top border names
+where the text goes and, after `→`, the other places it could go.
+`Tab` and `S-Tab` in normal mode (`M-n`/`M-p` in emacs) move the box
+between them, and the view scrolls to follow. To ask the agent about a
+GitHub thread, use `?` on its highlighted row instead. The box
+discards with `C-c` (`C-c C-k` in emacs), or `Esc` in normal mode. The
+popup floats instead when the inbox is open or the line the text would
+draw under is not in the file on screen. Notes written by earlier
+versions of remax are read in place and take replies like any other.
 
 A note stays on its lines while its first and last lines survive in
 order; a note grown by a join counts all its lines. Otherwise it is

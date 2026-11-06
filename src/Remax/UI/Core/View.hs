@@ -20,6 +20,7 @@ module Remax.UI.Core.View
   , bodyWindow
   , gutterWidth
   , noteTextWidth
+  , inlineEditorWidth
   , shownGuideLines
   , hScrollFor
   , currentLineOf
@@ -32,6 +33,7 @@ module Remax.UI.Core.View
   ) where
 
 import Brick qualified as Brick
+import Control.Monad qualified as Monad
 import Control.Monad.IO.Class qualified as MonadIO
 import Data.Char qualified as Char
 import Data.List qualified as List
@@ -39,8 +41,10 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import Graphics.Vty qualified as V
+import Remax.Conversation qualified as Conv
 import Remax.DiffModel qualified as DiffModel
 import Remax.Modal qualified as Modal
+import Remax.Store qualified as Store
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
 
@@ -199,13 +203,57 @@ terminalColumns = do
   (columns, _) <- MonadIO.liftIO (V.displayBounds (V.outputIface vty))
   pure columns
 
-data PopupPlacement = Floating | InInbox
+data PopupPlacement = Floating | InInbox | Inline Int
 
 popupPlacement :: Types.St -> Types.NotePopup -> PopupPlacement
 popupPlacement st np =
   case (Types.stInbox st, Types.npPurpose np) of
     (Just _, Types.WorkFor _) -> InInbox
-    _ -> Floating
+    (Just _, _) -> Floating
+    (Nothing, _) -> maybe Floating Inline (inlineRow st np)
+
+inlineRow :: Types.St -> Types.NotePopup -> Maybe Int
+inlineRow st np =
+  case (Types.stPullView st, Types.currentFileMay st) of
+    (Nothing, Just fv) ->
+      case Types.npPurpose np of
+        Types.NoteOn plan -> planRow fv plan
+        Types.WorkFor wp -> workRow fv wp
+        Types.AmendMessage _ -> Nothing
+    _ -> Nothing
+
+planRow :: Types.FileView -> Types.NotePlan -> Maybe Int
+planRow fv plan =
+  let
+    lineSpan = Types.planSpan plan
+  in
+    case Types.safeIdx (Types.planChoices plan) (Types.planChosen plan) of
+      Just (Types.ReplyNote conv) -> conversationRow fv (Conv.convId conv)
+      Just (Types.ReplyOutdated conv) -> conversationRow fv (Conv.convId conv)
+      Just (Types.JoinNote conv) ->
+        case Maybe.catMaybes [conversationRow fv (Conv.convId conv), spanEndRow fv lineSpan] of
+          [] -> Nothing
+          found -> Just (maximum found)
+      _ -> spanEndRow fv lineSpan
+
+workRow :: Types.FileView -> Types.WorkPopup -> Maybe Int
+workRow fv wp =
+  case (Types.wpConv wp, Types.wpAction wp) of
+    (Just cid, _) -> conversationRow fv cid
+    (Nothing, Types.CommentOn (Conv.OnLines lineSpan)) -> spanEndRow fv lineSpan
+    _ -> Nothing
+
+conversationRow :: Types.FileView -> Conv.ConversationId -> Maybe Int
+conversationRow fv cid =
+  fmap fst (List.find (elem cid . snd) (Map.toList (Types.fvThreads fv)))
+
+spanEndRow :: Types.FileView -> Conv.LineSpan -> Maybe Int
+spanEndRow fv lineSpan = do
+  Monad.guard (Conv.spanPath lineSpan == T.pack (Types.fvPath fv))
+  final <- Maybe.listToMaybe (reverse (Conv.spanKeys lineSpan))
+  let
+    key = Store.lineKeyToText final
+  List.findIndex (\r -> DiffModel.rKey r == Just key || DiffModel.rRemarkKey r == Just key) (Types.fvRows fv)
 
 data InboxGeometry = InboxGeometry
   { igBox :: Int
@@ -270,9 +318,10 @@ bodyWindow screenRows st fv =
     -- nailed to the top: there the hunk under review is what the reader
     -- is looking at, and ] and [ are how they move.
     cursorOut =
-      case List.findIndex (\r -> DiffModel.rNewRow r == Just curRow) rows of
-        Just out -> out
-        Nothing -> Maybe.fromMaybe 0 (List.findIndex (\r -> DiffModel.rRunIx r == Just curH) rows)
+      case (fmap (popupPlacement st) (Types.stNotePopup st), List.findIndex (\r -> DiffModel.rNewRow r == Just curRow) rows) of
+        (Just (Inline boxRow), _) -> boxRow
+        (_, Just out) -> out
+        (_, Nothing) -> Maybe.fromMaybe 0 (List.findIndex (\r -> DiffModel.rRunIx r == Just curH) rows)
     held = Types.fvOrigin fv
     inside =
       cursorOut >= held + windowSlack
@@ -298,6 +347,9 @@ gutterWidth fv = length (show (max 1 (Modal.bufferLineCount (Types.fvEd fv))))
 
 noteTextWidth :: Int -> Types.FileView -> Int
 noteTextWidth paneWidth fv = max 12 (paneWidth - (gutterWidth fv + 5))
+
+inlineEditorWidth :: Int -> Types.FileView -> Int
+inlineEditorWidth paneWidth fv = max 8 (noteTextWidth paneWidth fv - 4)
 
 shownGuideLines :: Int -> Types.St -> [DiffModel.RowR] -> [[Types.NoteLine]]
 shownGuideLines width st rows =
