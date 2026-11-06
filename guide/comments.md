@@ -35,5 +35,5 @@ the pull request GitHub keeps it on, and a note is repo-wide.
 
 The session writes each poll of the pull request to a cache file that
 `list` reads, so GitHub threads appear in the listing while a session
-has the pull request open, and `list --wait` wakes on a new GitHub post
-as on a new note.
+has the pull request open, and a watch prints a new GitHub post
+as it does a new note.

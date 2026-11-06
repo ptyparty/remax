@@ -13,6 +13,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Version qualified as Version
+import GHC.Clock qualified as GHCClock
 import Numeric qualified as Numeric
 import System.Directory qualified as Directory
 import System.Environment qualified as Env
@@ -64,6 +65,7 @@ data Cmd
   | Note T.Text T.Text
   | Move T.Text Int
   | Attend
+  | Watch WatchOptions
   | Hunks [String]
   | TourBegin [String]
   | TourStep [String]
@@ -130,6 +132,7 @@ main = do
         Note place text -> openNote place text
         Move target pull -> move target pull
         Attend -> attend
+        Watch options -> watch options
         Hunks rest -> hunks rest
         TourBegin rest -> tourBegin rest
         TourStep rest -> tourStep rest
@@ -233,6 +236,16 @@ usage =
   \       remax [-C DIR] watching       say an agent is on this review, until\n\
   \                                     stopped; the session shows it in its\n\
   \                                     header, working or waiting\n\
+  \       remax [-C DIR] watch [--timeout SECONDS] [--state FILE]\n\
+  \                                     watching and list --wait --awaiting\n\
+  \                                     agent in one process that keeps\n\
+  \                                     going: prints what awaits you, then\n\
+  \                                     a block each time that changes, each\n\
+  \                                     flushed whole for a harness that\n\
+  \                                     makes events of lines; the header\n\
+  \                                     says working while anything awaits\n\
+  \                                     you; --state defaults to a file\n\
+  \                                     named after the review\n\
   \       remax [-C DIR] hunks [--json] [--ref REF [--base BASE] | --base REF | --pr N]\n\
   \                                     list the change set as the session sees\n\
   \                                     it, one id per hunk; with no ref flags,\n\
@@ -285,6 +298,8 @@ parseArgs args0 =
         ("list" : rest)
           | Just cmd <- listArgs rest -> Right (mDir, cmd)
         ["watching"] -> Right (mDir, Attend)
+        ("watch" : rest)
+          | Just cmd <- watchArgs rest -> Right (mDir, cmd)
         ["show", target] -> Right (mDir, ShowConversation (T.pack target))
         ("hunks" : rest) -> Right (mDir, Hunks rest)
         ("tour" : "begin" : rest) -> Right (mDir, TourBegin rest)
@@ -735,54 +750,228 @@ list options = do
   roots <- targetRepos
   conn <- Store.openStore
   let
-    digest = fmap (listDigest party) (fetchListing conn roots)
-    watching =
-      T.intercalate
-        "\t"
-        ( "digest/5"
-            : maybe "all" Feedback.partyText party
-            : map T.pack roots
-        )
-  seen <- maybe (pure Nothing) (readDigest watching) (listStateFile options)
-  baseline <- case listWhen options of
-    ListNow -> pure seen
+    scope = digestScope party roots
+  seen <- maybe (pure Nothing) (readDigest scope) (listStateFile options)
+  (baseline, listing) <- case listWhen options of
+    ListNow -> fmap ((,) seen) (fetchListing conn roots)
     ListOnChange -> do
       -- the baseline is what the caller last saw when it has told us,
       -- and only otherwise the moment we started
-      before <- maybe digest pure seen
-      waitForNews conn roots party digest before
-      pure (Just before)
-  listing <- fetchListing conn roots
-  let
-    current = listDigest party listing
-    listed = listingConversations listing
-    moved = filter (const (moveWanted party)) (listingMoves listing)
+      before <- maybe (fmap (listDigest party) (fetchListing conn roots)) pure seen
+      (_, woken) <-
+        waitForNews (blockedWait conn roots party) before
+          `Exception.finally` Store.clearWaiting
+      pure (Just before, woken)
   Monad.forM_ (listStateFile options) $ \path ->
-    Monad.void
-      ( Exception.try (TIO.writeFile path (T.unlines (watching : map (\(k, v) -> k <> "\t" <> v) (Map.toList current)))) ::
-          IO (Either Exception.IOException ())
-      )
+    writeDigest path scope (listDigest party listing)
   here <- Directory.getCurrentDirectory
+  case listFormat options of
+    ListJson -> TIO.putStrLn (listingJson here roots party listing)
+    ListText -> mapM_ TIO.putStrLn (listText (listPage roots party baseline listing))
+
+{- | What a fingerprint was taken of, recorded on its first line so that one
+taken of somewhere else is never measured against.
+-}
+digestScope :: Maybe Feedback.Party -> [FilePath] -> T.Text
+digestScope party roots =
+  T.intercalate "\t" ("digest/5" : maybe "all" Feedback.partyText party : map T.pack roots)
+
+writeDigest :: FilePath -> T.Text -> Map.Map T.Text T.Text -> IO ()
+writeDigest path scope current =
+  Monad.void
+    ( Exception.try (TIO.writeFile path (T.unlines (scope : map (\(k, v) -> k <> "\t" <> v) (Map.toList current)))) ::
+        IO (Either Exception.IOException ())
+    )
+
+shownConversations :: Maybe Feedback.Party -> Listing -> [(FilePath, [Feedback.Listed])]
+shownConversations party listing =
+  map (\(r, ls) -> (r, filter (Feedback.awaits party) ls)) (listingConversations listing)
+
+shownRequests :: Maybe Feedback.Party -> Listing -> [(FilePath, Store.TourRequest)]
+shownRequests party listing =
+  filter (requestWanted party . snd) (listingRequests listing)
+
+shownMoves :: Maybe Feedback.Party -> Listing -> [Store.ReviewMove]
+shownMoves party listing =
+  filter (const (moveWanted party)) (listingMoves listing)
+
+listingJson :: FilePath -> [FilePath] -> Maybe Feedback.Party -> Listing -> T.Text
+listingJson here roots party listing =
   let
-    shown = map (\(r, ls) -> (r, filter (Feedback.awaits party) ls)) listed
-    requests = filter (requestWanted party . snd) (listingRequests listing)
     scope = case roots of
       [only] -> only
       _ -> here
-  case listFormat options of
-    ListJson -> TIO.putStrLn (listJson (T.pack scope) shown requests moved)
-    ListText ->
-      mapM_ TIO.putStrLn $
-        listText
-          ListPage
-            { pageRoots = roots
-            , pageParty = party
-            , pageMoves = moved
-            , pageRequests = requests
-            , pageListed = shown
-            , pageIds = Feedback.shortIds (map Feedback.listedId (concatMap snd listed))
-            , pageChange = changeFor baseline current
-            }
+  in
+    listJson (T.pack scope) (shownConversations party listing) (shownRequests party listing) (shownMoves party listing)
+
+listPage :: [FilePath] -> Maybe Feedback.Party -> Maybe (Map.Map T.Text T.Text) -> Listing -> ListPage
+listPage roots party baseline listing =
+  ListPage
+    { pageRoots = roots
+    , pageParty = party
+    , pageMoves = shownMoves party listing
+    , pageRequests = shownRequests party listing
+    , pageListed = shownConversations party listing
+    , pageIds = Feedback.shortIds (map Feedback.listedId (concatMap snd (listingConversations listing)))
+    , pageChange = changeFor baseline (listDigest party listing)
+    }
+
+-- | Options for @remax watch@.
+data WatchOptions = WatchOptions
+  { watchStateFile :: Maybe FilePath
+  {- ^ Where to keep the fingerprint of what was last printed, in place of
+  the file named after the review.
+  -}
+  , watchTimeout :: Maybe Int
+  -- ^ Seconds after which to say so and exit.
+  }
+
+watchArgs :: [String] -> Maybe Cmd
+watchArgs =
+  let
+    go options args =
+      case args of
+        [] -> Just (Watch options)
+        ("--state" : path : rest)
+          | watchStateFile options == Nothing ->
+              go options {watchStateFile = Just path} rest
+        ("--timeout" : seconds : rest)
+          | watchTimeout options == Nothing
+          , [(n, "")] <- reads seconds
+          , n > 0 ->
+              go options {watchTimeout = Just n} rest
+        _ -> Nothing
+  in
+    go WatchOptions {watchStateFile = Nothing, watchTimeout = Nothing}
+
+-- Say an agent is on this review and print what awaits it, then a block
+-- each time that changes, until stopped, timed out or orphaned.
+--
+-- One process does what `watching` and a chain of `list --wait`s do
+-- between them, for a harness that turns each printed block into an
+-- event while the agent keeps working. It cannot see the agent finish
+-- with a block, so the reviewer's header says whose move it is instead:
+-- working while anything awaits the agent, watching once nothing does.
+-- A reply hands its conversation back, so the mark follows the agent's
+-- progress through the work without being told.
+--
+-- The first block is the whole of what awaits the agent, not only what
+-- changed since the state file was written. A fresh watch is often a
+-- fresh agent, and a re-armed one has lost nothing it needs to be shown
+-- again; the state file still marks each conversation new or changed.
+watch :: WatchOptions -> IO ()
+watch options = do
+  roots <- targetRepos
+  conn <- Store.openStore
+  here <- Directory.getCurrentDirectory
+  let
+    party = Just Feedback.AwaitingAgent
+    scope = digestScope party roots
+    shownAt = case roots of
+      [only] -> only
+      _ -> here
+  statePath <- maybe (watchStatePath scope) pure (watchStateFile options)
+  seen <- readDigest scope statePath
+  stop <- watchStop (watchTimeout options)
+  let
+    emit baseline listing = do
+      writeDigest statePath scope (listDigest party listing)
+      printBlock (watchBlock shownAt (listPage roots party (Just baseline) listing))
+    follow before = do
+      (woke, listing) <- waitForNews (blockedWait conn roots party) {waitPresence = whoseMove, waitStop = stop} before
+      case woke of
+        WokeNews -> do
+          emit before listing
+          follow (listDigest party listing)
+        WokeTimedOut ->
+          printBlock
+            [ "remax -C "
+                <> T.pack shownAt
+                <> ": timed out after "
+                <> T.pack (maybe "" show (watchTimeout options))
+                <> "s; run remax watch again to keep watching"
+            ]
+        WokeOrphaned -> pure ()
+    start = do
+      first <- fetchListing conn roots
+      Store.markPresence (whoseMove first) (map T.pack roots)
+      emit (Maybe.fromMaybe Map.empty seen) first
+      follow (listDigest party first)
+  start `Exception.finally` Store.clearWaiting
+
+{- | Where a watch keeps its fingerprint when not told: a file named after
+the review, so a watch restarted on it picks up where the last left off.
+-}
+watchStatePath :: T.Text -> IO FilePath
+watchStatePath scope = do
+  dir <- fmap (</> "watch") Store.storeDirectory
+  Directory.createDirectoryIfMissing True dir
+  pure (dir </> T.unpack (Key.sha256Hex scope))
+
+-- Whether a watch should stop rather than keep waiting. Whoever started
+-- it is the agent, near enough, as for `watching`: a watch that outlives
+-- its agent tells the reviewer somebody is on a review nobody is.
+watchStop :: Maybe Int -> IO (IO (Maybe Woke))
+watchStop timeout = do
+  started <- Posix.getParentProcessID
+  begun <- GHCClock.getMonotonicTime
+  pure $ do
+    parent <- Posix.getParentProcessID
+    now <- GHCClock.getMonotonicTime
+    pure $
+      if parent /= started
+        then Just WokeOrphaned
+        else case timeout of
+          Just seconds
+            | now - begun >= fromIntegral seconds -> Just WokeTimedOut
+          _ -> Nothing
+
+whoseMove :: Listing -> Store.Presence
+whoseMove listing =
+  let
+    party = Just Feedback.AwaitingAgent
+  in
+    if any (not . null . snd) (shownConversations party listing) || not (null (shownRequests party listing))
+      then Store.Working
+      else Store.Waiting
+
+{- | A block printed at once and flushed, so a harness reading the output
+line by line takes it as one event.
+-}
+printBlock :: [T.Text] -> IO ()
+printBlock rows = do
+  TIO.putStr (T.unlines rows)
+  SysIO.hFlush SysIO.stdout
+
+{- | A watch's block: a line naming the review and what is in it, then the
+listing, unless nothing awaits the agent.
+-}
+watchBlock :: FilePath -> ListPage -> [T.Text]
+watchBlock shownAt page =
+  let
+    ids = map Feedback.listedId (concatMap snd (pageListed page))
+    marked change = length (filter ((== change) . pageChange page) ids)
+    counts =
+      filter
+        (not . T.null)
+        [ countOf (length ids) "conversation" "conversations"
+        , countOf (marked FeedbackText.New) "new" "new"
+        , countOf (marked FeedbackText.Changed) "changed" "changed"
+        , countOf (length (pageRequests page)) "tour request" "tour requests"
+        , countOf (length (pageMoves page)) "move" "moves"
+        ]
+    heading = "remax -C " <> T.pack shownAt <> ": "
+  in
+    if null counts
+      then [heading <> "nothing awaits you"]
+      else (heading <> T.intercalate ", " counts) : listText page
+
+countOf :: Int -> T.Text -> T.Text -> T.Text
+countOf n one many =
+  case n of
+    0 -> ""
+    1 -> "1 " <> one
+    _ -> T.pack (show n) <> " " <> many
 
 data Listing = Listing
   { listingConversations :: [(FilePath, [Feedback.Listed])]
@@ -840,29 +1029,65 @@ readDigest watching path = do
       -- reads as somewhere else, and costs one such measurement.
       _ -> Nothing
 
-waitForNews :: SQLite.Connection -> [FilePath] -> Maybe Feedback.Party -> IO (Map.Map T.Text T.Text) -> Map.Map T.Text T.Text -> IO ()
-waitForNews conn roots party digest before =
+-- | Why a wait returned.
+data Woke = WokeNews | WokeTimedOut | WokeOrphaned
+
+-- | What a wait watches, and what it says while it does.
+data Wait = Wait
+  { waitConn :: SQLite.Connection
+  , waitRoots :: [FilePath]
+  , waitParty :: Maybe Feedback.Party
+  , waitPresence :: Listing -> Store.Presence
+  -- ^ What to tell the reviewer's session on each beat, given the listing.
+  , waitStop :: IO (Maybe Woke)
+  -- ^ Asked on each beat without news; a reason ends the wait.
+  }
+
+-- | A wait that says it is blocked on the reviewer and never gives up.
+blockedWait :: SQLite.Connection -> [FilePath] -> Maybe Feedback.Party -> Wait
+blockedWait conn roots party =
+  Wait
+    { waitConn = conn
+    , waitRoots = roots
+    , waitParty = party
+    , waitPresence = const Store.Waiting
+    , waitStop = pure Nothing
+    }
+
+{- | Wait until the listing differs from the baseline, returning the
+listing that did.
+-}
+waitForNews :: Wait -> Map.Map T.Text T.Text -> IO (Woke, Listing)
+waitForNews wait before =
   let
+    roots = map T.pack (waitRoots wait)
     news now =
-      case party of
+      case waitParty wait of
         Nothing -> now /= before
         Just _ -> not (now `Map.isSubmapOf` before)
     settle = do
-      now <- digest
+      listing <- fetchListing (waitConn wait) (waitRoots wait)
       -- a flag whose note is still being typed is not news yet: the
       -- verdict is in the store seconds before the sentence saying
       -- what is wrong with it, and returning on it means answering
       -- before being told
-      busy <- Store.composingNow conn (map T.pack roots)
-      Monad.unless (news now && not busy) $ do
-        -- re-announced rather than announced: the timestamp is what
-        -- tells a session somebody is still here, so an agent that
-        -- dies stops saying so without having to say anything
-        Store.markPresence Store.Waiting (map T.pack roots)
-        Concurrent.threadDelay waitPollUs
-        settle
+      busy <- Store.composingNow (waitConn wait) roots
+      if news (listDigest (waitParty wait) listing) && not busy
+        then pure (WokeNews, listing)
+        else do
+          stop <- waitStop wait
+          case stop of
+            Just woke -> pure (woke, listing)
+            Nothing -> do
+              -- re-announced rather than announced: the timestamp is
+              -- what tells a session somebody is still here, so an
+              -- agent that dies stops saying so without having to say
+              -- anything
+              Store.markPresence (waitPresence wait listing) roots
+              Concurrent.threadDelay waitPollUs
+              settle
   in
-    settle `Exception.finally` Store.clearWaiting
+    settle
 
 changeFor :: Maybe (Map.Map T.Text T.Text) -> Map.Map T.Text T.Text -> T.Text -> FeedbackText.Change
 changeFor baseline current i =

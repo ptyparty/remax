@@ -24,36 +24,22 @@ review](pull-requests.md#answering-in-a-pull-request-review)), reply,
 report what you did, and stop. Right when the human has finished a pass
 and wants it dealt with. Do not start a background wait.
 
-**Stay and react.** Start by saying you are here:
+**Stay and react.** Start a watch on the review, as [Staying and reacting](watch.md) shows:
 
 ```sh
-remax -C "$REPO" watching     # background task; runs until stopped
+remax -C "$REPO" watch --timeout 1790 2>&1     # with the Monitor tool
 ```
 
-That holds a mark in the reviewer's header for as long as it runs, so
-they can see there is somebody on the other end. Then do the one-off pass
-— nothing already recorded should be left sitting — and from there keep a
-`list --wait` in flight, answering each thing as they flag it, until they
-stop you. Right when they are reviewing *now* and you are working
-alongside them.
+The watch holds a mark in the reviewer's header for as long as it runs, so they can see there is somebody on the other end. Its first block is everything already recorded, so nothing is left sitting, and from there it prints a block each time the reviewer acts, until they stop you. Right when they are reviewing *now* and you are working alongside them. The mark says *working* while anything awaits you and *watching* once you have answered it all, and it goes out a few seconds after the watch ends.
 
-The two are separate on purpose. `watching` says an agent is attending;
-the wait says what it is doing. With both running the reviewer sees
-*working* while you read and edit and reply, and *watching* while you are
-blocked on them — and nothing at all a few seconds after you die.
-
-**End a watch.** Kill the outstanding wait *and* the `watching` task,
-and say so. Leaving the latter running tells them somebody is on this
-when nobody is. Also do this without being asked if the human says they
-are done reviewing, or closes the session.
+**End a watch.** Stop the watch, and say so. Leaving it running tells the reviewer somebody is on this when nobody is. Also do this without being asked if the human says they are done reviewing, or closes the session. Without a Monitor tool the watch is two background tasks, `watching` and a `list --wait`, and ending it means killing both.
 
 ## Pages
 
 - [Reading the feedback](feedback.md): `remax list` and `show`, what
   each part of a conversation means, and folders of checkouts. Read it
   before acting on any feedback.
-- [Staying and reacting](watch.md): `list --wait` with `--state`, for
-  keeping up with a reviewer while they work.
+- [Staying and reacting](watch.md): `remax watch`, for keeping up with one reviewer or several while they work.
 - [Replying and opening notes](reply.md): `remax reply` and
   `remax note`.
 - [Drafting review comments](comments.md): `remax comment` and
@@ -93,7 +79,4 @@ are done reviewing, or closes the session.
   you have followed stays listed. A tour request on its own is work,
   and so is a move you have not followed yet: follow it as [When the
   review moves](moves.md) says.
-- While staying, keep one `list --wait` in flight and start a fresh one
-  each time it wakes you. With none running you are only as current as
-  the last time you asked. When answering once, do not start one at all
-  — a background task the human did not ask for outlives their attention.
+- While staying, keep exactly one watch in flight on each review. With none running you are only as current as the last time you asked. When answering once, do not start one at all: a background task the human did not ask for outlives their attention.
