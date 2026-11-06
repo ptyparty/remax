@@ -118,14 +118,13 @@ defaultChoice choices =
       Types.ReplyOutdated _ -> True
       Types.NewNote -> False
       Types.JoinNote _ -> False
-    isNew (_, choice) = case choice of
+    isNew choice = case choice of
       Types.NewNote -> True
       _ -> False
   in
-    case (filter isReply (zip [0 ..] choices), filter isNew (zip [0 ..] choices)) of
-      ([(i, _)], _) -> i
-      (_, (i, _) : _) -> i
-      _ -> 0
+    case filter isReply (zip [0 ..] choices) of
+      [(i, _)] -> i
+      _ -> Maybe.fromMaybe 0 (List.findIndex isNew choices)
 
 openNotePopup :: Store.Verdict -> Types.MarkUndo -> Brick.EventM Types.Name Types.St ()
 openNotePopup v undoing = do
@@ -204,7 +203,9 @@ handleNotePopupKey ev np0 = do
     Types.CancelKey -> discardNote np
     Types.PrefixStarted -> pure ()
     Types.PrefixedKey (V.EvKey (V.KChar 'z') [])
-      | Types.WorkFor wp <- Types.npPurpose np -> toggleLog wp
+      | Types.WorkFor wp <- Types.npPurpose np
+      , showsLog st0 np ->
+          toggleLog wp
     Types.PrefixedKey _ -> Types.setMsg "C-c C-k discards"
     Types.PlainKey _ -> notePopupKey st0 np emacs ev
 
@@ -219,6 +220,7 @@ notePopupKey st0 np emacs ev =
   in
     case Types.npPurpose np of
       Types.WorkFor _
+        | not (showsLog st0 np) -> otherwise_
         | up && fst (Modal.cursorRC (Types.npEd np)) == 0 -> Brick.vScrollBy logScroll (-1)
         | down -> do
             mvp <- Brick.lookupViewport Types.PopupLogVP
@@ -254,6 +256,12 @@ editorKey st0 np emacs ev =
               notePopupVi st0 np ev
         Modal.Normal -> notePopupNormalKey st0 np ev
 
+showsLog :: Types.St -> Types.NotePopup -> Bool
+showsLog st np =
+  case View.popupPlacement st np of
+    View.Inline _ -> False
+    _ -> True
+
 toggleLog :: Types.WorkPopup -> Brick.EventM Types.Name Types.St ()
 toggleLog wp =
   let
@@ -280,7 +288,8 @@ notePopupNormalKey st np ev =
     V.EvKey V.KEsc [] -> discardNote np
     V.EvKey (V.KChar 'z') []
       | Config.cfgKeys (Types.stConfig st) /= Config.KeysEmacs
-      , Types.WorkFor _ <- Types.npPurpose np ->
+      , Types.WorkFor _ <- Types.npPurpose np
+      , showsLog st np ->
           State.modify (\s -> s {Types.stZPending = True})
     V.EvKey (V.KChar 'a') []
       | Types.stZPending st

@@ -142,16 +142,20 @@ renderFile paneWidth screenRows st fv =
         pens = Ink.PenSet (BrickTypes.ctxAttrName ctx) (BrickTypes.ctxAttrMap ctx)
         blocks = map (rowImages paneWidth st fv pens numW hOff inline) (wvItems view)
         bodyImg = Brick.raw (composeBody st fv screenRows (wvHi view) pens blocks)
+        roomy focus = sfBottom focus - sfTop focus + 1 + 2 * scrollOff <= screenRows - bodyChromeRows
         (focusTop, focusBottom, placed) = case screenFocus blocks of
           Just focus ->
-            ( sfTop focus
-            , sfBottom focus
+            ( if roomy focus then sfTop focus else sfRow focus
+            , if roomy focus then sfBottom focus else sfRow focus
             , Brick.showCursor Types.TheCursor (Brick.Location (sfCol focus, sfRow focus)) bodyImg
             )
           Nothing -> (cursorRender, cursorRender, bodyImg)
         marginTop = max 0 (focusTop - scrollOff)
         marginHeight = focusBottom + scrollOff - marginTop + 1
       BrickTypes.render (Brick.visibleRegion (Brick.Location (0, marginTop)) (1, marginHeight) placed)
+
+bodyChromeRows :: Int
+bodyChromeRows = 6
 
 -- Which display row the view keeps in sight, and where the window
 -- that carries it starts. lo is the body's origin: nothing above it
@@ -213,9 +217,11 @@ markOf convs =
       (first : rest) -> Just (Maybe.fromMaybe first (List.find ((== '\8618') . fst) (first : rest)))
 
 -- One row's images: the line itself, then any note rows folded under
--- it, paired with whether the cursor sits on this line. Counting the
--- cursor's screen row off the images that precede it is how the
--- cursor stays with its line whatever the notes above it do.
+-- it, then the note box when it is being written under this line, with
+-- where the cursor sits in them if it is here: on the line, or in the
+-- box while one is open. Counting the cursor's screen row off the
+-- images that precede it is how the cursor stays put whatever the
+-- notes above it do.
 rowImages :: Int -> Types.St -> Types.FileView -> Ink.PenSet -> Int -> Int -> Maybe (Int, Types.NotePopup) -> RowItem -> Block
 rowImages paneWidth st fv pens numW hOff inline item =
   let
