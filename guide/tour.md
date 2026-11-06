@@ -5,7 +5,7 @@ explain it, "give me a tour" — build one and remax walks them along it.
 This is the one thing you post *before* being asked about a line.
 
 They can also ask from inside remax. A `tour` line in
-`list` is that ask, and it wakes a `list --wait` like a flag does:
+`list` is that ask, and a watch prints it like a flag:
 
 ```
 tour   feature vs b9045d7: schema changes first  (--ref feature --base b9045d7)

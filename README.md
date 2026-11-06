@@ -71,6 +71,9 @@ remax list --wait     # ... but block until it changes, so an agent can wait
                       #   on the reviewer rather than ask again on a timer
        --state FILE   #   measured from what you last saw, not from now, so a
                       #   change while you were busy is not missed
+remax watch           # what awaits the agent, then a block each time that
+                      #   changes, for a Monitor tool to make events of; holds
+                      #   the header mark while it runs
 remax watching        # hold a mark in the session's header for as long as this
                       #   runs: working while the agent is busy, watching while
                       #   it is blocked on you, gone seconds after it dies
@@ -368,7 +371,7 @@ stays a prefix there too.
 | `:highlight [PATH:]LINE[-LINE]` | go to those lines and light them up, over any verdict wash, until you leave the file, press Esc in normal mode or something else is highlighted; a bare `:highlight` clears it |
 | `:tour` / `:tour N` | get back on the tour: `:tour` returns to the stop you last visited (or the one under the cursor, or the first), `:tour N` jumps to stop N. Either way the walk follows the tour again |
 | `:tour list` | the tour's stops in a popup, as `Space T` (`C-c T` in emacs) opens it: each stop's title, its note and the files it covers; `⏎` goes to the stop |
-| `:tour ask [TEXT]` | ask the agent watching this review for a tour of the view you have open, with TEXT as the brief ("schema changes first"). The request shows up in the agent's `remax list`, wakes a `list --wait`, and carries the exact ref flags for the view, so the tour lands where you are looking |
+| `:tour ask [TEXT]` | ask the agent watching this review for a tour of the view you have open, with TEXT as the brief ("schema changes first"). The request shows up in the agent's `remax list`, wakes a `remax watch` or `list --wait`, and carries the exact ref flags for the view, so the tour lands where you are looking |
 | `:follow` | follow edits, which is on when remax starts; `:follow`, `Space F` and `C-c F` in emacs toggle it: whenever a file in the working tree changes on disk the session takes you to the first line that changed, and a file that newly joins the change set is opened at its first hunk. The header says `following edits` while it is on. Nothing moves you while you are typing or a popup, prompt or menu is open |
 | `:mode head` / `:mode unstaged` / `:mode untracked` | the classic change sets; `:mode tree` returns to the working tree |
 | `:rebase [REF]` | start a commit-by-commit review pass (below) |
@@ -769,7 +772,7 @@ is keyed under the worktree's path. The move is recorded as the group's
 latest, a checkout and its pull request worktrees being one group, and
 `remax list` on any path in the group reports it, as a `moved  PR #N
 review is in …` line and a `review_moves` entry in `--json`; it wakes a
-`list --wait` as a flag does, and each move replaces the last. An agent
+watch as a flag does, and each move replaces the last. An agent
 whose `-C` does not already cover the path follows it, as the guide
 says. Switching among the group's checkouts with `:repo` or `:open`
 records a move too; quitting records none.
