@@ -22,6 +22,7 @@ module Remax.UI.Core.View
   , gutterWidth
   , noteTextWidth
   , inlineEditorWidth
+  , boxInnerWidth
   , shownGuideLines
   , hScrollFor
   , currentLineOf
@@ -46,6 +47,7 @@ import Remax.Conversation qualified as Conv
 import Remax.DiffModel qualified as DiffModel
 import Remax.Modal qualified as Modal
 import Remax.Store qualified as Store
+import Remax.UI.Core.Anchor qualified as Anchor
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
 
@@ -267,7 +269,7 @@ spanEndRow fv lineSpan = do
   final <- Maybe.listToMaybe (reverse (Conv.spanKeys lineSpan))
   let
     key = Store.lineKeyToText final
-  List.findIndex (\r -> DiffModel.rKey r == Just key || DiffModel.rRemarkKey r == Just key) (Types.fvRows fv)
+  List.findIndex (elem key . Anchor.rowKeys) (Types.fvRows fv)
 
 data InboxGeometry = InboxGeometry
   { igBox :: Int
@@ -363,7 +365,10 @@ noteTextWidth :: Int -> Types.FileView -> Int
 noteTextWidth paneWidth fv = max 12 (paneWidth - (gutterWidth fv + 5))
 
 inlineEditorWidth :: Int -> Types.FileView -> Int
-inlineEditorWidth paneWidth fv = max 8 (noteTextWidth paneWidth fv - 4)
+inlineEditorWidth paneWidth fv = boxInnerWidth (noteTextWidth paneWidth fv)
+
+boxInnerWidth :: Int -> Int
+boxInnerWidth boxWidth = max 1 (boxWidth - 4)
 
 shownGuideLines :: Int -> Types.St -> [DiffModel.RowR] -> [[Types.NoteLine]]
 shownGuideLines width st rows =

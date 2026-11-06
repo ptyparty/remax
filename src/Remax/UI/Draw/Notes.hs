@@ -393,7 +393,7 @@ inlineBox :: Types.St -> Types.NotePopup -> Ink.PenSet -> Int -> InlineBox
 inlineBox st np pens boxWidth =
   let
     ed = Types.npEd np
-    inner = max 1 (boxWidth - 4)
+    inner = View.boxInnerWidth boxWidth
     rows = SoftWrap.softRows inner (Modal.bufferLines ed)
     (cr, cc) = Modal.cursorRC ed
     (cursorIx, cursorRow) = SoftWrap.cursorSoftRow cr cc rows
@@ -406,7 +406,7 @@ inlineBox st np pens boxWidth =
     rule = T.replicate boxWidth "\9472"
     topRow =
       let
-        title = inlineTitle np
+        title = Widgets.clipT (max 1 (boxWidth - 5)) (inlineTitle np)
         others = case fitAlternatives (boxWidth - 7 - T.length title) (inlineAlternatives np) of
           "" -> ""
           listed -> " " <> listed <> " "

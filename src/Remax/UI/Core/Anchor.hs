@@ -3,6 +3,7 @@
 module Remax.UI.Core.Anchor
   ( anchorIn
   , coveredRows
+  , rowKeys
   , conversationsAt
   , conversationsIn
   , survives
