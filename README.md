@@ -616,7 +616,8 @@ the post and grows the note to cover the selection; a join's box sits
 under the line the grown note will end on. The box's top border names
 where the text goes and, after `→`, the other places it could go.
 `Tab` and `S-Tab` in normal mode (`M-n`/`M-p` in emacs) move the box
-between them, and the view scrolls to follow. To ask the agent about a
+between them in the order they sit down the file, wrapping at the end,
+and the view scrolls to follow. To ask the agent about a
 GitHub thread, use `?` on its highlighted row instead. The box
 discards with `C-c` (`C-c C-k` in emacs), or `Esc` in normal mode. The
 popup floats instead when the inbox is open or the line the text would
