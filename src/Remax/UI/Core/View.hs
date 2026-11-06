@@ -31,6 +31,7 @@ module Remax.UI.Core.View
   , rowAt
   , verdictLineSpan
   , collapseSelection
+  , selectRow
   , cursorDisplayRow
   ) where
 
@@ -50,6 +51,7 @@ import Remax.Store qualified as Store
 import Remax.UI.Core.Anchor qualified as Anchor
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
+import Remax.Zipper qualified as Z
 
 -- The new side of the diff, and the buffer every row calculation is
 -- measured against. A deleted file has no working copy at all, but its
@@ -461,7 +463,16 @@ verdictLineSpan ed =
         (row, row)
 
 collapseSelection :: Modal.EdState -> Modal.EdState
-collapseSelection ed = ed {Modal.edSelAnchor = Nothing, Modal.edExtend = False}
+collapseSelection ed = ed {Modal.edSelAnchor = Nothing, Modal.edExtend = False, Modal.edSelKind = Modal.CharSel}
+
+selectRow :: Int -> Modal.EdState -> Modal.EdState
+selectRow row ed =
+  ed
+    { Modal.edZipper = Z.moveCursor (row, 0) (Modal.edZipper ed)
+    , Modal.edSelAnchor = Just (row, 0)
+    , Modal.edSelKind = Modal.LineSel
+    , Modal.edExtend = False
+    }
 
 cursorDisplayRow :: [DiffModel.RowR] -> Int -> Int
 cursorDisplayRow rows row =

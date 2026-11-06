@@ -223,8 +223,8 @@ acceptSelection = do
         (\s -> s {Types.stMsg = "select what you're accepting — X selects the hunk"})
 
 -- Selection-first, like every other verb: an active selection scopes the
--- verdict to those lines; no selection means the whole current hunk.
--- Reports whether anything was actually marked.
+-- verdict to those lines; no selection means the cursor's line, and X
+-- selects the whole hunk. Reports whether anything was actually marked.
 applyVerdict :: Store.Verdict -> Brick.EventM Types.Name Types.St Bool
 applyVerdict v = do
   st <- State.get
@@ -232,25 +232,18 @@ applyVerdict v = do
     then do
       Types.setMsg "read-only: @ drafts a comment"
       pure False
-    else case View.activeSelectionRows (Types.fvEd (Types.currentFile st)) of
-      Just _ -> applyVerdictLines v
-      Nothing -> applyVerdictHunk v
+    else applyVerdictLines v
 
 -- The advance a mark would have made, released when the note popup
 -- closes.
 runDeferredAdvance :: Brick.EventM Types.Name Types.St ()
 runDeferredAdvance = do
   st <- State.get
-  Monad.when (Types.stDeferAdvance st) $ do
-    State.modify (\s -> s {Types.stDeferAdvance = False})
-    advanceToPending
-
-clearVerdictBySelection :: Brick.EventM Types.Name Types.St ()
-clearVerdictBySelection = do
-  st <- State.get
-  case View.activeSelectionRows (Types.fvEd (Types.currentFile st)) of
-    Just _ -> clearVerdict Types.VerdictLines
-    Nothing -> clearVerdict Types.VerdictHunk
+  State.modify (\s -> s {Types.stHeldMove = Types.NotHeld})
+  case Types.stHeldMove st of
+    Types.NotHeld -> pure ()
+    Types.Holding -> advanceToPending
+    Types.Held move -> postMarkMove move
 
 -- The commit a verdict describes, when the session knows it: at a rebase
 -- stop, HEAD is the commit under review; reviewing a ref, the ref and the
@@ -270,52 +263,6 @@ verdictOrigin = do
           | otherwise -> do
               at <- MonadIO.liftIO (Git.headCommit (Types.stRoot st))
               pure Store.noOrigin {Store.originCommit = at}
-
--- Mark the whole current hunk and move on to the next pending one.
-applyVerdictHunk :: Store.Verdict -> Brick.EventM Types.Name Types.St Bool
-applyVerdictHunk v = do
-  st <- State.get
-  let
-    fv = Types.currentFile st
-    rs = Types.fvRuns fv
-    path = T.pack (Types.fvPath fv)
-    -- with no selection, the verb needs the cursor to actually be in
-    -- the hunk it would mark — acting on one out of view is how
-    -- mistakes get recorded
-    target = do
-      here <- Nav.hunkUnderCursor st
-      if here == Types.clampH rs (Types.stCurH st)
-        then Types.safeIdx rs (Types.clampH rs (Types.stCurH st))
-        else Nothing
-  case target of
-    Nothing -> do
-      Types.setMsg "cursor isn't in the current hunk — Space h makes this one current"
-      pure False
-    Just r -> do
-      let
-        storeRow (k, l, n) = (k, path, l, n)
-        rows = map storeRow (Nav.runChanges fv (Types.clampH rs (Types.stCurH st)))
-      origin <- verdictOrigin
-      MonadIO.liftIO (Store.recordVerdicts (Types.stConn st) (Types.repoText st) (Types.stPassId st) v origin rows)
-      Monad.when (v == Store.Reviewed) (Conversation.closeConversation (DiffModel.runKeys r))
-      Monad.when (v == Store.Reviewed) (ThreadAction.retireNotesOn (map Store.LineKey (DiffModel.runKeys r)))
-      Monad.when (v == Store.Reviewed) (Jobs.settleKeys (Types.fvPath fv) (DiffModel.runKeys r))
-      State.modify $ \s ->
-        s
-          { Types.stVerdicts =
-              foldr (\k m -> Map.insert k v m) (Types.stVerdicts s) (DiffModel.runKeys r)
-          , Types.stLastMarked = DiffModel.runKeys r
-          , Types.stLastRows = rows
-          , Types.stCounts = Map.insertWith (+) v 1 (Types.stCounts s)
-          , Types.stPunch =
-              if v == Store.Reviewed
-                then Types.stPunch s
-                else (Types.fvPath fv, DiffModel.runAnchor r + 1, v) : Types.stPunch s
-          }
-      Nav.setEd (Types.stCurF st) (View.collapseSelection (Types.fvEd fv))
-      deferred <- State.get
-      Monad.unless (Types.stDeferAdvance deferred) advanceToPending
-      pure True
 
 -- Mark just the selected lines (or the cursor's line); the hunk stays
 -- pending until every one of its lines is settled, and the cursor stays
@@ -382,8 +329,9 @@ recordLineVerdicts v fv lo picks = do
       }
 
 -- auto-advance: a mark that finishes the hunk moves on to the next
--- pending hunk, a partial mark steps to the line after the
--- selection so line-by-line review flows
+-- pending hunk, a single-line mark selects the hunk's next line still
+-- without a verdict so line-by-line review flows, and a wider partial
+-- mark steps to the line after the selection
 advanceAfterLines :: Store.Verdict -> Int -> Int -> Brick.EventM Types.Name Types.St ()
 advanceAfterLines v lo hi = do
   settled <- State.get
@@ -401,43 +349,48 @@ advanceAfterLines v lo hi = do
       case Types.safeIdx rs curIx of
         Just r -> not (Verdict.runUnvisited (Types.stVerdicts settled) r)
         Nothing -> True
-  -- including the advance a flag would otherwise have deferred until
-  -- its note was written
-  Monad.unless onCurrent (State.modify (\s -> s {Types.stDeferAdvance = False}))
-  let
-    deferring = Types.stDeferAdvance settled && onCurrent
-  if onCurrent && hunkDone
-    then do
-      State.modify (\s -> s {Types.stCounts = Map.insertWith (+) v 1 (Types.stCounts s)})
-      Nav.setEd (Types.stCurF settled) (View.collapseSelection (Types.fvEd fvSettled))
-      Monad.unless deferring advanceToPending
-    else Monad.unless deferring $ do
-      let
-        ed = Types.fvEd fvSettled
-        nextRow = min (hi + 1) (Modal.bufferLineCount ed - 1)
-        stepped = (View.collapseSelection ed) {Modal.edZipper = Z.moveCursor (nextRow, 0) (Modal.edZipper ed)}
-      Nav.setEd (Types.stCurF settled) stepped
+    ed = Types.fvEd fvSettled
+    walking = lo == hi && onCurrent
+    move
+      | onCurrent && hunkDone = Types.ToNextPending
+      | otherwise =
+          case (walking, Nav.nextUnvisitedRow settled fvSettled curIx hi) of
+            (True, Just row) -> Types.SelectLine row
+            _ -> Types.CursorTo (min (hi + 1) (Modal.bufferLineCount ed - 1))
+  Monad.when (onCurrent && hunkDone) $ do
+    State.modify (\s -> s {Types.stCounts = Map.insertWith (+) v 1 (Types.stCounts s)})
+    Nav.setEd (Types.stCurF settled) (if walking then View.selectRow hi ed else View.collapseSelection ed)
+  -- a mark off the current hunk moves at once, even with its note
+  -- still to write
+  case Types.stHeldMove settled of
+    Types.Holding
+      | onCurrent -> State.modify (\s -> s {Types.stHeldMove = Types.Held move})
+    _ -> do
+      State.modify (\s -> s {Types.stHeldMove = Types.NotHeld})
+      postMarkMove move
 
--- Take the verdicts back off the hunk or the selected lines, so an
--- erroneous mark can be undone.
-clearVerdict :: Types.VerdictScope -> Brick.EventM Types.Name Types.St ()
-clearVerdict scope = do
+postMarkMove :: Types.PostMark -> Brick.EventM Types.Name Types.St ()
+postMarkMove move = do
+  st <- State.get
+  let
+    ed = Types.fvEd (Types.currentFile st)
+  case move of
+    Types.ToNextPending -> advanceToPending
+    Types.SelectLine row -> Nav.setEd (Types.stCurF st) (View.selectRow row ed)
+    Types.CursorTo row ->
+      Nav.setEd (Types.stCurF st) ((View.collapseSelection ed) {Modal.edZipper = Z.moveCursor (row, 0) (Modal.edZipper ed)})
+
+-- Take the verdicts back off the selected lines, or the cursor's line,
+-- so an erroneous mark can be undone.
+clearVerdictBySelection :: Brick.EventM Types.Name Types.St ()
+clearVerdictBySelection = do
   st <- State.get
   let
     fv = Types.currentFile st
-    rs = Types.fvRuns fv
-    keys = case scope of
-      Types.VerdictLines ->
-        let
-          (lo, hi) = View.verdictLineSpan (Types.fvEd fv)
-        in
-          -- clearing reaches remarks too: a remark you have thought
-          -- better of should come off the same way a verdict does
-          map (\(k, _, _) -> k) (Nav.selectedChanges True fv lo hi)
-      Types.VerdictHunk ->
-        case Types.safeIdx rs (Types.clampH rs (Types.stCurH st)) of
-          Just r -> DiffModel.runKeys r
-          Nothing -> []
+    (lo, hi) = View.verdictLineSpan (Types.fvEd fv)
+    -- clearing reaches remarks too: a remark you have thought
+    -- better of should come off the same way a verdict does
+    keys = map (\(k, _, _) -> k) (Nav.selectedChanges True fv lo hi)
     marked = filter (`Map.member` Types.stVerdicts st) keys
   if null marked
     then State.modify (\s -> s {Types.stMsg = "nothing marked here"})

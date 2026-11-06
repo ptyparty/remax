@@ -52,7 +52,7 @@ markThenNote v = do
   -- with the note popup coming, the post-mark jump waits until the
   -- popup closes — advancing first means writing the note while looking
   -- at the wrong hunk
-  Monad.when noting (State.modify (\s -> s {Types.stDeferAdvance = True}))
+  Monad.when noting (State.modify (\s -> s {Types.stHeldMove = Types.Holding}))
   marked <- VerdictAction.applyVerdict v
   if marked && noting
     then do
@@ -70,7 +70,7 @@ markThenNote v = do
       case Types.stNotePopup opened of
         Nothing -> VerdictAction.runDeferredAdvance
         Just _ -> pure ()
-    else State.modify (\s -> s {Types.stDeferAdvance = False})
+    else State.modify (\s -> s {Types.stHeldMove = Types.NotHeld})
 
 -- The lines the mark just wrote, as the span a note covers, in file
 -- order with the text and number each line has now.
@@ -377,7 +377,7 @@ discardNote np = do
   case Types.npPurpose np of
     Types.NoteOn plan -> do
       VerdictAction.cancelMark (Types.planUndo plan)
-      State.modify (\s -> s {Types.stDeferAdvance = False})
+      State.modify (\s -> s {Types.stHeldMove = Types.NotHeld})
     _ -> VerdictAction.runDeferredAdvance
 
 saveNote :: Types.NotePopup -> Brick.EventM Types.Name Types.St ()
