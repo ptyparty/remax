@@ -30,6 +30,7 @@ import Remax.UI.Core.Verdict qualified as Verdict
 import Remax.UI.Core.View qualified as View
 import Remax.UI.Core.Widgets qualified as Widgets
 import Remax.UI.Core.WordDiff qualified as WordDiff
+import Remax.UI.Draw.Notes qualified as DrawNotes
 
 idleBody :: Types.St -> BrickTypes.Widget Types.Name
 idleBody st =
@@ -67,6 +68,27 @@ data RowItem = RowItem
   , riEmph :: [(Int, Int)]
   , riThreads :: [Threads.ThreadLine]
   , riMark :: Maybe (Char, Brick.AttrName)
+  , riIndex :: Int
+  }
+
+data Block = Block
+  { blAbove :: [V.Image]
+  , blLines :: [V.Image]
+  , blFocus :: Maybe BlockFocus
+  }
+
+data BlockFocus = BlockFocus
+  { bfRow :: Int
+  , bfCol :: Int
+  , bfFirst :: Int
+  , bfLast :: Int
+  }
+
+data ScreenFocus = ScreenFocus
+  { sfRow :: Int
+  , sfCol :: Int
+  , sfTop :: Int
+  , sfBottom :: Int
   }
 
 data WindowView = WindowView
@@ -108,19 +130,27 @@ renderFile paneWidth screenRows st fv =
         + sum (map length (take (cursorIn + 1) (wvGuideRows view)))
     cursorRender = cursorIn + notesAbove
     scrollOff = Config.cfgScrolloff (Types.stConfig st)
-    marginTop = max 0 (cursorRender - scrollOff)
-    marginHeight = cursorRender + scrollOff - marginTop + 1
+    inline = do
+      np <- Types.stNotePopup st
+      case View.popupPlacement st np of
+        View.Inline boxRow -> Just (boxRow, np)
+        _ -> Nothing
   in
     BrickTypes.Widget BrickTypes.Greedy BrickTypes.Fixed $ do
       ctx <- BrickTypes.getContext
       let
         pens = Ink.PenSet (BrickTypes.ctxAttrName ctx) (BrickTypes.ctxAttrMap ctx)
-        blocks = map (rowImages paneWidth st fv pens numW hOff) (wvItems view)
+        blocks = map (rowImages paneWidth st fv pens numW hOff inline) (wvItems view)
         bodyImg = Brick.raw (composeBody st fv screenRows (wvHi view) pens blocks)
-        placed = case cursorScreenRow blocks of
-          Just y ->
-            Brick.showCursor Types.TheCursor (Brick.Location (numW + 5 + curCol - hOff, y)) bodyImg
-          Nothing -> bodyImg
+        (focusTop, focusBottom, placed) = case screenFocus blocks of
+          Just focus ->
+            ( sfTop focus
+            , sfBottom focus
+            , Brick.showCursor Types.TheCursor (Brick.Location (sfCol focus, sfRow focus)) bodyImg
+            )
+          Nothing -> (cursorRender, cursorRender, bodyImg)
+        marginTop = max 0 (focusTop - scrollOff)
+        marginHeight = focusBottom + scrollOff - marginTop + 1
       BrickTypes.render (Brick.visibleRegion (Brick.Location (0, marginTop)) (1, marginHeight) placed)
 
 -- Which display row the view keeps in sight, and where the window
@@ -156,14 +186,14 @@ windowView paneWidth screenRows st fv =
     threadWidth = View.noteTextWidth paneWidth fv
     threadRows = take (hi - lo) (drop lo (map (Threads.rowLines st threadWidth . convsAt) [0 .. Types.fvRowCount fv - 1]))
     marks = take (hi - lo) (drop lo (map (markOf . convsAt) [0 .. Types.fvRowCount fv - 1]))
-    item row point guide emph threads mark =
-      RowItem {riRow = row, riPoint = point, riGuide = guide, riEmph = emph, riThreads = threads, riMark = mark}
+    item rowIx row point guide emph threads mark =
+      RowItem {riRow = row, riPoint = point, riGuide = guide, riEmph = emph, riThreads = threads, riMark = mark, riIndex = rowIx}
   in
     WindowView
       { wvLo = lo
       , wvHi = hi
       , wvCursorOut = cursorOut
-      , wvItems = List.zipWith6 item windowed points guideRows emphs threadRows marks
+      , wvItems = List.zipWith7 item [lo ..] windowed points guideRows emphs threadRows marks
       , wvGuideRows = guideRows
       , wvThreadRows = threadRows
       }
@@ -186,8 +216,8 @@ markOf convs =
 -- it, paired with whether the cursor sits on this line. Counting the
 -- cursor's screen row off the images that precede it is how the
 -- cursor stays with its line whatever the notes above it do.
-rowImages :: Int -> Types.St -> Types.FileView -> Ink.PenSet -> Int -> Int -> RowItem -> ([V.Image], [V.Image], Bool)
-rowImages paneWidth st fv pens numW hOff item =
+rowImages :: Int -> Types.St -> Types.FileView -> Ink.PenSet -> Int -> Int -> Maybe (Int, Types.NotePopup) -> RowItem -> Block
+rowImages paneWidth st fv pens numW hOff inline item =
   let
     r = riRow item
     ed = Types.fvEd fv
@@ -239,11 +269,48 @@ rowImages paneWidth st fv pens numW hOff item =
       if inSel || Maybe.isJust wash
         then Ink.fitRow (Ink.penPlain (rpRowPens paint)) paneWidth drawn
         else drawn
+    lineRows = lineImg : map (threadInk paneWidth paint selectedPost) (riThreads item)
+    above = map (guideInk paneWidth paint) (riGuide item)
   in
-    ( map (guideInk paneWidth paint) (riGuide item)
-    , lineImg : map (threadInk paneWidth paint selectedPost) (riThreads item)
-    , isCursor
-    )
+    case inline of
+      Just (boxRow, np)
+        | boxRow == riIndex item ->
+            let
+              box = DrawNotes.inlineBox st np pens (View.noteTextWidth paneWidth fv)
+              first = length lineRows
+              lead = numW + 5
+            in
+              Block
+                { blAbove = above
+                , blLines = lineRows ++ map (boxInk paneWidth paint) (DrawNotes.ibRows box)
+                , blFocus =
+                    Just
+                      BlockFocus
+                        { bfRow = first + DrawNotes.ibCursorRow box
+                        , bfCol = lead + DrawNotes.ibCursorCol box
+                        , bfFirst = first
+                        , bfLast = first + length (DrawNotes.ibRows box) - 1
+                        }
+                }
+      Just _ -> Block {blAbove = above, blLines = lineRows, blFocus = Nothing}
+      Nothing ->
+        Block
+          { blAbove = above
+          , blLines = lineRows
+          , blFocus =
+              if isCursor
+                then Just BlockFocus {bfRow = 0, bfCol = numW + 5 + snd (Modal.cursorRC ed) - hOff, bfFirst = 0, bfLast = 0}
+                else Nothing
+          }
+
+boxInk :: Int -> RowPaint -> V.Image -> V.Image
+boxInk paneWidth paint box =
+  Ink.spanInk
+    paneWidth
+    [ \left -> Ink.inkT left (Ink.penFor (rpPens paint) (rpBarName paint)) (T.singleton (rpBarGlyph paint))
+    , \left -> Ink.inkT left (Ink.penPlain (rpPens paint)) (T.replicate (rpNumW paint + 4) " ")
+    , const box
+    ]
 
 rowWash :: Types.St -> Types.FileView -> DiffModel.RowR -> Maybe Store.Verdict -> Maybe Int -> Maybe Brick.AttrName
 rowWash st fv r verdict settling =
@@ -424,18 +491,28 @@ threadInk paneWidth paint selected tl =
 -- the cursor's screen row, or nothing at all when the window
 -- carries no row for the cursor's line — an all-removed file
 -- owns no buffer rows, and nothing there can wear a cursor
-cursorScreenRow :: [([V.Image], [V.Image], Bool)] -> Maybe Int
-cursorScreenRow blocks =
+screenFocus :: [Block] -> Maybe ScreenFocus
+screenFocus blocks =
   let
     findY _ [] = Nothing
-    findY y ((above, imgs, isCursor) : rest) =
-      if isCursor
-        then Just (y + length above)
-        else findY (y + length above + length imgs) rest
+    findY y (block : rest) =
+      let
+        start = y + length (blAbove block)
+      in
+        case blFocus block of
+          Just focus ->
+            Just
+              ScreenFocus
+                { sfRow = start + bfRow focus
+                , sfCol = bfCol focus
+                , sfTop = start + bfFirst focus
+                , sfBottom = start + bfLast focus
+                }
+          Nothing -> findY (start + length (blLines block)) rest
   in
     findY (0 :: Int) blocks
 
-composeBody :: Types.St -> Types.FileView -> Int -> Int -> Ink.PenSet -> [([V.Image], [V.Image], Bool)] -> V.Image
+composeBody :: Types.St -> Types.FileView -> Int -> Int -> Ink.PenSet -> [Block] -> V.Image
 composeBody st fv screenRows hi pens blocks =
   let
     -- always leave border tail below the window so the divider
@@ -447,7 +524,7 @@ composeBody st fv screenRows hi pens blocks =
         (min (Types.fvRowCount fv - hi) (View.windowRowsFor screenRows))
         (max 60 screenRows)
     bodyRows =
-      concatMap (\(above, imgs, _) -> above ++ imgs) blocks
+      concatMap (\block -> blAbove block ++ blLines block) blocks
         ++ [V.charFill (Types.stBorder st) '\9614' (1 :: Int) tailRows]
     -- every row filled out to the width of the widest, so no
     -- attribute runs on past the text it belongs to

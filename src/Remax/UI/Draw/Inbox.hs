@@ -50,6 +50,7 @@ inboxReply st = do
   case View.popupPlacement st np of
     View.InInbox -> Just np
     View.Floating -> Nothing
+    View.Inline _ -> Nothing
 
 rightColumn :: Types.St -> Types.Inbox -> Int -> Int -> Maybe Conv.Conversation -> BrickTypes.Widget Types.Name
 rightColumn st inbox width rows chosen =

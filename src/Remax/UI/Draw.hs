@@ -93,3 +93,4 @@ floatingNotePopup st = do
   case View.popupPlacement st np of
     View.Floating -> Just (DrawNotes.notePopupLayer st np)
     View.InInbox -> Nothing
+    View.Inline _ -> Nothing

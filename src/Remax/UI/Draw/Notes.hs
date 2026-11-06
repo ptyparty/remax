@@ -6,6 +6,8 @@ module Remax.UI.Draw.Notes
   , notePopupPane
   , popupTitle
   , notePopupHint
+  , InlineBox (..)
+  , inlineBox
   ) where
 
 import Brick ((<+>))
@@ -13,6 +15,7 @@ import Brick qualified as Brick
 import Brick.Types qualified as BrickTypes
 import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
+import Graphics.Vty qualified as V
 import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
 import Remax.Modal qualified as Modal
@@ -21,6 +24,7 @@ import Remax.Store qualified as Store
 import Remax.UI.Action.Notes qualified as NoteAction
 import Remax.UI.Action.Rebase qualified as Rebase
 import Remax.UI.Core.Attrs qualified as Attrs
+import Remax.UI.Core.Ink qualified as Ink
 import Remax.UI.Core.Markdown qualified as Markdown
 import Remax.UI.Core.Threads qualified as Threads
 import Remax.UI.Core.Types qualified as Types
@@ -378,6 +382,120 @@ selectedLine l start mEnd =
     midW = if T.null mid then Brick.txt " " else Brick.txt mid
   in
     Brick.txt pre <+> Brick.withDefAttr Attrs.selAttr midW <+> Brick.txt post
+
+data InlineBox = InlineBox
+  { ibRows :: [V.Image]
+  , ibCursorRow :: Int
+  , ibCursorCol :: Int
+  }
+
+inlineBox :: Types.St -> Types.NotePopup -> Ink.PenSet -> Int -> InlineBox
+inlineBox st np pens boxWidth =
+  let
+    ed = Types.npEd np
+    inner = max 1 (boxWidth - 4)
+    rows = SoftWrap.softRows inner (Modal.bufferLines ed)
+    (cr, cc) = Modal.cursorRC ed
+    (cursorIx, cursorRow) = SoftWrap.cursorSoftRow cr cc rows
+    height = max 1 (min 10 (length rows))
+    top = max 0 (cursorIx - height + 1)
+    frame = Ink.penFor pens Attrs.hintAttr
+    side text = Ink.inkT 2 frame text
+    editorRow row =
+      V.horizCat [side "\9474 ", softRowInk pens ed inner row, side " \9474"]
+    rule = T.replicate boxWidth "\9472"
+    topRow =
+      let
+        title = inlineTitle np
+        others = case inlineAlternatives np of
+          "" -> ""
+          listed -> " " <> listed <> " "
+        fill = max 1 (boxWidth - 4 - T.length title - T.length others)
+      in
+        V.horizCat
+          [ Ink.inkT 2 frame "\9484 "
+          , Ink.inkT boxWidth (Ink.penFor pens Attrs.noteInlineAttr) title
+          , Ink.inkT boxWidth frame (" " <> T.take fill rule <> others <> "\9488")
+          ]
+    bottomRow =
+      let
+        hint = Widgets.clipT (boxWidth - 5) (notePopupHint st np)
+      in
+        Ink.inkT boxWidth frame ("\9492 " <> hint <> " " <> T.take (max 1 (boxWidth - 4 - T.length hint)) rule <> "\9496")
+  in
+    InlineBox
+      { ibRows = topRow : map editorRow (take height (drop top rows)) ++ [bottomRow]
+      , ibCursorRow = 1 + cursorIx - top
+      , ibCursorCol = 2 + cc - SoftWrap.srStart cursorRow
+      }
+
+softRowInk :: Ink.PenSet -> Modal.EdState -> Int -> SoftWrap.SoftRow -> V.Image
+softRowInk pens ed width row =
+  let
+    text = T.justifyLeft width ' ' (SoftWrap.srText row)
+    plain = Ink.penPlain pens
+    selected = Ink.penFor pens Attrs.selAttr
+    inLineSel = case Modal.selectionRows ed of
+      Just (a, b) -> SoftWrap.srLine row >= a && SoftWrap.srLine row <= b
+      Nothing -> False
+  in
+    if inLineSel
+      then Ink.inkT width selected text
+      else case spanFor (Modal.charSelection ed) row of
+        Nothing -> Ink.inkT width plain text
+        Just (start, mEnd) ->
+          let
+            (pre, rest) = T.splitAt start text
+            (mid, post) = case mEnd of
+              Nothing -> (rest, T.empty)
+              Just e -> T.splitAt (e + 1 - start) rest
+          in
+            Ink.spanInk width [\left -> Ink.inkT left plain pre, \left -> Ink.inkT left selected (if T.null mid then " " else mid), \left -> Ink.inkT left plain post]
+
+inlineTitle :: Types.NotePopup -> T.Text
+inlineTitle np =
+  case Types.npPurpose np of
+    Types.NoteOn plan ->
+      let
+        verb = case Types.planVerdict plan of
+          Store.Flagged -> "!"
+          _ -> "?"
+        lineSpan = Types.planSpan plan
+      in
+        verb <> " " <> case Types.safeIdx (Types.planChoices plan) (Types.planChosen plan) of
+          Just (Types.ReplyNote _) -> "reply"
+          Just (Types.ReplyOutdated _) -> "reply to the outdated note"
+          Just (Types.JoinNote conv) -> "join \183 grows to " <> grownRange conv lineSpan
+          _ -> "new note on " <> spanRange lineSpan
+    _ -> popupTitle np
+
+inlineAlternatives :: Types.NotePopup -> T.Text
+inlineAlternatives np =
+  case Types.npPurpose np of
+    Types.NoteOn plan ->
+      let
+        choices = Types.planChoices plan
+        chosen = Types.planChosen plan
+        later = drop (chosen + 1) choices ++ take chosen choices
+        short choice = case choice of
+          Types.NewNote -> "new"
+          Types.ReplyNote _ -> "reply"
+          Types.ReplyOutdated _ -> "reply"
+          Types.JoinNote conv -> "join " <> grownRange conv (Types.planSpan plan)
+      in
+        if null later then "" else "\8594 " <> T.intercalate " \183 " (map short later)
+    Types.WorkFor wp
+      | length (Types.wpChoices wp) > 1 -> "\8594 " <> Types.tshow (length (Types.wpChoices wp) - 1) <> " more"
+    _ -> ""
+
+spanRange :: Conv.LineSpan -> T.Text
+spanRange lineSpan = snd (T.breakOnEnd ":" (Threads.anchorPlace (Conv.OnLines lineSpan)))
+
+grownRange :: Conv.Conversation -> Conv.LineSpan -> T.Text
+grownRange conv lineSpan =
+  case Conv.convAnchor conv of
+    Conv.OnLines old -> spanRange (Conv.spanUnion old lineSpan)
+    _ -> spanRange lineSpan
 
 -- Switching repositories --------------------------------------------------------
 
