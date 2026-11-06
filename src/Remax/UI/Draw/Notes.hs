@@ -407,7 +407,7 @@ inlineBox st np pens boxWidth =
     topRow =
       let
         title = inlineTitle np
-        others = case inlineAlternatives np of
+        others = case fitAlternatives (boxWidth - 7 - T.length title) (inlineAlternatives np) of
           "" -> ""
           listed -> " " <> listed <> " "
         fill = max 1 (boxWidth - 4 - T.length title - T.length others)
@@ -463,13 +463,25 @@ inlineTitle np =
         lineSpan = Types.planSpan plan
       in
         verb <> " " <> case Types.safeIdx (Types.planChoices plan) (Types.planChosen plan) of
-          Just (Types.ReplyNote _) -> "reply"
+          Just (Types.ReplyNote conv) -> "reply to the note on " <> noteRange conv
           Just (Types.ReplyOutdated _) -> "reply to the outdated note"
-          Just (Types.JoinNote conv) -> "join \183 grows to " <> grownRange conv lineSpan
+          Just (Types.JoinNote conv) -> "join \183 the note on " <> noteRange conv <> " grows to " <> grownRange conv lineSpan
           _ -> "new note on " <> spanRange lineSpan
     _ -> popupTitle np
 
-inlineAlternatives :: Types.NotePopup -> T.Text
+fitAlternatives :: Int -> [T.Text] -> T.Text
+fitAlternatives room labels =
+  let
+    shown n =
+      "\8594 " <> T.intercalate " \183 " (take n labels) <> (if n < length labels then " \8230" else "")
+    fits n = T.length (shown n) <= room
+  in
+    case (labels, filter fits (reverse [1 .. length labels])) of
+      ([], _) -> ""
+      (_, n : _) -> shown n
+      (_, []) -> if room >= 3 then "\8594 \8230" else ""
+
+inlineAlternatives :: Types.NotePopup -> [T.Text]
 inlineAlternatives np =
   case Types.npPurpose np of
     Types.NoteOn plan ->
@@ -479,17 +491,23 @@ inlineAlternatives np =
         later = drop (chosen + 1) choices ++ take chosen choices
         short choice = case choice of
           Types.NewNote -> "new"
-          Types.ReplyNote _ -> "reply"
-          Types.ReplyOutdated _ -> "reply"
-          Types.JoinNote conv -> "join " <> grownRange conv (Types.planSpan plan)
+          Types.ReplyNote conv -> "reply " <> noteRange conv
+          Types.ReplyOutdated _ -> "reply outdated"
+          Types.JoinNote conv -> "join " <> noteRange conv
       in
-        if null later then "" else "\8594 " <> T.intercalate " \183 " (map short later)
+        map short later
     Types.WorkFor wp
-      | length (Types.wpChoices wp) > 1 -> "\8594 " <> Types.tshow (length (Types.wpChoices wp) - 1) <> " more"
-    _ -> ""
+      | length (Types.wpChoices wp) > 1 -> [Types.tshow (length (Types.wpChoices wp) - 1) <> " more"]
+    _ -> []
 
 spanRange :: Conv.LineSpan -> T.Text
 spanRange lineSpan = snd (T.breakOnEnd ":" (Threads.anchorPlace (Conv.OnLines lineSpan)))
+
+noteRange :: Conv.Conversation -> T.Text
+noteRange conv =
+  case Conv.convAnchor conv of
+    Conv.OnLines old -> spanRange old
+    anchor -> Threads.anchorPlace anchor
 
 grownRange :: Conv.Conversation -> Conv.LineSpan -> T.Text
 grownRange conv lineSpan =

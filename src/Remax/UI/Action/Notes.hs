@@ -79,8 +79,9 @@ markedSpan st = do
   fv <- Types.currentFileMay st
   Anchor.lineSpanFor st fv (map (\(key, _, _, _) -> key) (Types.stLastRows st))
 
--- The notes the span touches, oldest first, each offering a reply and,
--- when the span reaches past the note's lines, a join.
+-- The notes the span touches, each offering a reply and, when the span
+-- reaches past the note's lines, a join, in the order their boxes
+-- would draw down the file.
 choicesFor :: Types.St -> Conv.LineSpan -> [Types.NoteChoice]
 choicesFor st lineSpan =
   case Types.currentFileMay st of
@@ -107,7 +108,7 @@ choicesFor st lineSpan =
           Conv.OnLines old -> any (`notElem` Conv.spanKeys old) (Conv.spanKeys lineSpan)
           _ -> True
       in
-        Types.NewNote : concatMap choices touched
+        View.inFileOrder fv lineSpan (Types.NewNote : concatMap choices touched)
 
 defaultChoice :: [Types.NoteChoice] -> Int
 defaultChoice choices =
@@ -117,9 +118,13 @@ defaultChoice choices =
       Types.ReplyOutdated _ -> True
       Types.NewNote -> False
       Types.JoinNote _ -> False
+    isNew (_, choice) = case choice of
+      Types.NewNote -> True
+      _ -> False
   in
-    case filter isReply (zip [0 ..] choices) of
-      [(i, _)] -> i
+    case (filter isReply (zip [0 ..] choices), filter isNew (zip [0 ..] choices)) of
+      ([(i, _)], _) -> i
+      (_, (i, _) : _) -> i
       _ -> 0
 
 openNotePopup :: Store.Verdict -> Types.MarkUndo -> Brick.EventM Types.Name Types.St ()

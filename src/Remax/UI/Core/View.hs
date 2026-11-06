@@ -14,6 +14,7 @@ module Remax.UI.Core.View
   , terminalColumns
   , PopupPlacement (..)
   , popupPlacement
+  , inFileOrder
   , InboxGeometry (..)
   , inboxGeometry
   , windowSpanFor
@@ -224,17 +225,30 @@ inlineRow st np =
 
 planRow :: Types.FileView -> Types.NotePlan -> Maybe Int
 planRow fv plan =
+  choiceRow fv (Types.planSpan plan) (Maybe.fromMaybe Types.NewNote (Types.safeIdx (Types.planChoices plan) (Types.planChosen plan)))
+
+choiceRow :: Types.FileView -> Conv.LineSpan -> Types.NoteChoice -> Maybe Int
+choiceRow fv lineSpan choice =
+  case choice of
+    Types.ReplyNote conv -> conversationRow fv (Conv.convId conv)
+    Types.ReplyOutdated conv -> conversationRow fv (Conv.convId conv)
+    Types.JoinNote conv ->
+      case Maybe.catMaybes [conversationRow fv (Conv.convId conv), spanEndRow fv lineSpan] of
+        [] -> Nothing
+        found -> Just (maximum found)
+    Types.NewNote -> spanEndRow fv lineSpan
+
+inFileOrder :: Types.FileView -> Conv.LineSpan -> [Types.NoteChoice] -> [Types.NoteChoice]
+inFileOrder fv lineSpan =
   let
-    lineSpan = Types.planSpan plan
+    rank choice = case choice of
+      Types.ReplyNote _ -> 0 :: Int
+      Types.ReplyOutdated _ -> 0
+      Types.JoinNote _ -> 1
+      Types.NewNote -> 2
+    place choice = (Maybe.fromMaybe maxBound (choiceRow fv lineSpan choice), rank choice)
   in
-    case Types.safeIdx (Types.planChoices plan) (Types.planChosen plan) of
-      Just (Types.ReplyNote conv) -> conversationRow fv (Conv.convId conv)
-      Just (Types.ReplyOutdated conv) -> conversationRow fv (Conv.convId conv)
-      Just (Types.JoinNote conv) ->
-        case Maybe.catMaybes [conversationRow fv (Conv.convId conv), spanEndRow fv lineSpan] of
-          [] -> Nothing
-          found -> Just (maximum found)
-      _ -> spanEndRow fv lineSpan
+    List.sortOn place
 
 workRow :: Types.FileView -> Types.WorkPopup -> Maybe Int
 workRow fv wp =
