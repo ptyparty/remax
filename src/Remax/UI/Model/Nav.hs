@@ -18,6 +18,7 @@ module Remax.UI.Model.Nav
   , takeRun
   , selectedChanges
   , selectedRuns
+  , nextUnvisitedRow
   , runChanges
   , hunkUnderCursor
   , parkAnchor
@@ -155,11 +156,7 @@ parkGo f h st fv =
       Maybe.fromMaybe (DiffModel.runAnchor r) (firstUnacceptedRow st fv clamped)
     moveTo r v =
       v
-        { Types.fvEd =
-            (Types.fvEd v)
-              { Modal.edZipper = Z.moveCursor (target r, 0) (Modal.edZipper (Types.fvEd v))
-              , Modal.edSelAnchor = Nothing
-              }
+        { Types.fvEd = View.selectRow (target r) (Types.fvEd v)
         }
   in
     case Types.safeIdx rs clamped of
@@ -182,6 +179,18 @@ firstUnacceptedRow st fv h =
     case Maybe.mapMaybe unaccepted (zip rows points) of
       (r : _) -> Just r
       [] -> Nothing
+
+nextUnvisitedRow :: Types.St -> Types.FileView -> Int -> Int -> Maybe Int
+nextUnvisitedRow st fv h after =
+  let
+    unvisited (row, point) = do
+      k <- DiffModel.rKey row
+      if DiffModel.rRunIx row == Just h && Map.notMember k (Types.stVerdicts st)
+        then Just (Maybe.fromMaybe point (DiffModel.rNewRow row))
+        else Nothing
+    candidates = Maybe.mapMaybe unvisited (zip (Types.fvRows fv) (View.restingPoints fv))
+  in
+    Maybe.listToMaybe (filter (> after) candidates ++ candidates)
 
 -- park, then ask the viewport to frame the whole hunk.
 parkM :: Int -> Int -> Brick.EventM Types.Name Types.St ()

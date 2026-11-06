@@ -296,7 +296,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stLoadedOnce = False
     , Types.stVi = Vi.viIdle
     , Types.stSearchDir = 1
-    , Types.stDeferAdvance = False
+    , Types.stHeldMove = Types.NotHeld
     , Types.stPullMeta = pullMeta
     , Types.stPullPoll = Types.noPullPoll
     , Types.stBaseAt = Nothing

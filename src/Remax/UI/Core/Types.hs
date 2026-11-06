@@ -92,7 +92,8 @@ module Remax.UI.Core.Types
   , Remark (..)
   , NoteLine (..)
   , searchSigil
-  , VerdictScope (..)
+  , HeldMove (..)
+  , PostMark (..)
   , setMsg
   , showPullView
   , hidePullView
@@ -672,7 +673,7 @@ data St = St
   , stLoadedOnce :: Bool
   , stVi :: Vi.ViKeys -- a half-typed vi command: count, operator, what it awaits
   , stSearchDir :: Int -- which way / (or vi's ?) last searched: 1 or -1
-  , stDeferAdvance :: Bool -- hold the post-mark jump until the note popup closes
+  , stHeldMove :: HeldMove -- hold the post-mark move until the note popup closes
   , stAltFile :: Maybe (FilePath, Int) -- where Space a bounces back to
   , stAnchor :: Maybe Anchor -- the hunk under review; ' returns here
   , stGrepNav :: Maybe (T.Text, [(FilePath, Int)], Int) -- grep hits n/N walk
@@ -919,7 +920,9 @@ data NoteLine = NoteLine
 searchSigil :: St -> T.Text
 searchSigil st = if stSearchDir st < 0 then "?" else "/"
 
-data VerdictScope = VerdictHunk | VerdictLines
+data HeldMove = NotHeld | Holding | Held PostMark
+
+data PostMark = ToNextPending | SelectLine Int | CursorTo Int
 
 data Chord
   = CancelKey
