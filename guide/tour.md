@@ -58,7 +58,9 @@ the view they have open has no tour): it lists every tour kept for the
 repository by name, view and age, and picking one opens that view and
 starts the tour at its first stop. Tell them the name rather than the
 flags. `remax -C "$REPO" tour list` prints the same list, so check the
-tour is there before you say it is ready.
+tour is there before you say it is ready. `remax -C "$REPO" do ':tour
+show NAME'` opens it in the reviewer's session, switching to its
+repository and view.
 
 ## Posting the stops
 

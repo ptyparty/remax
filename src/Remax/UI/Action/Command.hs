@@ -86,7 +86,7 @@ commandTable =
   , ("pr", ArgPull, "open pull request N on its page, in edit mode if it is yours and checked out; bare :pr picks one; :pr commits walks its commits; :pr edit opens it in a worktree of its own, :pr review returns")
   , ("submit", NoArg, "send every pending comment and reply to GitHub as one review")
   , ("walk", ArgText, "which hunks ] and [ visit: " <> T.intercalate " | " (map Types.walkLabel Types.walkCycle))
-  , ("tour", ArgText, "back on the tour; :tour N goes to stop N, :tour list shows the stops, :tour ask TEXT requests one")
+  , ("tour", ArgText, "back on the tour; :tour N goes to stop N, :tour list shows the stops, :tour show NAME opens a kept tour by name, :tour ask TEXT requests one")
   , ("tours", NoArg, "every tour kept for this repository; \9166 opens one's view and starts it")
   , ("follow", NoArg, "follow edits: each change to a file on disk takes you to it (again to stop)")
   , ("feedback", NoArg, "recent conversations, newest first; \9166 goes to one (also Space i)")
@@ -130,7 +130,7 @@ cmdCandidates st input =
       ["set", "note-on-flag"] -> prefixed ["0", "1"]
       ["resolve"] -> prefixed ["all"]
       ["pr"] -> prefixed ["commits", "edit", "review"]
-      ["tour"] -> prefixed ["list", "ask"]
+      ["tour"] -> prefixed ["list", "ask", "show"]
       ["walk"] -> prefixed (map Types.walkLabel Types.walkCycle)
       [cmd] -> case argKindOf cmd of
         Just ArgRef -> prefixed ("branch" : Types.stCmdRefs st)
@@ -246,6 +246,7 @@ runCommand input =
     ["tour", "list"] -> PickerAction.openTourStops
     ["tours"] -> PickerAction.openTourPicker
     ("tour" : "ask" : rest) -> VerdictAction.askTour (T.unwords rest)
+    ("tour" : "show" : rest@(_ : _)) -> PickerAction.showTourNamed (T.unwords rest)
     ["tour", n] | Just k <- lineAddress n -> VerdictAction.gotoTourStep k
     ["walk", which] -> setWalkNamed which
     ["resolve"] -> NoteAction.unnoteCmd

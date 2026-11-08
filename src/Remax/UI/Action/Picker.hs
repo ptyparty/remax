@@ -14,6 +14,7 @@ module Remax.UI.Action.Picker
   , openPullPicker
   , openTourPicker
   , openTourStops
+  , showTourNamed
   , openWorktreePicker
   , reviewCommit
   , applyCheckout
@@ -782,6 +783,7 @@ applyTourChoice subject = do
   case List.find ((== subject) . Store.tourSummarySubject) tours of
     Nothing -> Types.setMsg "that tour is no longer kept"
     Just summary
+      | onTourView st summary && null (Types.stFiles st) -> State.modify (\s -> s {Types.stTourToStart = Just subject})
       | onTourView st summary -> VerdictAction.gotoTourStep 1
       | otherwise -> do
           switchToTour summary
@@ -789,6 +791,24 @@ applyTourChoice subject = do
           Monad.when
             (Types.stMode after /= Types.stMode st || Maybe.isJust (pullOf summary))
             (State.modify (\s -> s {Types.stTourToStart = Just subject}))
+
+showTourNamed :: T.Text -> Brick.EventM Types.Name Types.St ()
+showTourNamed wanted = do
+  st <- State.get
+  let
+    roots = List.nub (Types.stRoot st : Types.stRoots st)
+    calledIn root = fmap (map ((,) root) . filter (tourCalled wanted)) (Store.listTours (Types.stConn st) (T.pack root))
+  found <- MonadIO.liftIO (mapM calledIn roots)
+  case concat found of
+    [] -> Types.setMsg ("no tour called " <> wanted <> " \8212 :tours lists the ones kept")
+    ((root, summary) : _)
+      | root == Types.stRoot st -> applyTourChoice (Store.tourSummarySubject summary)
+      | otherwise -> Repo.arrive Repo.Arrival {Repo.arTarget = root, Repo.arMode = Nothing, Repo.arThen = applyTourChoice (Store.tourSummarySubject summary)}
+
+tourCalled :: T.Text -> Store.TourSummary -> Bool
+tourCalled wanted summary =
+  Just (T.toCaseFold wanted) == fmap T.toCaseFold (Store.tourSummaryName summary)
+    || wanted == Store.tourSummarySubject summary
 
 onTourView :: Types.St -> Store.TourSummary -> Bool
 onTourView st summary =
