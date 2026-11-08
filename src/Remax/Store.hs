@@ -450,9 +450,13 @@ listTours conn repo = do
         rows
     )
 
-appendTourStep :: SQLite.Connection -> T.Text -> T.Text -> T.Text -> Maybe T.Text -> T.Text -> [T.Text] -> IO Int
-appendTourStep conn repo subject author title note keys =
+appendTourStep :: SQLite.Connection -> T.Text -> T.Text -> T.Text -> T.Text -> Maybe T.Text -> T.Text -> [T.Text] -> IO Int
+appendTourStep conn repo subject mode author title note keys =
   SQLite.withTransaction conn $ do
+    SQLite.execute
+      conn
+      "INSERT OR IGNORE INTO tour (repo, subject, mode) VALUES (?, ?, ?)"
+      (repo, subject, mode)
     rows <-
       SQLite.query
         conn

@@ -24,6 +24,7 @@ module Remax.UI.Model.Nav
   , parkAnchor
   , visitHunk
   , visitAnchor
+  , landOnTour
   , jumpToAnchor
   , parkOnLine
   , gotoLine
@@ -462,6 +463,13 @@ visitHunk :: Int -> Int -> Brick.EventM Types.Name Types.St ()
 visitHunk f h = do
   State.modify Types.hidePullView
   parkM f h
+
+landOnTour :: T.Text -> (Int, Int) -> Brick.EventM Types.Name Types.St ()
+landOnTour said (f, h) = do
+  State.modify (\s -> s {Types.stWalk = Types.WalkTour, Types.stTourLast = Just (f, h)})
+  visitAnchor f h
+  scrollTrayToCurrent
+  Types.setMsg said
 
 visitAnchor :: Int -> Int -> Brick.EventM Types.Name Types.St ()
 visitAnchor f h = do

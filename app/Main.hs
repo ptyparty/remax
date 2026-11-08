@@ -502,7 +502,12 @@ hunksJson (root, mode, found) =
 tourBegin :: [String] -> IO ()
 tourBegin args = do
   (flags, positional) <- either Exit.die pure (takeFlags ("--name" : refFlags) args)
-  Monad.unless (null positional) (Exit.die usage)
+  Monad.unless (null positional) $
+    Exit.die
+      ( if Map.member "--name" flags
+          then "tour begin takes no words after its flags; quote a name of several words: --name \"the new table\""
+          else usage
+      )
   roots <- targetRepos
   conn <- Store.openStore
   Monad.forM_ roots $ \root -> do
@@ -585,8 +590,7 @@ tourStep args = do
       let
         missing = filter (`notElem` map Hunks.hunkId chosen) ids
       Monad.unless (null missing) (Exit.die ("No hunk with id " ++ T.unpack (T.intercalate ", " missing)))
-      seq_ <- Store.appendTourStep conn (T.pack root) (Git.subjectText mode) "tour" title note (concatMap Hunks.hunkKeys chosen)
-      Store.nameTour conn (T.pack root) (Git.subjectText mode) (Git.modeToText mode) Nothing
+      seq_ <- Store.appendTourStep conn (T.pack root) (Git.subjectText mode) (Git.modeToText mode) "tour" title note (concatMap Hunks.hunkKeys chosen)
       putStrLn ("step " ++ show seq_ ++ ": " ++ show (length chosen) ++ " hunk(s)")
 
 -- for a directory that merely holds repositories, which is what a story

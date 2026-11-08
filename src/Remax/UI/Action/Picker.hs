@@ -782,18 +782,28 @@ applyTourChoice subject = do
   case List.find ((== subject) . Store.tourSummarySubject) tours of
     Nothing -> Types.setMsg "that tour is no longer kept"
     Just summary
-      | subject == Git.subjectText (Types.stMode st) -> VerdictAction.gotoTourStep 1
+      | onTourView st summary -> VerdictAction.gotoTourStep 1
       | otherwise -> do
-          State.modify (\s -> s {Types.stTourToStart = Just subject})
           switchToTour summary
+          after <- State.get
+          Monad.when
+            (Types.stMode after /= Types.stMode st || Maybe.isJust (pullOf summary))
+            (State.modify (\s -> s {Types.stTourToStart = Just subject}))
+
+onTourView :: Types.St -> Store.TourSummary -> Bool
+onTourView st summary =
+  Store.tourSummarySubject summary == Git.subjectText (Types.stMode st)
+    && maybe True (== Git.modeToText (Types.stMode st)) (Store.tourSummaryMode summary)
+
+pullOf :: Store.TourSummary -> Maybe Int
+pullOf summary = T.stripPrefix "pull/" (Store.tourSummarySubject summary) >>= Git.readCount
 
 switchToTour :: Store.TourSummary -> Brick.EventM Types.Name Types.St ()
 switchToTour summary =
   let
     subject = Store.tourSummarySubject summary
-    pull = T.stripPrefix "pull/" subject >>= Git.readCount
   in
-    case (pull, Store.tourSummaryMode summary >>= Git.modeFromText) of
+    case (pullOf summary, Store.tourSummaryMode summary >>= Git.modeFromText) of
       (Just n, _) -> Worktree.openPullHere n
       (Nothing, Just mode) -> Settings.setMode mode
       (Nothing, Nothing)

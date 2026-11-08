@@ -82,7 +82,7 @@ resumeTour = do
   case (Tour.tourAbsence st, target) of
     (Just why, _) -> Types.setMsg why
     (Nothing, Nothing) -> Types.setMsg "the tour's hunks are no longer in this view"
-    (Nothing, Just (f, h)) -> landOnTour "back on the tour" (f, h)
+    (Nothing, Just (f, h)) -> Nav.landOnTour "back on the tour" (f, h)
 
 askTour :: T.Text -> Brick.EventM Types.Name Types.St ()
 askTour prompt = do
@@ -103,15 +103,8 @@ gotoTourStep :: Int -> Brick.EventM Types.Name Types.St ()
 gotoTourStep n = do
   st <- State.get
   case Types.safeIdx (Tour.stepGroups st) (n - 1) of
-    Just ((f, h) : _) -> landOnTour ("tour step " <> Types.tshow n) (f, h)
+    Just ((f, h) : _) -> Nav.landOnTour ("tour step " <> Types.tshow n) (f, h)
     _ -> Types.setMsg ("no tour step " <> Types.tshow n <> " in this view")
-
-landOnTour :: T.Text -> (Int, Int) -> Brick.EventM Types.Name Types.St ()
-landOnTour said (f, h) = do
-  State.modify (\s -> s {Types.stWalk = Types.WalkTour, Types.stTourLast = Just (f, h)})
-  Nav.visitAnchor f h
-  Nav.scrollTrayToCurrent
-  Types.setMsg said
 
 walkMsg :: Types.WalkFilter -> T.Text
 walkMsg chosen =

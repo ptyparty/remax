@@ -766,14 +766,10 @@ startPickedTour = do
   st <- State.get
   case Types.stTourToStart st of
     Just subject
-      | subject == Git.subjectText (Types.stMode st) && not (null (Types.stFiles st)) -> do
-          State.modify (\s -> s {Types.stTourToStart = Nothing})
+      | subject == Git.subjectText (Types.stMode st) -> do
+          State.modify (\s -> Types.hidePullView s {Types.stTourToStart = Nothing})
           case Tour.tourOrder st of
-            (first : _) -> do
-              State.modify (\s -> s {Types.stWalk = Types.WalkTour, Types.stTourLast = Just first})
-              Nav.visitAnchor (fst first) (snd first)
-              Nav.scrollTrayToCurrent
-              Types.setMsg ("tour started \8212 " <> Types.tshow (length (Types.stTour st)) <> " stops, ]/[ follow it")
+            (first : _) -> Nav.landOnTour ("tour started \8212 " <> Types.tshow (length (Types.stTour st)) <> " stops, ]/[ follow it") first
             [] -> Types.setMsg "none of the tour's hunks are in this view"
     _ -> pure ()
 
