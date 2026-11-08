@@ -71,6 +71,7 @@ data Cmd
   | TourStep [String]
   | TourClear [String]
   | TourList
+  | TakeSnapshot T.Text
   | RunInSession T.Text
   | SetUp Setup.SetupAction
   | ShowGuide T.Text
@@ -139,6 +140,7 @@ main = do
         TourStep rest -> tourStep rest
         TourClear rest -> tourClear rest
         TourList -> tourList
+        TakeSnapshot name -> takeSnapshot name
         RunInSession command -> runInSession command
         SetUp action -> Setup.runSetup action
         ShowGuide page -> showGuide page
@@ -186,7 +188,9 @@ usage =
   \       remax [-C DIR] --ref REF [--base BASE | --branch]\n\
   \       remax [-C DIR] --pr N\n\
   \       remax [-C DIR] forget [PATH]  forget verdicts under PATH (default: the\n\
-  \                                     current directory); PATH need not still exist\n\
+  \                                     current directory); PATH need not still exist;\n\
+  \                                     a PATH holding a whole repository forgets\n\
+  \                                     its tours and their snapshots too\n\
   \       remax [-C DIR] list [--json] [--wait] [--state FILE]\n\
   \                      [--awaiting note|agent|reviewer]\n\
   \                                     show conversations, each under the\n\
@@ -263,12 +267,16 @@ usage =
   \       remax [-C DIR] tour step [ref flags] [--title WORDS] ID[,ID...] NOTE...\n\
   \       remax [-C DIR] tour clear [ref flags]\n\
   \       remax [-C DIR] tour list\n\
+  \       remax [-C DIR] snapshot NAME\n\
   \                                     guide the reviewer through the change:\n\
   \                                     begin empties the tour and names it,\n\
   \                                     each step names hunks and says something\n\
   \                                     about them, and the session walks them in\n\
   \                                     that order; list shows every tour kept,\n\
-  \                                     which the reviewer picks from with :tours\n\
+  \                                     which the reviewer picks from with :tours;\n\
+  \                                     snapshot keeps the working tree as it is\n\
+  \                                     under refs/remax/snapshot/, for a tour\n\
+  \                                     that holds still while you keep working\n\
   \       remax guide [PAGE]            print a page of the guide for agents\n\
   \                                     working with a reviewer; index (the\n\
   \                                     default) links to the rest\n\
@@ -311,6 +319,7 @@ parseArgs args0 =
         ("tour" : "step" : rest) -> Right (mDir, TourStep rest)
         ("tour" : "clear" : rest) -> Right (mDir, TourClear rest)
         ["tour", "list"] -> Right (mDir, TourList)
+        ("snapshot" : name@(_ : _)) -> Right (mDir, TakeSnapshot (T.pack (unwords name)))
         ["--version"] -> Right (mDir, ShowVersion)
         ["guide"] -> Right (mDir, ShowGuide "index")
         ["guide", page] -> Right (mDir, ShowGuide (T.pack page))
@@ -548,6 +557,32 @@ tourList = do
     Monad.when (length roots > 1 && not (null tours)) (putStrLn ("\9472\9472 " ++ FilePath.takeFileName root ++ " \9472\9472"))
     Monad.forM_ tours (TIO.putStrLn . tourLine)
 
+takeSnapshot :: T.Text -> IO ()
+takeSnapshot name = do
+  roots <- targetRepos
+  root <- case roots of
+    [one] -> pure one
+    _ -> Exit.die "A snapshot is of one checkout; run it with -C on the repository."
+  let
+    slug = snapshotSlug name
+  Monad.when ("-" `T.isPrefixOf` name) (Exit.die usage)
+  Monad.when (T.null slug) (Exit.die "Name the snapshot with letters or digits, such as: remax snapshot \"data model\"")
+  existed <- Git.refExists root (Git.snapshotRefFor slug)
+  taken <- Git.snapshotWorkingTree root slug
+  case taken of
+    Left err -> Exit.die (T.unpack err)
+    Right snap -> do
+      TIO.putStrLn ((if existed then "moved snapshot " else "snapshot ") <> Git.snapshotRef snap <> " to the working tree on " <> T.take 10 (Git.snapshotBase snap))
+      Monad.when existed (putStrLn "a tour of the earlier snapshot under this name now shows this one; post it again")
+      TIO.putStrLn ("tour it with: --ref " <> Git.snapshotRef snap <> " --base " <> Git.snapshotBase snap)
+
+snapshotSlug :: T.Text -> T.Text
+snapshotSlug =
+  T.filter (\c -> Char.isAsciiLower c || Char.isDigit c || c == '-' || c == '.' || c == '_')
+    . T.intercalate "-"
+    . T.words
+    . T.toLower
+
 tourLine :: Store.TourSummary -> T.Text
 tourLine summary =
   let
@@ -724,6 +759,10 @@ forget mPath = do
           underScope (_, f) =
             T.null scope || f == scope || (scope <> "/") `T.isPrefixOf` f
         pure (root, scope, filter underScope rows)
+  tourHits <- fmap (filter (not . null . snd)) . Monad.forM roots $ \root ->
+    case scopeIn root of
+      Just "" -> fmap ((,) root) (Store.listTours conn (T.pack root))
+      _ -> pure (root, [])
   let
     hits = filter (\(_, _, rows) -> not (null rows)) found
     doomedCount = sum (map (\(_, _, rows) -> length rows) hits)
@@ -734,17 +773,19 @@ forget mPath = do
     described = case mPath of
       Nothing -> if length roots > 1 then "here" else "the repository"
       Just path -> path
-  if null hits
+  if null hits && null tourHits
     then putStrLn ("Nothing is recorded for the files under " ++ described ++ ".")
     else do
-      putStrLn
-        ( show doomedCount
-            ++ " line verdict(s) across "
-            ++ show fileCount
-            ++ " file(s) under "
-            ++ described
-            ++ "."
-        )
+      Monad.unless (null hits) $
+        putStrLn
+          ( show doomedCount
+              ++ " line verdict(s) across "
+              ++ show fileCount
+              ++ " file(s) under "
+              ++ described
+              ++ "."
+          )
+      Monad.unless (null tourHits) (putStrLn (toursToForget tourHits))
       -- named when there is more than one, so a story-wide forget says
       -- what it is about to reach into
       Monad.when (length hits > 1) $
@@ -759,8 +800,30 @@ forget mPath = do
           Monad.forM_ hits $ \(root, _, rows) -> do
             Store.deleteFiles conn (T.pack root) (List.nub (map snd rows))
             WorkStore.forgetWork conn (T.pack root)
-          putStrLn ("  \10003 forgot " ++ show doomedCount ++ " line verdict(s)")
+          Monad.forM_ tourHits (uncurry (forgetTours conn))
+          putStrLn ("  \10003 forgot " ++ show doomedCount ++ " line verdict(s)" ++ (if null tourHits then "" else " and " ++ show (length (concatMap snd tourHits)) ++ " tour(s)"))
         else putStrLn "  left alone"
+
+toursToForget :: [(FilePath, [Store.TourSummary])] -> String
+toursToForget tourHits =
+  let
+    tours = concatMap snd tourHits
+    snapshots = length (filter (Git.isSnapshotRef . Store.tourSummarySubject) tours)
+  in
+    show (length tours)
+      ++ " tour(s)"
+      ++ (if snapshots > 0 then " and the " ++ show snapshots ++ " snapshot(s) they were posted on" else "")
+      ++ "."
+
+forgetTours :: SQLite.Connection -> FilePath -> [Store.TourSummary] -> IO ()
+forgetTours conn root tours = do
+  present <- Directory.doesDirectoryExist root
+  Monad.forM_ tours $ \summary -> do
+    let
+      subject = Store.tourSummarySubject summary
+    Store.clearTour conn (T.pack root) subject
+    Store.clearTourRequest conn (T.pack root) subject
+    Monad.when present (Monad.void (Git.dropSnapshot root subject))
 
 -- Hold a review open in the reviewer's header for as long as this runs.
 --

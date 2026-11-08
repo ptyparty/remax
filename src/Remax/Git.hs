@@ -9,6 +9,11 @@ module Remax.Git
   , TreeState (..)
   , pullLocal
   , pullHeadRef
+  , Snapshot (..)
+  , snapshotWorkingTree
+  , snapshotRefFor
+  , isSnapshotRef
+  , dropSnapshot
   , pullBaseRef
   , pullBaseTipRef
   , liveBase
@@ -155,6 +160,76 @@ pullBaseRef n = "refs/remax/pull/" <> T.pack (show n) <> "/base"
 
 pullBaseTipRef :: Int -> T.Text
 pullBaseTipRef n = "refs/remax/pull/" <> T.pack (show n) <> "/base-tip"
+
+snapshotPrefix :: T.Text
+snapshotPrefix = "refs/remax/snapshot/"
+
+snapshotRefFor :: T.Text -> T.Text
+snapshotRefFor slug = snapshotPrefix <> slug
+
+isSnapshotRef :: T.Text -> Bool
+isSnapshotRef = T.isPrefixOf snapshotPrefix
+
+data Snapshot = Snapshot
+  { snapshotRef :: T.Text
+  , snapshotBase :: T.Text
+  }
+
+snapshotWorkingTree :: FilePath -> T.Text -> IO (Either T.Text Snapshot)
+snapshotWorkingTree root slug = do
+  let
+    ref = snapshotRefFor slug
+  named <- gitOutput [] root ["check-ref-format", T.unpack ref]
+  base <- gitOutput [] root ["rev-parse", "HEAD"]
+  case (named, base) of
+    (Left _, _) -> pure (Left ("can't name a snapshot " <> slug))
+    (_, Left _) -> pure (Left "a snapshot sits on a commit, and this checkout has none yet")
+    (Right _, Right sha) -> do
+      tree <- snapshotTree root
+      case tree of
+        Left err -> pure (Left err)
+        Right treeSha -> do
+          made <- gitOutput snapshotAuthor root ["commit-tree", T.unpack treeSha, "-p", T.unpack sha, "-m", "remax snapshot " ++ T.unpack slug]
+          stored <- either (pure . Left) (\commit -> gitOutput [] root ["update-ref", T.unpack ref, T.unpack commit]) made
+          pure (fmap (const Snapshot {snapshotRef = ref, snapshotBase = sha}) stored)
+
+dropSnapshot :: FilePath -> T.Text -> IO (Either T.Text ())
+dropSnapshot root ref
+  | isSnapshotRef ref = fmap (fmap (const ())) (gitOutput [] root ["update-ref", "-d", T.unpack ref])
+  | otherwise = pure (Right ())
+
+snapshotTree :: FilePath -> IO (Either T.Text T.Text)
+snapshotTree root = do
+  index <- gitPathOf root "index"
+  case index of
+    Nothing -> pure (Left "can't find this checkout's git directory")
+    Just indexPath -> do
+      made <- IOError.tryIOError (scratchIndex indexPath)
+      case made of
+        Left err -> pure (Left ("can't make a scratch index: " <> T.pack (show err)))
+        Right scratch -> do
+          let
+            scratchEnv = [("GIT_INDEX_FILE", scratch)]
+          added <- gitOutput scratchEnv root ["add", "-A"]
+          tree <- either (pure . Left) (const (gitOutput scratchEnv root ["write-tree"])) added
+          _ <- IOError.tryIOError (Directory.removeFile scratch)
+          pure tree
+
+scratchIndex :: FilePath -> IO FilePath
+scratchIndex indexPath = do
+  (scratch, handle) <- SysIO.openTempFile (FilePath.takeDirectory indexPath) "remax-snapshot.index"
+  SysIO.hClose handle
+  hasIndex <- Directory.doesFileExist indexPath
+  if hasIndex then Directory.copyFile indexPath scratch else Directory.removeFile scratch
+  pure scratch
+
+snapshotAuthor :: [(String, String)]
+snapshotAuthor =
+  [ ("GIT_AUTHOR_NAME", "remax")
+  , ("GIT_AUTHOR_EMAIL", "remax@localhost")
+  , ("GIT_COMMITTER_NAME", "remax")
+  , ("GIT_COMMITTER_EMAIL", "remax@localhost")
+  ]
 
 liveBase :: FilePath -> PullRequest -> IO (Maybe T.Text)
 liveBase root pr = do
@@ -394,9 +469,14 @@ modeLabel mode =
     VsIndex -> "unstaged"
     Untracked -> "untracked"
     AtRef rr
-      | rrBase rr == emptyTreeRef -> rrTip rr <> " vs nothing"
-      | otherwise -> rrTip rr <> " vs " <> rrBase rr
+      | rrBase rr == emptyTreeRef -> tipLabel (rrTip rr) <> " vs nothing"
+      | isSnapshotRef (rrTip rr) -> tipLabel (rrTip rr) <> " vs " <> T.take 10 (rrBase rr)
+      | otherwise -> tipLabel (rrTip rr) <> " vs " <> rrBase rr
     AtPull pr editing -> pullLabel pr <> " " <> editingText editing
+
+tipLabel :: T.Text -> T.Text
+tipLabel tip =
+  maybe tip ("snapshot " <>) (T.stripPrefix snapshotPrefix tip)
 
 repoRoot :: IO (Maybe FilePath)
 repoRoot = do
@@ -981,16 +1061,24 @@ gitStateFile = gitStatePath Directory.doesFileExist
 
 gitStatePath :: (FilePath -> IO Bool) -> FilePath -> String -> IO (Maybe FilePath)
 gitStatePath exists root name = do
-  (code, out, _) <-
-    Process.readProcessWithExitCode "git" ["-C", root, "rev-parse", "--git-path", name] ""
-  case code of
-    Exit.ExitFailure _ -> pure Nothing
-    Exit.ExitSuccess -> do
-      let
-        raw = T.unpack (T.strip (T.pack out))
-        path = if FilePath.isAbsolute raw then raw else root </> raw
+  found <- gitPathOf root name
+  case found of
+    Nothing -> pure Nothing
+    Just path -> do
       present <- exists path
       pure (if present then Just path else Nothing)
+
+gitPathOf :: FilePath -> String -> IO (Maybe FilePath)
+gitPathOf root name = do
+  (code, out, _) <-
+    Process.readProcessWithExitCode "git" ["-C", root, "rev-parse", "--git-path", name] ""
+  pure $ case code of
+    Exit.ExitFailure _ -> Nothing
+    Exit.ExitSuccess ->
+      let
+        raw = T.unpack (T.strip (T.pack out))
+      in
+        Just (if FilePath.isAbsolute raw then raw else root </> raw)
 
 pickOf :: T.Text -> Maybe (T.Text, T.Text)
 pickOf l =
@@ -1413,7 +1501,10 @@ runGit :: Writable -> FilePath -> [String] -> IO (Either T.Text ())
 runGit = runGitWith []
 
 runGitWith :: [(String, String)] -> Writable -> FilePath -> [String] -> IO (Either T.Text ())
-runGitWith extra _ root args = do
+runGitWith extra _ root args = fmap (fmap (const ())) (gitOutput extra root args)
+
+gitOutput :: [(String, String)] -> FilePath -> [String] -> IO (Either T.Text T.Text)
+gitOutput extra root args = do
   environment <- Env.getEnvironment
   let
     forced = ("GIT_EDITOR", "true") : extra
@@ -1421,9 +1512,9 @@ runGitWith extra _ root args = do
       (Process.proc "git" (["-C", root] ++ args))
         { Process.env = Just (forced ++ filter ((`notElem` map fst forced) . fst) environment)
         }
-  (code, _, err) <- Process.readCreateProcessWithExitCode p ""
+  (code, out, err) <- Process.readCreateProcessWithExitCode p ""
   pure $ case code of
-    Exit.ExitSuccess -> Right ()
+    Exit.ExitSuccess -> Right (T.strip (T.pack out))
     Exit.ExitFailure _ ->
       let
         msg = T.strip (T.pack err)

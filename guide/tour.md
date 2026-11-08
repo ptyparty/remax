@@ -62,6 +62,36 @@ tour is there before you say it is ready. `remax -C "$REPO" do ':tour
 show NAME'` opens it in the reviewer's session, switching to its
 repository and view.
 
+## An early look at critical code
+
+You need not wait until the work is done, or be asked. When you reach
+code where a wrong turn would be costly to undo, such as a new data
+model or schema, a public interface or wire format, a tricky algorithm,
+or code that moves money or guards access, bring the reviewer just
+those hunks and keep working:
+
+```sh
+remax -C "$REPO" snapshot "caching model"
+```
+
+`snapshot` keeps the working tree as it is, untracked files included,
+as a commit under `refs/remax/snapshot/`, without touching the working
+tree, the index or the branch. It prints the `--ref` and `--base` to
+give `hunks`, `tour begin` and `tour step`, so the tour holds still
+while you go on editing. Snapshotting again under the same name moves
+it; post the tour again after that. Reuse one name for one piece of
+work rather than making a new snapshot each time: the reviewer's
+`remax forget` on the repository clears its tours and their snapshots.
+
+Keep an early tour to the few hunks that decide the design, two to five
+stops, and use the first note to say what you want judged and what is
+still rough. Then carry on as if the design holds, with `remax watch`
+running (see [Staying and reacting](watch.md)) so their notes reach you
+as they write them. Fold each note in and reply saying what changed. If
+a note overturns the design, rework it before building further on it.
+Do not stop to wait for the review: tell the reviewer the tour's name in
+a sentence, or post it as their move where they track work.
+
 ## Posting the stops
 
 ```sh

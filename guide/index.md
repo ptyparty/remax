@@ -48,8 +48,9 @@ The watch holds a mark in the reviewer's header for as long as it runs, so they 
   fixing the reviewer's own pull request, and reading one with local git.
 - [When the review moves](moves.md): following a `moved` line into
   another checkout.
-- [Giving a tour](tour.md): walking the reviewer through a change, and
-  answering a `tour` line.
+- [Giving a tour](tour.md): walking the reviewer through a change,
+  bringing critical code for an early look mid-work, and answering a
+  `tour` line.
 - [Pointing the reviewer](pointing.md): `remax do :go` and
   `:highlight`, including whenever the human asks to be shown where some
   code is.
@@ -76,9 +77,10 @@ The watch holds a mark in the reviewer's header for as long as it runs, so they 
   with `remax reply`, and draft comments only when asked.
 - Never write to `~/.local/state/remax/review.db` directly, and never
   run `remax forget` unless the human explicitly asks.
-- Post a tour only when asked for one; `tour begin` discards the
-  previous tour for that view. A tour prepared for later names its view
-  with ref flags and itself with `--name`.
+- Post a tour when asked for one, or to bring critical code for an
+  early look while you keep working (see [Giving a tour](tour.md));
+  `tour begin` discards the previous tour for that view. A tour prepared
+  for later names its view with ref flags and itself with `--name`.
 - No conversations and no `tour` line means no outstanding feedback,
   whatever `moved` line the listing has: a move
   you have followed stays listed. A tour request on its own is work,

@@ -60,7 +60,7 @@ remax --pr N          # review pull request N read-only, fetched through gh
 remax --unstaged      # working tree vs index
 remax --untracked     # new files only, reviewed as pure additions; ordinary
                       #   reviews already include them (:set untracked 0 to stop)
-remax forget          # forget verdicts under the current directory (asks first)
+remax forget          # forget verdicts under the current directory (asks first), and from a repository's root its tours and their snapshots
                       #   in a folder of checkouts, reaches all of them
 remax list [--json]   # flagged/questioned punch list for this repository,
                       #   compact for agents; --json prints it whole
@@ -832,6 +832,12 @@ stop you were on, and `:tour 4` jumps to stop four. `Space T` (`C-c T`
 in emacs, or `:tour list`) lays the whole tour out in a popup, every
 stop with its note and files, and `⏎` takes you to the one selected. A tour belongs to the view it was built for; switching the
 subject puts it away and `tour begin` on the same view replaces it.
+
+An agent can bring you critical code early, too: `remax snapshot NAME`
+keeps the working tree as it is under `refs/remax/snapshot/`, without
+touching the working tree, index or branch, so a tour of a few hunks
+holds still while the agent keeps working and your notes reach it as
+you write them.
 
 An agent can also prepare a tour for later. It names the view with ref
 flags and the tour with `--name`, and `:tours` lists every tour kept for
