@@ -25,10 +25,9 @@ remax -C "$REPO" hunks --json
 
 Lists the change set exactly as the reviewer's session sees it: one
 entry per hunk with an `id`, `file`, `line_no` and the marked `lines`.
-With no flags it follows **whatever their open session is viewing** —
-the working tree, a `:ref`, a `:commit` — so you do not need to be told
-which commit they have up; `--ref REF [--base BASE]`, `--base REF` or
-`--pr N` names a view when nobody has one open. Read the whole listing
+With no flags it follows **the view their session last had up** — the
+working tree, a `:ref`, a `:commit` — so you do not need to be told
+which commit they have up while they are looking at it. Read the whole listing
 and decide an order and a sentence or two for each stop; a stop may
 cover several hunks when they are one idea (a rename and its fallout, a
 signature and its call sites).
@@ -40,8 +39,31 @@ build one from `gh pr diff`: its hunks have no ids remax accepts. The
 listing's `subject` reads `pull/N`, and the tour stays with the pull
 request as its head and base move.
 
+## Preparing a tour ahead of time
+
+When the reviewer will look later, or has not said which view, name the
+view yourself on `hunks`, `tour begin` and every `tour step`, because
+"the view their session last had up" may be anything by then:
+
+- committed work on a branch: `--ref BRANCH --base BASE`, the base
+  being the branch it was cut from, or `--ref BRANCH` alone for where
+  it forked from the mainline
+- a single commit: `--ref SHA --base SHA^`
+- a pull request: `--pr N`
+- uncommitted changes: `--base HEAD`
+
+Give the tour a name with `tour begin --name WORDS`, a few words that
+say what it walks. The reviewer finds it with `:tours` (or Space T when
+the view they have open has no tour): it lists every tour kept for the
+repository by name, view and age, and picking one opens that view and
+starts the tour at its first stop. Tell them the name rather than the
+flags. `remax -C "$REPO" tour list` prints the same list, so check the
+tour is there before you say it is ready.
+
+## Posting the stops
+
 ```sh
-remax -C "$REPO" tour begin
+remax -C "$REPO" tour begin --name "caching toggle"
 remax -C "$REPO" tour step --title "the new table" ID "Start here; everything else hangs off it"
 remax -C "$REPO" tour step --title "call sites" ID,ID,ID "The three call sites the signature change touched"
 ```
@@ -52,7 +74,8 @@ one of its hunks out of order still knows where they are; the note
 itself shows only on the first hunk. Give every stop a title when the
 tour has more than a handful.
 
-`tour begin` empties any earlier tour for that view. Each `tour step`
+`tour begin` empties any earlier tour for that view and names the new
+one. Each `tour step`
 appends one stop; the reviewer's session switches to following the
 tour as the first one lands and each note renders above its hunk on
 its own background. An id that is not in the view is refused, so re-run
@@ -69,4 +92,7 @@ line; the tour is the order and the context, not the review. Do not
 turn feedback into tour steps: a `!` or `?` is theirs to give.
 
 Once the last step is posted, start them on it with
-`remax -C "$REPO" do :tour 1` (see [Pointing the reviewer](pointing.md)).
+`remax -C "$REPO" do :tour 1` when their session is on the tour's view
+(see [Pointing the reviewer](pointing.md)). When it is on another view,
+or closed, `do :tours` opens the list for them, or tell them the tour's
+name.

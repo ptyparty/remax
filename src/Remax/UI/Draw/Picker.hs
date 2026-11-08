@@ -84,6 +84,7 @@ pickerTitle mode =
     Types.PickRepo -> "repo"
     Types.PickGrep -> "grep"
     Types.PickPull -> "open pull requests"
+    Types.PickTour -> "tours"
     Types.PickRange rp -> "review head " <> Types.rpHead rp <> " against"
     Types.PickUses up -> "hunks mentioning " <> Types.upName up
     Types.PickWorktree entry -> "edit " <> Git.pullLabel (Types.eePull entry) <> " in"
@@ -98,6 +99,7 @@ pickerHint mode =
     Types.PickParent _ -> "\8593\8595 moves · \9166 reviews against this parent · Esc closes"
     Types.PickRepo -> "\8593\8595 moves · \9166 switches to this repository · Esc closes"
     Types.PickPull -> "\8593\8595 moves · \9166 opens in review mode · Esc closes · :pr N skips the picker"
+    Types.PickTour -> "\8593\8595 moves · \9166 opens the tour's view and starts it · Esc closes"
     Types.PickRange _ -> "\8593\8595 moves · \9166 reviews against the row · Esc keeps the base"
     Types.PickUses _ -> "\8593\8595 moves · \9166 goes to the line · ' returns to the hunk under review · Esc closes"
     Types.PickWorktree _ -> "\8593\8595 moves · \9166 edits the pull request in this worktree, adding it when new · Esc stays read-only"

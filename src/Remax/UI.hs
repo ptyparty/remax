@@ -267,6 +267,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stTourKeys = Map.empty
     , Types.stTourMarks = Map.empty
     , Types.stTourLast = Nothing
+    , Types.stTourToStart = Nothing
     , Types.stNoteGroups = suNoteGroups startup
     , Types.stSpace = False
     , Types.stConfig = suConfig startup

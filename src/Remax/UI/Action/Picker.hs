@@ -12,6 +12,8 @@ module Remax.UI.Action.Picker
   , openRefPicker
   , openCommitPicker
   , openPullPicker
+  , openTourPicker
+  , openTourStops
   , openWorktreePicker
   , reviewCommit
   , applyCheckout
@@ -40,11 +42,14 @@ import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.Modal qualified as Modal
 import Remax.PullPoll qualified as PullPoll
+import Remax.Store qualified as Store
 import Remax.UI.Action.Fuzzy qualified as Fuzzy
 import Remax.UI.Action.Open qualified as Open
 import Remax.UI.Action.Pull qualified as PullAction
 import Remax.UI.Action.Repo qualified as Repo
 import Remax.UI.Action.Settings qualified as Settings
+import Remax.UI.Action.Tour qualified as TourAction
+import Remax.UI.Action.Verdicts qualified as VerdictAction
 import Remax.UI.Action.Worktree qualified as Worktree
 import Remax.UI.Core.Jobs qualified as Jobs
 import Remax.UI.Core.Types qualified as Types
@@ -735,6 +740,66 @@ applyRefChoice choice
   | choice == "working tree" = Settings.returnToTree
   | otherwise = Settings.setRef choice
 
+openTourPicker :: Brick.EventM Types.Name Types.St ()
+openTourPicker = do
+  st <- State.get
+  tours <- MonadIO.liftIO (Store.listTours (Types.stConn st) (Types.repoText st))
+  let
+    here = Git.subjectText (Types.stMode st)
+    current summary = if Store.tourSummarySubject summary == here then "  \8592 current" else ""
+    stops n = Types.tshow n <> (if n == 1 then " stop" else " stops")
+    cellsFor summary =
+      [ Maybe.fromMaybe (tourView summary) (Store.tourSummaryName summary)
+      , tourView summary
+      , stops (Store.tourSummaryStops summary)
+      , whenText (Types.stNow st) (Store.tourSummaryPostedAt summary) <> current summary
+      ]
+    cells = map cellsFor tours
+    widths = Widgets.columnWidths [36, 32, 9] cells
+    rows =
+      zipWith
+        (\summary cs -> pickerRow (Store.tourSummarySubject summary) (Widgets.columnRow widths cs) (T.unwords cs))
+        tours
+        cells
+  if null tours
+    then Types.setMsg "no tours kept for this repository \8212 :tour ask requests one"
+    else State.modify $ \s ->
+      s {Types.stPicker = Just (refreshRowPicker (Types.Picker Types.PickTour "" rows [] [] 0 Set.empty))}
+
+openTourStops :: Brick.EventM Types.Name Types.St ()
+openTourStops = do
+  st <- State.get
+  if null (Types.stTour st) then openTourPicker else TourAction.openTourOverview
+
+tourView :: Store.TourSummary -> T.Text
+tourView summary =
+  maybe (Store.tourSummarySubject summary) Git.modeLabel (Store.tourSummaryMode summary >>= Git.modeFromText)
+
+applyTourChoice :: T.Text -> Brick.EventM Types.Name Types.St ()
+applyTourChoice subject = do
+  st <- State.get
+  tours <- MonadIO.liftIO (Store.listTours (Types.stConn st) (Types.repoText st))
+  case List.find ((== subject) . Store.tourSummarySubject) tours of
+    Nothing -> Types.setMsg "that tour is no longer kept"
+    Just summary
+      | subject == Git.subjectText (Types.stMode st) -> VerdictAction.gotoTourStep 1
+      | otherwise -> do
+          State.modify (\s -> s {Types.stTourToStart = Just subject})
+          switchToTour summary
+
+switchToTour :: Store.TourSummary -> Brick.EventM Types.Name Types.St ()
+switchToTour summary =
+  let
+    subject = Store.tourSummarySubject summary
+    pull = T.stripPrefix "pull/" subject >>= Git.readCount
+  in
+    case (pull, Store.tourSummaryMode summary >>= Git.modeFromText) of
+      (Just n, _) -> Worktree.openPullHere n
+      (Nothing, Just mode) -> Settings.setMode mode
+      (Nothing, Nothing)
+        | subject == "worktree" -> Settings.returnToTree
+        | otherwise -> Settings.setRef subject
+
 applyCheckout :: T.Text -> Brick.EventM Types.Name Types.St ()
 applyCheckout branch
   | T.null branch = pure ()
@@ -937,6 +1002,7 @@ pickerChoose pk (target, line) =
     Types.PickRange _ -> applyRangeChoice (T.pack target)
     Types.PickBranch -> applyCheckout (T.pack target)
     Types.PickRef -> applyRefChoice (T.pack target)
+    Types.PickTour -> applyTourChoice (T.pack target)
     Types.PickCommit -> commitChoice pk (T.pack target)
     Types.PickParent tip -> Settings.setMode (Git.AtRef (Git.RefReview {Git.rrTip = tip, Git.rrBase = T.pack target}))
     Types.PickRepo -> Repo.switchRepo target

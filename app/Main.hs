@@ -70,6 +70,7 @@ data Cmd
   | TourBegin [String]
   | TourStep [String]
   | TourClear [String]
+  | TourList
   | RunInSession T.Text
   | SetUp Setup.SetupAction
   | ShowGuide T.Text
@@ -136,7 +137,8 @@ main = do
         Hunks rest -> hunks rest
         TourBegin rest -> tourBegin rest
         TourStep rest -> tourStep rest
-        TourClear rest -> tourBegin rest
+        TourClear rest -> tourClear rest
+        TourList -> tourList
         RunInSession command -> runInSession command
         SetUp action -> Setup.runSetup action
         ShowGuide page -> showGuide page
@@ -257,13 +259,16 @@ usage =
   \                                     the rest are the reviewer's; prints what\n\
   \                                     the session said, or that it is held\n\
   \                                     until the reviewer is free\n\
-  \       remax [-C DIR] tour begin [ref flags]\n\
+  \       remax [-C DIR] tour begin [ref flags] [--name WORDS]\n\
   \       remax [-C DIR] tour step [ref flags] [--title WORDS] ID[,ID...] NOTE...\n\
   \       remax [-C DIR] tour clear [ref flags]\n\
+  \       remax [-C DIR] tour list\n\
   \                                     guide the reviewer through the change:\n\
-  \                                     begin empties the tour, each step names\n\
-  \                                     hunks and says something about them, and\n\
-  \                                     the session walks them in that order\n\
+  \                                     begin empties the tour and names it,\n\
+  \                                     each step names hunks and says something\n\
+  \                                     about them, and the session walks them in\n\
+  \                                     that order; list shows every tour kept,\n\
+  \                                     which the reviewer picks from with :tours\n\
   \       remax guide [PAGE]            print a page of the guide for agents\n\
   \                                     working with a reviewer; index (the\n\
   \                                     default) links to the rest\n\
@@ -305,6 +310,7 @@ parseArgs args0 =
         ("tour" : "begin" : rest) -> Right (mDir, TourBegin rest)
         ("tour" : "step" : rest) -> Right (mDir, TourStep rest)
         ("tour" : "clear" : rest) -> Right (mDir, TourClear rest)
+        ["tour", "list"] -> Right (mDir, TourList)
         ["--version"] -> Right (mDir, ShowVersion)
         ["guide"] -> Right (mDir, ShowGuide "index")
         ["guide", page] -> Right (mDir, ShowGuide (T.pack page))
@@ -495,18 +501,64 @@ hunksJson (root, mode, found) =
 
 tourBegin :: [String] -> IO ()
 tourBegin args = do
+  (flags, positional) <- either Exit.die pure (takeFlags ("--name" : refFlags) args)
+  Monad.unless (null positional) (Exit.die usage)
+  roots <- targetRepos
+  conn <- Store.openStore
+  Monad.forM_ roots $ \root -> do
+    mode <- clearTourFor conn root flags
+    Store.nameTour conn (T.pack root) (Git.subjectText mode) (Git.modeToText mode) (fmap T.pack (Map.lookup "--name" flags))
+    putStrLn ("tour begun for " ++ T.unpack (Git.modeLabel mode) ++ repoSuffix roots root)
+
+tourClear :: [String] -> IO ()
+tourClear args = do
   (flags, positional) <- either Exit.die pure (takeFlags refFlags args)
   Monad.unless (null positional) (Exit.die usage)
   roots <- targetRepos
   conn <- Store.openStore
   Monad.forM_ roots $ \root -> do
-    mode <- agentMode conn root flags
-    known <- Store.tourSubjects conn (T.pack root)
-    spellings <- Git.sameCommitSubjects root mode known
-    Monad.forM_ spellings $ \subject -> do
-      Store.clearTour conn (T.pack root) subject
-      Store.clearTourRequest conn (T.pack root) subject
-    putStrLn ("tour cleared for " ++ T.unpack (Git.modeLabel mode) ++ (if length roots > 1 then " in " ++ FilePath.takeFileName root else ""))
+    mode <- clearTourFor conn root flags
+    putStrLn ("tour cleared for " ++ T.unpack (Git.modeLabel mode) ++ repoSuffix roots root)
+
+clearTourFor :: SQLite.Connection -> FilePath -> Map.Map String String -> IO Git.ReviewMode
+clearTourFor conn root flags = do
+  mode <- agentMode conn root flags
+  known <- Store.tourSubjects conn (T.pack root)
+  spellings <- Git.sameCommitSubjects root mode known
+  Monad.forM_ spellings $ \subject -> do
+    Store.clearTour conn (T.pack root) subject
+    Store.clearTourRequest conn (T.pack root) subject
+  pure mode
+
+repoSuffix :: [FilePath] -> FilePath -> String
+repoSuffix roots root =
+  if length roots > 1 then " in " ++ FilePath.takeFileName root else ""
+
+tourList :: IO ()
+tourList = do
+  roots <- targetRepos
+  conn <- Store.openStore
+  Monad.forM_ roots $ \root -> do
+    tours <- Store.listTours conn (T.pack root)
+    Monad.when (length roots > 1 && not (null tours)) (putStrLn ("\9472\9472 " ++ FilePath.takeFileName root ++ " \9472\9472"))
+    Monad.forM_ tours (TIO.putStrLn . tourLine)
+
+tourLine :: Store.TourSummary -> T.Text
+tourLine summary =
+  let
+    mode = Store.tourSummaryMode summary
+    view = maybe (Store.tourSummarySubject summary) Git.modeLabel (mode >>= Git.modeFromText)
+    stops = Store.tourSummaryStops summary
+  in
+    Maybe.fromMaybe view (Store.tourSummaryName summary)
+      <> "  ("
+      <> view
+      <> ", "
+      <> T.pack (show stops)
+      <> (if stops == 1 then " stop" else " stops")
+      <> ", "
+      <> maybe "flags unknown" modeFlags mode
+      <> ")"
 
 tourStep :: [String] -> IO ()
 tourStep args = do
@@ -534,6 +586,7 @@ tourStep args = do
         missing = filter (`notElem` map Hunks.hunkId chosen) ids
       Monad.unless (null missing) (Exit.die ("No hunk with id " ++ T.unpack (T.intercalate ", " missing)))
       seq_ <- Store.appendTourStep conn (T.pack root) (Git.subjectText mode) "tour" title note (concatMap Hunks.hunkKeys chosen)
+      Store.nameTour conn (T.pack root) (Git.subjectText mode) (Git.modeToText mode) Nothing
       putStrLn ("step " ++ show seq_ ++ ": " ++ show (length chosen) ++ " hunk(s)")
 
 -- for a directory that merely holds repositories, which is what a story
@@ -1187,8 +1240,11 @@ requestDigest party asked =
 
 -- The ref flags that reproduce the requested view for hunks and tour.
 requestFlags :: Store.TourRequest -> T.Text
-requestFlags request =
-  case Git.modeFromText (Store.requestMode request) of
+requestFlags request = modeFlags (Store.requestMode request)
+
+modeFlags :: T.Text -> T.Text
+modeFlags mode =
+  case Git.modeFromText mode of
     Just (Git.AtRef rr) -> "--ref " <> Git.rrTip rr <> " --base " <> Git.rrBase rr
     Just (Git.VsRef ref) -> "--base " <> ref
     Just (Git.AtPull pr _) -> "--pr " <> T.pack (show (Git.prNumber pr))

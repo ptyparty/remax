@@ -759,6 +759,23 @@ installRefreshed before refresh = do
   settled <- State.get
   Monad.when (Types.stWalk settled == Types.WalkTour && not (null (Types.stTour settled)) && null (Tour.tourOrder settled)) $
     State.modify (\s -> s {Types.stWalk = Types.WalkPending, Types.stMsg = "the tour's hunks left the view \8212 walking pending hunks"})
+  startPickedTour
+
+startPickedTour :: Brick.EventM Types.Name Types.St ()
+startPickedTour = do
+  st <- State.get
+  case Types.stTourToStart st of
+    Just subject
+      | subject == Git.subjectText (Types.stMode st) && not (null (Types.stFiles st)) -> do
+          State.modify (\s -> s {Types.stTourToStart = Nothing})
+          case Tour.tourOrder st of
+            (first : _) -> do
+              State.modify (\s -> s {Types.stWalk = Types.WalkTour, Types.stTourLast = Just first})
+              Nav.visitAnchor (fst first) (snd first)
+              Nav.scrollTrayToCurrent
+              Types.setMsg ("tour started \8212 " <> Types.tshow (length (Types.stTour st)) <> " stops, ]/[ follow it")
+            [] -> Types.setMsg "none of the tour's hunks are in this view"
+    _ -> pure ()
 
 followArrival :: Types.St -> Brick.EventM Types.Name Types.St ()
 followArrival before = do

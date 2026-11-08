@@ -19,7 +19,6 @@ import Remax.UI.Action.Picker qualified as PickerAction
 import Remax.UI.Action.PullView qualified as PullViewAction
 import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Action.Threads qualified as ThreadAction
-import Remax.UI.Action.Tour qualified as TourAction
 import Remax.UI.Action.Tree qualified as TreeAction
 import Remax.UI.Action.Uses qualified as Uses
 import Remax.UI.Action.Verdicts qualified as VerdictAction
@@ -307,7 +306,7 @@ spaceMenuEntries =
   , ("c", "the commit message", VerdictAction.showCommitPopup)
   , ("o", "PR overview", PullViewAction.togglePullView)
   , ("i", "recent feedback", InboxAction.openInbox)
-  , ("T", "the tour's stops", TourAction.openTourOverview)
+  , ("T", "the tour's stops, or every tour kept", PickerAction.openTourStops)
   , ("F", "follow edits as they land", Settings.toggleFollow)
   , ("?", "keys", Types.showHelp)
   ]

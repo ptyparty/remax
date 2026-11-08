@@ -654,7 +654,7 @@ handleEmacsPrefixed pfx ev = do
         V.EvKey (V.KChar 'c') [] -> VerdictAction.showCommitPopup
         V.EvKey (V.KChar 'o') [] -> PullViewAction.togglePullView
         V.EvKey (V.KChar 'i') [] -> InboxAction.openInbox
-        V.EvKey (V.KChar 'T') [] -> TourAction.openTourOverview
+        V.EvKey (V.KChar 'T') [] -> PickerAction.openTourStops
         V.EvKey (V.KChar 'F') [] -> Settings.toggleFollow
         V.EvKey (V.KChar '\'') [] -> Nav.jumpToAnchor
         V.EvKey (V.KChar '*') [] -> Search.searchWordUnderCursor

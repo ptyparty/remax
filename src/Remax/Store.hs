@@ -51,6 +51,9 @@ module Remax.Store
   , saveRepoName
   , TourStep (..)
   , clearTour
+  , nameTour
+  , TourSummary (..)
+  , listTours
   , appendTourStep
   , loadTour
   , tourSubjects
@@ -217,6 +220,14 @@ openStore = do
     \  seq INTEGER NOT NULL,\
     \  key TEXT NOT NULL,\
     \  PRIMARY KEY (repo, subject, seq, key))"
+  SQLite.execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS tour (\
+    \  repo TEXT NOT NULL,\
+    \  subject TEXT NOT NULL,\
+    \  mode TEXT NOT NULL,\
+    \  name TEXT,\
+    \  PRIMARY KEY (repo, subject))"
   SQLite.execute_
     conn
     "CREATE TABLE IF NOT EXISTS github_repo (\
@@ -404,6 +415,40 @@ clearTour conn repo subject =
   SQLite.withTransaction conn $ do
     SQLite.execute conn "DELETE FROM tour_hunk WHERE repo = ? AND subject = ?" (repo, subject)
     SQLite.execute conn "DELETE FROM tour_step WHERE repo = ? AND subject = ?" (repo, subject)
+    SQLite.execute conn "DELETE FROM tour WHERE repo = ? AND subject = ?" (repo, subject)
+
+nameTour :: SQLite.Connection -> T.Text -> T.Text -> T.Text -> Maybe T.Text -> IO ()
+nameTour conn repo subject mode name =
+  SQLite.execute
+    conn
+    "INSERT INTO tour (repo, subject, mode, name) VALUES (?, ?, ?, ?)\
+    \ ON CONFLICT(repo, subject) DO UPDATE SET mode = excluded.mode, name = COALESCE(excluded.name, tour.name)"
+    (repo, subject, mode, name)
+
+data TourSummary = TourSummary
+  { tourSummarySubject :: T.Text
+  , tourSummaryName :: Maybe T.Text
+  , tourSummaryMode :: Maybe T.Text
+  , tourSummaryStops :: Int
+  , tourSummaryPostedAt :: T.Text
+  }
+  deriving (Eq, Show)
+
+listTours :: SQLite.Connection -> T.Text -> IO [TourSummary]
+listTours conn repo = do
+  rows <-
+    SQLite.query
+      conn
+      "SELECT s.subject, t.name, t.mode, count(*), strftime('%Y-%m-%dT%H:%M:%SZ', max(s.created_at))\
+      \ FROM tour_step s LEFT JOIN tour t ON t.repo = s.repo AND t.subject = s.subject\
+      \ WHERE s.repo = ? GROUP BY s.subject ORDER BY max(s.created_at) DESC"
+      (SQLite.Only repo) ::
+      IO [(T.Text, Maybe T.Text, Maybe T.Text, Int, T.Text)]
+  pure
+    ( map
+        (\(s, n, m, c, at) -> TourSummary {tourSummarySubject = s, tourSummaryName = n, tourSummaryMode = m, tourSummaryStops = c, tourSummaryPostedAt = at})
+        rows
+    )
 
 appendTourStep :: SQLite.Connection -> T.Text -> T.Text -> T.Text -> Maybe T.Text -> T.Text -> [T.Text] -> IO Int
 appendTourStep conn repo subject author title note keys =

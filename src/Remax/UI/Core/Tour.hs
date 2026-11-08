@@ -76,7 +76,7 @@ tourOrder = concat . stepGroups
 
 tourAbsence :: Types.St -> Maybe T.Text
 tourAbsence st
-  | null (Types.stTour st) = Just "no tour recorded for this view"
+  | null (Types.stTour st) = Just "no tour recorded for this view \8212 :tours lists the ones kept"
   | null (tourOrder st) = Just "the tour's hunks are no longer in this view"
   | otherwise = Nothing
 

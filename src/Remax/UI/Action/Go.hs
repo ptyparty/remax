@@ -23,8 +23,8 @@ import Remax.LineRange qualified as LineRange
 import Remax.Modal qualified as Modal
 import Remax.UI.Action.Inbox qualified as InboxAction
 import Remax.UI.Action.Open qualified as Open
+import Remax.UI.Action.Picker qualified as PickerAction
 import Remax.UI.Action.PullView qualified as PullViewAction
-import Remax.UI.Action.Tour qualified as TourAction
 import Remax.UI.Action.Verdicts qualified as VerdictAction
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
@@ -39,7 +39,7 @@ goTo targetWords =
     [] -> Types.setMsg "go where? a hunk id, a conversation id, PATH[:LINE], tour [N], pr or feedback"
     ["pr"] -> leavePopups >> PullViewAction.openPullView
     ["feedback"] -> leavePopups >> InboxAction.openInbox
-    ["tour"] -> leavePopups >> TourAction.openTourOverview
+    ["tour"] -> leavePopups >> PickerAction.openTourStops
     ["tour", n]
       | Just k <- Git.readCount n -> leavePopups >> VerdictAction.gotoTourStep k
     [word] -> goWord word

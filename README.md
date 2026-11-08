@@ -370,7 +370,8 @@ stays a prefix there too.
 | `:go TARGET` | go to a hunk (by the id `remax hunks` prints, or a prefix of it), a conversation (by id or prefix), `PATH[:LINE]`, `tour N`, or a surface: `tour` (the stop list), `pr` or `feedback`. A word that names more than one thing says so instead of guessing; `'` comes back |
 | `:highlight [PATH:]LINE[-LINE]` | go to those lines and light them up, over any verdict wash, until you leave the file, press Esc in normal mode or something else is highlighted; a bare `:highlight` clears it |
 | `:tour` / `:tour N` | get back on the tour: `:tour` returns to the stop you last visited (or the one under the cursor, or the first), `:tour N` jumps to stop N. Either way the walk follows the tour again |
-| `:tour list` | the tour's stops in a popup, as `Space T` (`C-c T` in emacs) opens it: each stop's title, its note and the files it covers; `⏎` goes to the stop |
+| `:tour list` | the tour's stops in a popup, as `Space T` (`C-c T` in emacs) opens it: each stop's title, its note and the files it covers; `⏎` goes to the stop. With no tour on this view it lists every tour, as `:tours` does |
+| `:tours` | every tour kept for this repository, by name, view and age; `⏎` opens the tour's view and starts it at the first stop |
 | `:tour ask [TEXT]` | ask the agent watching this review for a tour of the view you have open, with TEXT as the brief ("schema changes first"). The request shows up in the agent's `remax list`, wakes a `remax watch` or `list --wait`, and carries the exact ref flags for the view, so the tour lands where you are looking |
 | `:follow` | follow edits, which is on when remax starts; `:follow`, `Space F` and `C-c F` in emacs toggle it: whenever a file in the working tree changes on disk the session takes you to the first line that changed, and a file that newly joins the change set is opened at its first hunk. The header says `following edits` while it is on. Nothing moves you while you are typing or a popup, prompt or menu is open |
 | `:mode head` / `:mode unstaged` / `:mode untracked` | the classic change sets; `:mode tree` returns to the working tree |
@@ -805,13 +806,13 @@ it:
 
 ```sh
 remax -C /path/to/repo hunks --json        # the hunks, one id each
-remax -C /path/to/repo tour begin          # empty the old tour
+remax -C /path/to/repo tour begin --name "the new table"   # empty the old tour, name the new one
 remax -C /path/to/repo tour step ID "Start here: the new table"
 remax -C /path/to/repo tour step ID,ID "The two call sites it changed"
 ```
 
-With no ref flags the commands follow whatever your open session is
-viewing, so a tour of `:ref feature` or `:commit abc123` lands on the
+With no ref flags the commands follow the view your session last had
+up, so a tour of `:ref feature` or `:commit abc123` lands on the
 right hunks without the agent being told; `--ref REF [--base BASE]` and
 `--base REF` name a view outright, and any spelling of the same commit
 reaches the same session, a branch name or a sha alike. A pull request
@@ -830,6 +831,12 @@ stop you were on, and `:tour 4` jumps to stop four. `Space T` (`C-c T`
 in emacs, or `:tour list`) lays the whole tour out in a popup, every
 stop with its note and files, and `⏎` takes you to the one selected. A tour belongs to the view it was built for; switching the
 subject puts it away and `tour begin` on the same view replaces it.
+
+An agent can also prepare a tour for later. It names the view with ref
+flags and the tour with `--name`, and `:tours` lists every tour kept for
+the repository by name, view and age. `⏎` opens the tour's view and
+starts it at the first stop. `Space T` opens the same list when the
+view you have open has no tour, and `remax tour list` prints it.
 
 ### Pointing the reviewer
 

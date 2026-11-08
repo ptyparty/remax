@@ -35,7 +35,6 @@ import Remax.UI.Action.Rebase qualified as Rebase
 import Remax.UI.Action.Repo qualified as Repo
 import Remax.UI.Action.Settings qualified as Settings
 import Remax.UI.Action.Submit qualified as SubmitAction
-import Remax.UI.Action.Tour qualified as TourAction
 import Remax.UI.Action.Tree qualified as TreeAction
 import Remax.UI.Action.Uses qualified as Uses
 import Remax.UI.Action.Verdicts qualified as VerdictAction
@@ -88,6 +87,7 @@ commandTable =
   , ("submit", NoArg, "send every pending comment and reply to GitHub as one review")
   , ("walk", ArgText, "which hunks ] and [ visit: " <> T.intercalate " | " (map Types.walkLabel Types.walkCycle))
   , ("tour", ArgText, "back on the tour; :tour N goes to stop N, :tour list shows the stops, :tour ask TEXT requests one")
+  , ("tours", NoArg, "every tour kept for this repository; \9166 opens one's view and starts it")
   , ("follow", NoArg, "follow edits: each change to a file on disk takes you to it (again to stop)")
   , ("feedback", NoArg, "recent conversations, newest first; \9166 goes to one (also Space i)")
   , ("ready", NoArg, "mark the pull request ready for review")
@@ -243,7 +243,8 @@ runCommand input =
     ["revert"] -> VerdictAction.revertTarget
     ["walk"] -> VerdictAction.cycleWalkFilter
     ["tour"] -> VerdictAction.resumeTour
-    ["tour", "list"] -> TourAction.openTourOverview
+    ["tour", "list"] -> PickerAction.openTourStops
+    ["tours"] -> PickerAction.openTourPicker
     ("tour" : "ask" : rest) -> VerdictAction.askTour (T.unwords rest)
     ["tour", n] | Just k <- lineAddress n -> VerdictAction.gotoTourStep k
     ["walk", which] -> setWalkNamed which
@@ -295,6 +296,7 @@ agentCommands =
   , "uses"
   , "walk"
   , "tour"
+  , "tours"
   , "feedback"
   , "commit"
   , "message"

@@ -202,7 +202,7 @@ data Prompt = SearchPrompt T.Text | CmdPrompt T.Text | PathPrompt T.Text T.Text 
 -- The finder overlay: fuzzy file picking, or project-wide grep. Each
 -- display row is aligned with a jump target (file, and a 1-based line
 -- for grep hits; 0 = just open the file).
-data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRef | PickCommit | PickParent T.Text | PickRepo | PickPull | PickRange RangePicker | PickUses UsesPicker | PickWorktree EditEntry
+data PickerMode = PickFiles | PickGrep | PickBase | PickBranch | PickRef | PickCommit | PickParent T.Text | PickRepo | PickPull | PickTour | PickRange RangePicker | PickUses UsesPicker | PickWorktree EditEntry
 
 data EditEntry = EditEntry
   { eePull :: Git.PullRequest
@@ -642,6 +642,7 @@ data St = St
   , stTourKeys :: Map.Map T.Text Int
   , stTourMarks :: Map.Map T.Text TourMark
   , stTourLast :: Maybe (Int, Int)
+  , stTourToStart :: Maybe T.Text
   , -- which named group each noted key belongs to. Two notes worded the
     -- same are two notes, and only the name says so.
     stNoteGroups :: Map.Map T.Text T.Text
