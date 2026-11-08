@@ -30,6 +30,7 @@ module Remax.UI.Core.Types
   , RepoPlace (..)
   , WalkFilter (..)
   , TourMark (..)
+  , TourToStart (..)
   , Anchor (..)
   , anchorAt
   , anchorHunkIn
@@ -329,6 +330,12 @@ anchorHunkIn an fv =
     case filter ((> 0) . fst) scored of
       [] -> clampH (fvRuns fv) (anHunk an)
       hits -> snd (maximum hits)
+
+data TourToStart = TourToStart
+  { ttsSubject :: T.Text
+  , ttsAskedAt :: Clock.UTCTime
+  }
+  deriving (Eq, Show)
 
 data TourMark = TourMark
   { tmStop :: Int
@@ -642,7 +649,7 @@ data St = St
   , stTourKeys :: Map.Map T.Text Int
   , stTourMarks :: Map.Map T.Text TourMark
   , stTourLast :: Maybe (Int, Int)
-  , stTourToStart :: Maybe T.Text
+  , stTourToStart :: Maybe TourToStart
   , -- which named group each noted key belongs to. Two notes worded the
     -- same are two notes, and only the name says so.
     stNoteGroups :: Map.Map T.Text T.Text

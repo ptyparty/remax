@@ -783,14 +783,19 @@ applyTourChoice subject = do
   case List.find ((== subject) . Store.tourSummarySubject) tours of
     Nothing -> Types.setMsg "that tour is no longer kept"
     Just summary
-      | onTourView st summary && null (Types.stFiles st) -> State.modify (\s -> s {Types.stTourToStart = Just subject})
+      | onTourView st summary && null (Types.stFiles st) -> waitToStart subject
       | onTourView st summary -> VerdictAction.gotoTourStep 1
       | otherwise -> do
           switchToTour summary
           after <- State.get
           Monad.when
             (Types.stMode after /= Types.stMode st || Maybe.isJust (pullOf summary))
-            (State.modify (\s -> s {Types.stTourToStart = Just subject}))
+            (waitToStart subject)
+
+waitToStart :: T.Text -> Brick.EventM Types.Name Types.St ()
+waitToStart subject = do
+  now <- MonadIO.liftIO Clock.getCurrentTime
+  State.modify (\s -> s {Types.stTourToStart = Just Types.TourToStart {Types.ttsSubject = subject, Types.ttsAskedAt = now}})
 
 showTourNamed :: T.Text -> Brick.EventM Types.Name Types.St ()
 showTourNamed wanted = do

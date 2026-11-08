@@ -764,14 +764,19 @@ installRefreshed before refresh = do
 startPickedTour :: Brick.EventM Types.Name Types.St ()
 startPickedTour = do
   st <- State.get
+  now <- MonadIO.liftIO Clock.getCurrentTime
   case Types.stTourToStart st of
-    Just subject
-      | subject == Git.subjectText (Types.stMode st) -> do
+    Just waiting
+      | Clock.diffUTCTime now (Types.ttsAskedAt waiting) > tourStartWindow -> State.modify (\s -> s {Types.stTourToStart = Nothing})
+      | Types.ttsSubject waiting == Git.subjectText (Types.stMode st) -> do
           State.modify (\s -> Types.hidePullView s {Types.stTourToStart = Nothing})
           case Tour.tourOrder st of
             (first : _) -> Nav.landOnTour ("tour started \8212 " <> Types.tshow (length (Types.stTour st)) <> " stops, ]/[ follow it") first
             [] -> Types.setMsg "none of the tour's hunks are in this view"
     _ -> pure ()
+
+tourStartWindow :: Clock.NominalDiffTime
+tourStartWindow = 60
 
 followArrival :: Types.St -> Brick.EventM Types.Name Types.St ()
 followArrival before = do

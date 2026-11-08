@@ -153,7 +153,6 @@ arriveAt target remembered saved mode passId loaded = do
       s
         { Types.stRoot = target
         , Types.stEpoch = Types.stEpoch s + 1
-        , Types.stTourToStart = Nothing
         , Types.stRefreshing = False
         , Types.stGitQueued = False
         , Types.stReloading = Map.empty

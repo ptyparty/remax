@@ -201,7 +201,7 @@ installMode st mode = do
         , Types.stFiles = if changedSubject then [] else Types.stFiles s
         , Types.stOpened = if changedSubject then Set.empty else Types.stOpened s
         , Types.stWalk = if Types.stWalk s == Types.WalkTour && null tour then Types.WalkPending else Types.stWalk s
-        , Types.stTourToStart = if Types.stTourToStart s == Just (Git.subjectText mode) then Types.stTourToStart s else Nothing
+        , Types.stTourToStart = if fmap Types.ttsSubject (Types.stTourToStart s) == Just (Git.subjectText mode) then Types.stTourToStart s else Nothing
         }
   Load.forceGitRefresh
   refreshed <- State.get
