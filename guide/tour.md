@@ -118,6 +118,14 @@ Keep a stop small: one hunk, or the two or three that are one idea.
 both the stop and the position within it, so a twenty-hunk stop reads
 as twenty hunks with one note at the front. Split by idea instead.
 
+Finish a function before you leave it. When a function's change spans
+several hunks, take them in order, in one stop or in stops back to back,
+before moving to another file or another part of the file. A reviewer
+who has read half a function and then lands somewhere else loses the
+thread. If the order of ideas really needs a detour, say so in the
+note where you leave ("the rest of `load` is stop 7") and pick it up
+where you said.
+
 Keep notes short and pointed at the code — what to look at and why it
 is there, not a restatement of the diff. The reviewer still reads every
 line; the tour is the order and the context, not the review. Do not
