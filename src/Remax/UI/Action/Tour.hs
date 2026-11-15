@@ -35,6 +35,7 @@ openTourOverview = do
                   , Types.toSel = maybe 0 (subtract 1) here
                   , Types.toHere = here
                   , Types.toScroll = 0
+                  , Types.toLeftOut = maybe "" (\lo -> " \183 " <> Tour.leftOutText lo) (Tour.tourLeftOut st)
                   }
           }
 

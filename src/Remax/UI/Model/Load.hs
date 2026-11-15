@@ -771,7 +771,7 @@ startPickedTour = do
       | Types.ttsSubject waiting == Git.subjectText (Types.stMode st) -> do
           State.modify (\s -> Types.hidePullView s {Types.stTourToStart = Nothing})
           case Tour.tourOrder st of
-            (first : _) -> Nav.landOnTour ("tour started \8212 " <> Types.tshow (length (Types.stTour st)) <> " stops, ]/[ follow it") first
+            (first : _) -> Nav.landOnTour (Tour.tourStartedText st) first
             [] -> Types.setMsg "none of the tour's hunks are in this view"
     _ -> pure ()
 

@@ -6,6 +6,10 @@ module Remax.UI.Core.Tour
   , recordView
   , tourOrder
   , tourAbsence
+  , LeftOut (..)
+  , tourLeftOut
+  , leftOutText
+  , tourStartedText
   , stepGroups
   , stepPosition
   ) where
@@ -73,6 +77,33 @@ stepGroups st =
 
 tourOrder :: Types.St -> [(Int, Int)]
 tourOrder = concat . stepGroups
+
+data LeftOut = LeftOut
+  { leftOutHunks :: Int
+  , leftOutOf :: Int
+  }
+
+tourLeftOut :: Types.St -> Maybe LeftOut
+tourLeftOut st =
+  let
+    total = length (Verdict.allRunsInOrder st)
+    left = total - length (tourOrder st)
+  in
+    if null (Types.stTour st) || left <= 0
+      then Nothing
+      else Just LeftOut {leftOutHunks = left, leftOutOf = total}
+
+leftOutText :: LeftOut -> T.Text
+leftOutText lo =
+  "leaves out " <> Types.tshow (leftOutHunks lo) <> " of " <> Types.tshow (leftOutOf lo) <> " hunks"
+
+tourStartedText :: Types.St -> T.Text
+tourStartedText st =
+  "tour started \8212 "
+    <> Types.tshow (length (Types.stTour st))
+    <> " stops"
+    <> maybe "" (\lo -> " \183 " <> leftOutText lo) (tourLeftOut st)
+    <> " \183 ]/[ follow it"
 
 tourAbsence :: Types.St -> Maybe T.Text
 tourAbsence st

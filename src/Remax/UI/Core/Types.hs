@@ -60,6 +60,8 @@ module Remax.UI.Core.Types
   , InboxFocus (..)
   , TourOverview (..)
   , TourStop (..)
+  , TourPlay (..)
+  , PlayPace (..)
   , EventChoice (..)
   , AmendTarget (..)
   , MarkUndo (..)
@@ -474,7 +476,18 @@ data TourOverview = TourOverview
   , toSel :: Int
   , toHere :: Maybe Int
   , toScroll :: Int
+  , toLeftOut :: T.Text
   }
+
+data TourPlay = TourPlay
+  { tpId :: Int
+  , tpAhead :: [(Int, Int)]
+  , tpPlayed :: Int
+  , tpTotal :: Int
+  , tpPace :: PlayPace
+  }
+
+data PlayPace = PaceBySize | PaceFixed Int
 
 data TourStop = TourStop
   { tsNumber :: Int

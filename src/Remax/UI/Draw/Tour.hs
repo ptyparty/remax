@@ -24,7 +24,7 @@ tourOverviewLayer st overview =
       bodyRows = max 6 (BrickTypes.availHeight ctx - 10)
       listWidth = boxWidth * 2 `div` 5
       previewWidth = boxWidth - listWidth - 3
-      title = "tour \183 " <> Types.tshow (length stops) <> " stops"
+      title = "tour \183 " <> Types.tshow (length stops) <> " stops" <> Types.toLeftOut overview
       body =
         Brick.hBox
           [ Brick.hLimit listWidth (Brick.vLimit bodyRows (listColumn overview listWidth bodyRows))

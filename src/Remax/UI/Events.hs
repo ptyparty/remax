@@ -215,7 +215,7 @@ startTour = do
     (first : _) -> do
       Nav.parkAnchor (fst first) (snd first)
       State.modify (\s -> s {Types.stTourLast = Just first})
-      Types.setMsg ("tour started \8212 " <> Types.tshow (length (Types.stTour st)) <> " steps, ]/[ follow it")
+      Types.setMsg (Tour.tourStartedText st)
     [] -> Types.setMsg "a tour arrived but none of its hunks are in this view"
 
 handleEvent :: Brick.BrickEvent Types.Name Types.REvent -> Brick.EventM Types.Name Types.St ()
