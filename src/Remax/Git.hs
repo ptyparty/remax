@@ -501,7 +501,7 @@ changedFiles mode root = do
       Untracked ->
         ["-C", root, "ls-files", "--others", "--exclude-standard"]
       AtRef rr ->
-        ["-C", root, "diff", "--name-only", "--no-color", T.unpack (rrBase rr), T.unpack (rrTip rr)]
+        ["-C", root, "diff", "-M", "--name-only", "--no-color", T.unpack (rrBase rr), T.unpack (rrTip rr)]
       AtPull _ _ -> []
   (code, out, _) <- Process.readProcessWithExitCode "git" args ""
   pure $ case code of
@@ -541,17 +541,51 @@ baseLines :: ReviewMode -> FilePath -> FilePath -> IO [T.Text]
 baseLines mode root path =
   case diffView mode of
     Untracked -> pure []
-    _ -> do
-      let
-        ref = case diffView mode of
-          VsRef r -> T.unpack r ++ ":"
-          AtRef rr -> T.unpack (rrBase rr) ++ ":"
-          _ -> ":"
-      (code, out, _) <-
-        Process.readProcessWithExitCode "git" ["-C", root, "show", ref ++ path] ""
-      pure $ case code of
-        Exit.ExitSuccess -> T.lines (T.pack out)
-        Exit.ExitFailure _ -> []
+    viewed -> do
+      atPath <- baseCopy viewed root path
+      case atPath of
+        Just ls -> pure ls
+        Nothing -> do
+          from <- renameSource viewed root path
+          case from of
+            Nothing -> pure []
+            Just old -> fmap (Maybe.fromMaybe []) (baseCopy viewed root old)
+
+baseCopy :: ReviewMode -> FilePath -> FilePath -> IO (Maybe [T.Text])
+baseCopy viewed root path = do
+  let
+    ref = case viewed of
+      VsRef r -> T.unpack r ++ ":"
+      AtRef rr -> T.unpack (rrBase rr) ++ ":"
+      _ -> ":"
+  (code, out, _) <-
+    Process.readProcessWithExitCode "git" ["-C", root, "show", ref ++ path] ""
+  pure $ case code of
+    Exit.ExitSuccess -> Just (T.lines (T.pack out))
+    Exit.ExitFailure _ -> Nothing
+
+renameSource :: ReviewMode -> FilePath -> FilePath -> IO (Maybe FilePath)
+renameSource viewed root path =
+  case viewed of
+    AtRef rr -> renamedFrom root [T.unpack (rrBase rr), T.unpack (rrTip rr)] path
+    VsRef ref -> do
+      tracked <- isTracked root path
+      if tracked then renamedFrom root [T.unpack ref] path else pure Nothing
+    _ -> pure Nothing
+
+renamedFrom :: FilePath -> [String] -> FilePath -> IO (Maybe FilePath)
+renamedFrom root refArgs path = do
+  (code, out, _) <-
+    Process.readProcessWithExitCode
+      "git"
+      (["-C", root, "diff", "-M", "--name-status", "-z", "--diff-filter=R"] ++ refArgs)
+      ""
+  pure $ case code of
+    Exit.ExitSuccess ->
+      case Map.lookup path (parseNameStatus (nulFields (T.pack out))) of
+        Just (PathRenamed old) -> Just old
+        _ -> Nothing
+    Exit.ExitFailure _ -> Nothing
 
 data RefContent = RefBinary | RefText [T.Text]
   deriving (Eq, Show)
