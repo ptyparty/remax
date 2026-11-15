@@ -142,6 +142,7 @@ executable remax
       Remax.Hunks
       Remax.Json
       Remax.Key
+      Remax.Komux
       Remax.LineRange
       Remax.Modal
       Remax.PullPoll

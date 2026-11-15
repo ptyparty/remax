@@ -20,3 +20,7 @@ index's *Answering once, or staying* describes:
 - no argument: answer once;
 - `watch`: stay and react;
 - `stop`: end a watch.
+
+In komux, stay with `remax watch --wake` and end your turn after each
+block; the next one arrives as a message. Never re-arm a watch on a
+timer.

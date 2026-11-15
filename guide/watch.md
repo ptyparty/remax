@@ -2,9 +2,21 @@
 
 `list` answers with whatever is recorded right now. To keep up with a reviewer while they work, run `remax watch`, which keeps printing: what awaits you when it starts, then a block each time that changes.
 
+## In komux
+
+When you are Claude running in komux (`KOMUX_SOCKET` is set, in the TUI or as `komux claude`), run the watch once, as an ordinary command, neither in the background nor with a Monitor:
+
+```sh
+remax -C "$REPO" watch --wake
+```
+
+It prints the first block, everything that awaits you, starts watching in the background, and returns. Act on the block, reply, and **end your turn**. While the reviewer is away nothing runs on your side, so a wait of three days costs what a wait of three minutes does. Each time the reviewer acts, komux hands you the next block as a message, starting with a line that says it comes from this watch; act on it and end your turn again. If you are busy when it comes, it waits until you are free. Never start it again to keep it going: it has no timeout, and a second one on the same review replaces the first.
+
+It ends when you run `remax -C "$REPO" watch --stop`, or on its own when the Claude that started it exits. `/clear` starts a new Claude, so a watch does not carry over into a new conversation. Everything below about blocks, the reviewer's mark and the state file holds for it too.
+
 ## With a Monitor tool
 
-In Claude Code, run it with the **Monitor** tool, once, with `timeout_ms` 1800000:
+Outside komux, in Claude Code, run it with the **Monitor** tool, once, with `timeout_ms` 1800000:
 
 ```sh
 remax -C "$REPO" watch --timeout 1790 2>&1
@@ -51,7 +63,7 @@ The two halves show the reviewer different things: *working* from `watching` whi
 
 ## Several reviews at once
 
-Run one `remax watch` per review, each in its own Monitor with a description naming it. Blocks from all of them arrive in one conversation, interleaved, so:
+Run one `remax watch` per review: in komux, one `watch --wake` each; elsewhere, each in its own Monitor with a description naming it. Blocks from all of them arrive in one conversation, interleaved, so:
 
 - Take the review from the block's first line every time. Conversation ids are short only within their own review, and the same prefix can mean another conversation in the next block.
 - Finish the conversation in hand, reply included, before turning to a block from another review. A reply sent with the wrong `-C` lands in the wrong review, or nowhere.
@@ -61,7 +73,7 @@ Run one `remax watch` per review, each in its own Monitor with a description nam
 
 Each review's header says *working* while its feedback is with you, even while you are busy on another review. It tells the reviewer whose move it is, not what you are doing this minute. When one review will sit waiting for a while because another is taking all your attention, say so in a reply to it.
 
-Each Monitor expires on its own and is re-armed on its own. Stop the watches on the reviews that end and leave the others running.
+Each Monitor expires on its own and is re-armed on its own; a `watch --wake` never expires. Stop the watches on the reviews that end and leave the others running.
 
 ## Both sides need the same store
 

@@ -871,6 +871,12 @@ qualified = { qualifiedPost = true }
 alias = "Remote"
 
 [[forAnyModule.allowedQualifications]]
+module = "Remax.Komux"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Komux"
+
+[[forAnyModule.allowedQualifications]]
 module = "Remax.Context"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }

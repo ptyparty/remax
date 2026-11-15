@@ -74,6 +74,9 @@ remax list --wait     # ... but block until it changes, so an agent can wait
 remax watch           # what awaits the agent, then a block each time that
                       #   changes, for a Monitor tool to make events of; holds
                       #   the header mark while it runs
+remax watch --wake    # for a Claude in komux: what awaits it now, then each
+                      #   later block handed to it as a message, so it can end
+                      #   its turn and wait for free; --stop ends it
 remax watching        # hold a mark in the session's header for as long as this
                       #   runs: working while the agent is busy, watching while
                       #   it is blocked on you, gone seconds after it dies

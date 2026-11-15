@@ -24,15 +24,17 @@ review](pull-requests.md#answering-in-a-pull-request-review)), reply,
 report what you did, and stop. Right when the human has finished a pass
 and wants it dealt with. Do not start a background wait.
 
-**Stay and react.** Start a watch on the review, as [Staying and reacting](watch.md) shows:
+**Stay and react.** Start a watch on the review, as [Staying and reacting](watch.md) shows. When you are Claude running in komux (`KOMUX_SOCKET` is set), run this once, as an ordinary command, not in the background:
 
 ```sh
-remax -C "$REPO" watch --timeout 1790 2>&1     # with the Monitor tool
+remax -C "$REPO" watch --wake
 ```
+
+It prints what awaits you and returns. Act on it, then end your turn and wait: costs nothing while the reviewer is away, and each time they act, the next block arrives as a message. Never re-arm it. Elsewhere, run `remax -C "$REPO" watch --timeout 1790 2>&1` with the Monitor tool.
 
 The watch holds a mark in the reviewer's header for as long as it runs, so they can see there is somebody on the other end. Its first block is everything already recorded, so nothing is left sitting, and from there it prints a block each time the reviewer acts, until they stop you. Right when they are reviewing *now* and you are working alongside them. The mark says *working* while anything awaits you and *watching* once you have answered it all, and it goes out a few seconds after the watch ends.
 
-**End a watch.** Stop the watch, and say so. Leaving it running tells the reviewer somebody is on this when nobody is. Also do this without being asked if the human says they are done reviewing, or closes the session. Without a Monitor tool the watch is two background tasks, `watching` and a `list --wait`, and ending it means killing both.
+**End a watch.** Stop the watch, and say so. Leaving it running tells the reviewer somebody is on this when nobody is. Also do this without being asked if the human says they are done reviewing, or closes the session. A `watch --wake` ends with `remax -C "$REPO" watch --stop`, and on its own when your Claude exits. Without a Monitor tool the watch is two background tasks, `watching` and a `list --wait`, and ending it means killing both.
 
 ## Pages
 

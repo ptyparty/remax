@@ -34,6 +34,7 @@ import Remax.Guide qualified as Guide
 import Remax.Hunks qualified as Hunks
 import Remax.Json qualified as Json
 import Remax.Key qualified as Key
+import Remax.Komux qualified as Komux
 import Remax.LineRange qualified as LineRange
 import Remax.Remote qualified as Remote
 import Remax.RemoteCache qualified as RemoteCache
@@ -42,6 +43,7 @@ import Remax.Store qualified as Store
 import Remax.UI qualified as UI
 import Remax.WorkStore qualified as WorkStore
 import System.Posix.Process qualified as Posix
+import System.Process qualified as Process
 
 data ModeArg
   = ArgHead
@@ -252,6 +254,13 @@ usage =
   \                                     says working while anything awaits\n\
   \                                     you; --state defaults to a file\n\
   \                                     named after the review\n\
+  \       remax [-C DIR] watch --wake [--state FILE]\n\
+  \                                     for a Claude in komux: print what\n\
+  \                                     awaits you, then keep watching in\n\
+  \                                     the background and hand each later\n\
+  \                                     block to that Claude as a message,\n\
+  \                                     until it exits or watch --stop\n\
+  \       remax [-C DIR] watch --stop   end a watch --wake on this review\n\
   \       remax [-C DIR] hunks [--json] [--ref REF [--base BASE] | --base REF | --pr N]\n\
   \                                     list the change set as the session sees\n\
   \                                     it, one id per hunk; with no ref flags,\n\
@@ -944,14 +953,31 @@ data WatchOptions = WatchOptions
   -}
   , watchTimeout :: Maybe Int
   -- ^ Seconds after which to say so and exit.
+  , watchMode :: WatchMode
   }
+
+data WatchMode
+  = WatchPrinting
+  | WatchWaking
+  | WatchStopping
+  | WatchDelivering WakeTarget
+  deriving (Eq)
+
+data WakeTarget = WakeTarget
+  { wakeTargetSocket :: FilePath
+  , wakeTargetPane :: Int
+  , wakeTargetAgent :: Int
+  , wakeTargetAgentStarted :: T.Text
+  }
+  deriving (Eq)
 
 watchArgs :: [String] -> Maybe Cmd
 watchArgs =
   let
     go options args =
       case args of
-        [] -> Just (Watch options)
+        []
+          | watchMode options == WatchPrinting || watchTimeout options == Nothing -> Just (Watch options)
         ("--state" : path : rest)
           | watchStateFile options == Nothing ->
               go options {watchStateFile = Just path} rest
@@ -960,9 +986,20 @@ watchArgs =
           , [(n, "")] <- reads seconds
           , n > 0 ->
               go options {watchTimeout = Just n} rest
+        ("--wake" : rest)
+          | watchMode options == WatchPrinting ->
+              go options {watchMode = WatchWaking} rest
+        ("--stop" : rest)
+          | watchMode options == WatchPrinting ->
+              go options {watchMode = WatchStopping} rest
+        ("--deliver" : socket : pane : agent : started : rest)
+          | watchMode options == WatchPrinting
+          , [(paneId, "")] <- reads pane
+          , [(agentPid, "")] <- reads agent ->
+              go options {watchMode = WatchDelivering (WakeTarget socket paneId agentPid (T.pack started))} rest
         _ -> Nothing
   in
-    go WatchOptions {watchStateFile = Nothing, watchTimeout = Nothing}
+    go WatchOptions {watchStateFile = Nothing, watchTimeout = Nothing, watchMode = WatchPrinting}
 
 -- Say an agent is on this review and print what awaits it, then a block
 -- each time that changes, until stopped, timed out or orphaned.
@@ -979,18 +1016,11 @@ watchArgs =
 -- changed since the state file was written. A fresh watch is often a
 -- fresh agent, and a re-armed one has lost nothing it needs to be shown
 -- again; the state file still marks each conversation new or changed.
-watch :: WatchOptions -> IO ()
-watch options = do
-  roots <- targetRepos
-  conn <- Store.openStore
-  here <- Directory.getCurrentDirectory
+watchPrinting :: WatchOptions -> IO ()
+watchPrinting options = do
+  WatchScope roots conn shownAt scope statePath <- openWatchScope (watchStateFile options)
   let
     party = Just Feedback.AwaitingAgent
-    scope = digestScope party roots
-    shownAt = case roots of
-      [only] -> only
-      _ -> here
-  statePath <- maybe (watchStatePath scope) pure (watchStateFile options)
   seen <- readDigest scope statePath
   stop <- watchStop (watchTimeout options)
   let
@@ -1018,6 +1048,201 @@ watch options = do
       emit (Maybe.fromMaybe Map.empty seen) first
       follow (listDigest party first)
   start `Exception.finally` Store.clearWaiting
+
+watch :: WatchOptions -> IO ()
+watch options =
+  case watchMode options of
+    WatchPrinting -> watchPrinting options
+    WatchWaking -> watchWaking options
+    WatchStopping -> watchStopping
+    WatchDelivering target -> watchDelivering target options
+
+data WatchScope = WatchScope
+  { watchScopeRoots :: [FilePath]
+  , watchScopeConn :: SQLite.Connection
+  , watchScopeShownAt :: FilePath
+  , watchScopeDigest :: T.Text
+  , watchScopeStatePath :: FilePath
+  }
+
+openWatchScope :: Maybe FilePath -> IO WatchScope
+openWatchScope stateFile = do
+  roots <- targetRepos
+  conn <- Store.openStore
+  here <- Directory.getCurrentDirectory
+  let
+    scope = digestScope (Just Feedback.AwaitingAgent) roots
+  statePath <- maybe (watchStatePath scope) pure stateFile
+  pure
+    WatchScope
+      { watchScopeRoots = roots
+      , watchScopeConn = conn
+      , watchScopeShownAt = case roots of
+          [only] -> only
+          _ -> here
+      , watchScopeDigest = scope
+      , watchScopeStatePath = statePath
+      }
+
+watchWaking :: WatchOptions -> IO ()
+watchWaking options = do
+  socket <- Env.lookupEnv "KOMUX_SOCKET"
+  pane <- Env.lookupEnv "KOMUX_PANE_ID"
+  agent <- Komux.findAgent
+  case (socket, pane >>= readWhole, agent) of
+    (Just socketPath, Just paneId, Just found) -> do
+      WatchScope roots conn shownAt scope statePath <- openWatchScope (watchStateFile options)
+      let
+        party = Just Feedback.AwaitingAgent
+        heading = "remax -C " <> T.pack shownAt <> ": "
+      seen <- readDigest scope statePath
+      first <- fetchListing conn roots
+      writeDigest statePath scope (listDigest party first)
+      printBlock (watchBlock shownAt (listPage roots party (Just (Maybe.fromMaybe Map.empty seen)) first))
+      spawnWaker
+        WakeTarget
+          { wakeTargetSocket = socketPath
+          , wakeTargetPane = paneId
+          , wakeTargetAgent = Komux.agentPid found
+          , wakeTargetAgentStarted = Komux.agentStarted found
+          }
+        (watchStateFile options)
+      printBlock
+        [ heading
+            <> "watching in the background. Deal with the block above, then end your turn: when the reviewer acts, the next block arrives as a message. "
+            <> "remax -C "
+            <> T.pack shownAt
+            <> " watch --stop ends it."
+        ]
+    _ ->
+      Exit.die
+        "remax watch --wake works for a Claude running in komux; elsewhere, run remax watch with a Monitor as remax guide watch says"
+
+readWhole :: String -> Maybe Int
+readWhole s =
+  case reads s of
+    [(n, "")] -> Just n
+    _ -> Nothing
+
+spawnWaker :: WakeTarget -> Maybe FilePath -> IO ()
+spawnWaker target stateFile = do
+  exe <- Env.getExecutablePath
+  devNull <- SysIO.openFile "/dev/null" SysIO.ReadWriteMode
+  let
+    args =
+      [ "watch"
+      , "--deliver"
+      , wakeTargetSocket target
+      , show (wakeTargetPane target)
+      , show (wakeTargetAgent target)
+      , T.unpack (wakeTargetAgentStarted target)
+      ]
+        ++ maybe [] (\path -> ["--state", path]) stateFile
+  Monad.void $
+    Process.createProcess
+      (Process.proc exe args)
+        { Process.std_in = Process.UseHandle devNull
+        , Process.std_out = Process.UseHandle devNull
+        , Process.std_err = Process.UseHandle devNull
+        , Process.new_session = True
+        , Process.close_fds = True
+        }
+
+watchStopping :: IO ()
+watchStopping = do
+  WatchScope _ _ shownAt scope _ <- openWatchScope Nothing
+  lock <- wakeLockPath scope
+  running <- Directory.doesFileExist lock
+  removeQuietly lock
+  printBlock
+    [ "remax -C "
+        <> T.pack shownAt
+        <> ": "
+        <> (if running then "stopped watching" else "no watch was running")
+    ]
+
+wakeLockPath :: T.Text -> IO FilePath
+wakeLockPath scope = fmap (<> ".wake") (watchStatePath scope)
+
+readLock :: FilePath -> IO (Maybe String)
+readLock path = do
+  got <- Exception.try (readFile path) :: IO (Either Exception.IOException String)
+  pure (either (const Nothing) (Just . filter (not . Char.isSpace)) got)
+
+removeQuietly :: FilePath -> IO ()
+removeQuietly path =
+  Monad.void (Exception.try (Directory.removeFile path) :: IO (Either Exception.IOException ()))
+
+watchDelivering :: WakeTarget -> WatchOptions -> IO ()
+watchDelivering target options = do
+  WatchScope roots conn shownAt scope statePath <- openWatchScope (watchStateFile options)
+  lock <- wakeLockPath scope
+  me <- fmap show Posix.getProcessID
+  writeFile lock me
+  seen <- readDigest scope statePath
+  first <- fetchListing conn roots
+  Store.markPresence (whoseMove first) (map T.pack roots)
+  let
+    party = Just Feedback.AwaitingAgent
+    agent = Komux.AgentProcess {Komux.agentPid = wakeTargetAgent target, Komux.agentStarted = wakeTargetAgentStarted target}
+    stop = do
+      owner <- readLock lock
+      alive <- Komux.agentAlive agent
+      pure (if owner == Just me && alive then Nothing else Just WokeOrphaned)
+    wait = (blockedWait conn roots party) {waitPresence = whoseMove, waitStop = stop}
+    follow before = do
+      (woke, listing) <- waitForNews wait before
+      case woke of
+        WokeNews -> offer before listing
+        _ -> pure ()
+    offer before listing = do
+      let
+        now = listDigest party listing
+        page = listPage roots party (Just before) listing
+      if awaitsNothing page
+        then follow now
+        else do
+          prompted <- Komux.promptAgent (wakeTargetSocket target) (wakeTargetPane target) (wakeMessage (watchBlock shownAt page))
+          case prompted of
+            Komux.Prompted -> do
+              writeDigest statePath scope now
+              follow now
+            Komux.PromptBusy -> do
+              stopped <- pauseWatch wait listing busyRetryBeats
+              Monad.when (Maybe.isNothing stopped) (follow before)
+            Komux.PromptGone -> pure ()
+    release = do
+      Store.clearWaiting
+      owner <- readLock lock
+      Monad.when (owner == Just me) (removeQuietly lock)
+  follow (Maybe.fromMaybe (listDigest party first) seen) `Exception.finally` release
+
+awaitsNothing :: ListPage -> Bool
+awaitsNothing page =
+  all (null . snd) (pageListed page) && null (pageRequests page) && null (pageMoves page)
+
+wakeMessage :: [T.Text] -> T.Text
+wakeMessage rows =
+  T.unlines
+    ( "The reviewer acted on a review you are watching with remax watch --wake. Act on everything below as remax guide watch says, then end your turn: the watch keeps running and brings the next block as another message."
+        : ""
+        : rows
+    )
+
+pauseWatch :: Wait -> Listing -> Int -> IO (Maybe Woke)
+pauseWatch wait listing beats
+  | beats <= 0 = pure Nothing
+  | otherwise = do
+      stop <- waitStop wait
+      case stop of
+        Just woke -> pure (Just woke)
+        Nothing -> do
+          Store.markPresence (waitPresence wait listing) (map T.pack (waitRoots wait))
+          Concurrent.threadDelay waitPollUs
+          pauseWatch wait listing (beats - 1)
+
+busyRetryBeats :: Int
+busyRetryBeats = 75
 
 {- | Where a watch keeps its fingerprint when not told: a file named after
 the review, so a watch restarted on it picks up where the last left off.
