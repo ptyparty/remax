@@ -306,6 +306,8 @@ usage =
   \  --untracked  review new files as pure additions\n\
   \  --ref REF    review REF itself, read-only, without checking it out:\n\
   \               against BASE, or its merge-base with the mainline;\n\
+  \               a branch name as BASE means where REF forked from it,\n\
+  \               so commits that landed on BASE since stay out;\n\
   \               verdicts record the ref and its tip for the agent\n\
   \  --pr N       review pull request N of the GitHub repository this\n\
   \               checkout belongs to, read-only, through gh: its head and\n\
@@ -451,17 +453,12 @@ review marg = do
     ArgRef ref mBase -> do
       ok <- Git.refExists root ref
       Monad.unless ok (Exit.die ("No such ref: " ++ T.unpack ref))
-      base <- case mBase of
-        Just given -> do
-          okBase <- Git.refExists root given
-          Monad.unless okBase (Exit.die ("No such ref: " ++ T.unpack given))
-          pure given
-        Nothing -> do
-          got <- Git.branchRootOf root ref
-          case got of
-            Left e -> Exit.die (T.unpack e)
-            Right sha -> pure (T.take 10 sha)
-      pure (plainOpening (Git.AtRef (Git.RefReview {Git.rrTip = ref, Git.rrBase = base})))
+      Monad.forM_ mBase $ \given -> do
+        okBase <- Git.refExists root given
+        Monad.unless okBase (Exit.die ("No such ref: " ++ T.unpack given))
+      got <- Git.refBaseFor root ref mBase
+      base <- either (Exit.die . T.unpack) pure got
+      pure (plainOpening (Git.AtRef (Git.RefReview {Git.rrTip = ref, Git.rrBase = Git.refBaseCommit base})))
     ArgPull n -> do
       conn <- Store.openStore
       opened <- openPullArg conn root n
@@ -510,27 +507,73 @@ takeFlags valued args =
 -- whatever the open session on this repository is looking at, else
 -- the working tree against HEAD.
 agentMode :: SQLite.Connection -> FilePath -> Map.Map String String -> IO Git.ReviewMode
-agentMode conn root flags =
-  case (Map.lookup "--pr" flags, Map.lookup "--ref" flags, Map.lookup "--base" flags) of
-    (Just n, _, _) -> do
-      k <- maybe (Exit.die ("--pr wants a pull request number, not " ++ n)) pure (GitHub.pullNumber (T.pack n))
-      viewed <- Store.sessionView conn (T.pack root)
-      case viewed >>= Git.modeFromText of
-        Just mode@(Git.AtPull pr _) | Git.prNumber pr == k -> pure mode
-        _ -> fmap GitHub.openedMode (openPullArg conn root k)
-    (Nothing, Just ref, mBase) -> do
-      ok <- Git.refExists root (T.pack ref)
-      Monad.unless ok (Exit.die ("No such ref: " ++ ref))
-      base <- case mBase of
-        Just given -> pure (T.pack given)
-        Nothing -> do
-          got <- Git.branchRootOf root (T.pack ref)
-          either (Exit.die . T.unpack) (pure . T.take 10) got
-      pure (Git.AtRef (Git.RefReview {Git.rrTip = T.pack ref, Git.rrBase = base}))
-    (Nothing, Nothing, Just base) -> pure (Git.VsRef (T.pack base))
-    (Nothing, Nothing, Nothing) -> do
-      viewed <- Store.sessionView conn (T.pack root)
-      pure (Maybe.fromMaybe (Git.VsRef "HEAD") (viewed >>= Git.modeFromText))
+agentMode conn root flags = fmap avMode (agentView conn root flags)
+
+data AgentView = AgentView
+  { avMode :: Git.ReviewMode
+  , avBase :: BaseChoice
+  }
+
+data BaseChoice
+  = BaseAsViewed
+  | BaseForkedFrom T.Text T.Text
+  | BaseAsGiven T.Text T.Text AncestorStanding
+
+data AncestorStanding = BaseIsAncestor | BaseNotAncestor
+
+agentView :: SQLite.Connection -> FilePath -> Map.Map String String -> IO AgentView
+agentView conn root flags =
+  let
+    plain mode = AgentView {avMode = mode, avBase = BaseAsViewed}
+  in
+    case (Map.lookup "--pr" flags, Map.lookup "--ref" flags, Map.lookup "--base" flags) of
+      (Just n, _, _) -> do
+        k <- maybe (Exit.die ("--pr wants a pull request number, not " ++ n)) pure (GitHub.pullNumber (T.pack n))
+        viewed <- Store.sessionView conn (T.pack root)
+        case viewed >>= Git.modeFromText of
+          Just mode@(Git.AtPull pr _) | Git.prNumber pr == k -> pure (plain mode)
+          _ -> fmap (plain . GitHub.openedMode) (openPullArg conn root k)
+      (Nothing, Just ref, mBase) -> refView root (T.pack ref) (fmap T.pack mBase)
+      (Nothing, Nothing, Just base) -> pure (plain (Git.VsRef (T.pack base)))
+      (Nothing, Nothing, Nothing) -> do
+        viewed <- Store.sessionView conn (T.pack root)
+        pure (plain (Maybe.fromMaybe (Git.VsRef "HEAD") (viewed >>= Git.modeFromText)))
+
+refView :: FilePath -> T.Text -> Maybe T.Text -> IO AgentView
+refView root ref mBase = do
+  ok <- Git.refExists root ref
+  Monad.unless ok (Exit.die ("No such ref: " ++ T.unpack ref))
+  got <- Git.refBaseFor root ref mBase
+  base <- either (Exit.die . T.unpack) pure got
+  let
+    commit = Git.refBaseCommit base
+  choice <- case Git.refBaseForkedFrom base of
+    Just branch -> pure (BaseForkedFrom branch commit)
+    Nothing -> do
+      related <- Git.isAncestor root commit ref
+      pure (BaseAsGiven ref commit (if related then BaseIsAncestor else BaseNotAncestor))
+  pure
+    AgentView
+      { avMode = Git.AtRef (Git.RefReview {Git.rrTip = ref, Git.rrBase = commit})
+      , avBase = choice
+      }
+
+baseReport :: AgentView -> [T.Text]
+baseReport view =
+  case (avMode view, avBase view) of
+    (Git.AtRef rr, BaseForkedFrom branch commit) ->
+      ["base " <> commit <> ", where " <> Git.rrTip rr <> " forked from " <> branch]
+    (_, BaseAsGiven ref commit BaseNotAncestor) ->
+      [ "warning: "
+          <> commit
+          <> " is not an ancestor of "
+          <> ref
+          <> ", so this view also shows, reversed, what landed on that side since they forked;"
+      , "  pass the branch name, or leave --base out, to compare against where "
+          <> ref
+          <> " forked"
+      ]
+    _ -> []
 
 refFlags :: [String]
 refFlags = ["--ref", "--base", "--pr"]
@@ -545,9 +588,10 @@ hunks args = do
   conn <- Store.openStore
   cfg <- Config.loadConfig
   listed <- Monad.forM roots $ \root -> do
-    mode <- agentMode conn root flags
-    found <- Hunks.changeSetHunks cfg mode root
-    pure (root, mode, found)
+    view <- agentView conn root flags
+    mapM_ (TIO.hPutStrLn SysIO.stderr) (baseReport view)
+    found <- Hunks.changeSetHunks cfg (avMode view) root
+    pure (root, avMode view, found)
   if asJson
     then TIO.putStrLn (jsonArray (map hunksJson listed))
     else Monad.forM_ listed $ \(root, mode, found) -> do
@@ -586,10 +630,16 @@ tourBegin args = do
       )
   roots <- targetRepos
   conn <- Store.openStore
+  cfg <- Config.loadConfig
   Monad.forM_ roots $ \root -> do
-    mode <- clearTourFor conn root flags
+    view <- clearTourFor conn root flags
+    let
+      mode = avMode view
     Store.nameTour conn (T.pack root) (Git.subjectText mode) (Git.modeToText mode) (fmap T.pack (Map.lookup "--name" flags))
+    found <- Hunks.changeSetHunks cfg mode root
     putStrLn ("tour begun for " ++ T.unpack (Git.modeLabel mode) ++ repoSuffix roots root)
+    mapM_ TIO.putStrLn (baseReport view)
+    putStrLn ("the view has " ++ countText (length found) "hunk" ++ "; each tour step reports how many the tour still leaves out")
 
 tourClear :: [String] -> IO ()
 tourClear args = do
@@ -598,18 +648,21 @@ tourClear args = do
   roots <- targetRepos
   conn <- Store.openStore
   Monad.forM_ roots $ \root -> do
-    mode <- clearTourFor conn root flags
-    putStrLn ("tour cleared for " ++ T.unpack (Git.modeLabel mode) ++ repoSuffix roots root)
+    view <- clearTourFor conn root flags
+    putStrLn ("tour cleared for " ++ T.unpack (Git.modeLabel (avMode view)) ++ repoSuffix roots root)
 
-clearTourFor :: SQLite.Connection -> FilePath -> Map.Map String String -> IO Git.ReviewMode
+clearTourFor :: SQLite.Connection -> FilePath -> Map.Map String String -> IO AgentView
 clearTourFor conn root flags = do
-  mode <- agentMode conn root flags
+  view <- agentView conn root flags
   known <- Store.tourSubjects conn (T.pack root)
-  spellings <- Git.sameCommitSubjects root mode known
+  spellings <- Git.sameCommitSubjects root (avMode view) known
   Monad.forM_ spellings $ \subject -> do
     Store.clearTour conn (T.pack root) subject
     Store.clearTourRequest conn (T.pack root) subject
-  pure mode
+  pure view
+
+countText :: Int -> String -> String
+countText n noun = show n ++ " " ++ noun ++ (if n == 1 then "" else "s")
 
 repoSuffix :: [FilePath] -> FilePath -> String
 repoSuffix roots root =
@@ -685,15 +738,27 @@ tourStep args = do
     found <- Hunks.changeSetHunks cfg mode root
     let
       chosen = filter ((`elem` ids) . Hunks.hunkId) found
-    pure (root, mode, chosen)
-  case filter (\(_, _, chosen) -> not (null chosen)) placed of
+    pure (root, mode, found, chosen)
+  case filter (\(_, _, _, chosen) -> not (null chosen)) placed of
     [] -> Exit.die "No hunk with that id in the view; run remax hunks to list them."
-    ((root, mode, chosen) : _) -> do
+    ((root, mode, found, chosen) : _) -> do
       let
         missing = filter (`notElem` map Hunks.hunkId chosen) ids
       Monad.unless (null missing) (Exit.die ("No hunk with id " ++ T.unpack (T.intercalate ", " missing)))
       seq_ <- Store.appendTourStep conn (T.pack root) (Git.subjectText mode) (Git.modeToText mode) "tour" title note (concatMap Hunks.hunkKeys chosen)
-      putStrLn ("step " ++ show seq_ ++ ": " ++ show (length chosen) ++ " hunk(s)")
+      steps <- Store.loadTour conn (T.pack root) (Git.subjectText mode)
+      let
+        toured = Set.fromList (concatMap Store.tourKeys steps)
+        covered = length (filter (any (`Set.member` toured) . Hunks.hunkKeys) found)
+        left = length found - covered
+      putStrLn ("step " ++ show seq_ ++ ": " ++ countText (length chosen) "hunk")
+      putStrLn
+        ( "the tour covers "
+            ++ show covered
+            ++ " of the view's "
+            ++ countText (length found) "hunk"
+            ++ (if left == 0 then ", every one" else "; " ++ show left ++ " left out")
+        )
 
 -- for a directory that merely holds repositories, which is what a story
 -- directory is — all of them.

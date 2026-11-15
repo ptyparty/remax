@@ -54,6 +54,8 @@ module Remax.Git
   , mainlineRef
   , branchRoot
   , branchRootOf
+  , RefBase (..)
+  , refBaseFor
   , trackedChanges
   , pullLabel
   , hasStagedChanges
@@ -969,6 +971,37 @@ branchRootOf root tip = do
       pure $ case code of
         Exit.ExitSuccess -> Right (T.strip (T.pack out))
         Exit.ExitFailure _ -> Left (T.strip (T.pack err))
+
+data RefBase = RefBase
+  { refBaseCommit :: T.Text
+  , refBaseForkedFrom :: Maybe T.Text
+  }
+
+refBaseFor :: FilePath -> T.Text -> Maybe T.Text -> IO (Either T.Text RefBase)
+refBaseFor root tip given =
+  let
+    forkFrom branch = do
+      (code, out, err) <-
+        Process.readProcessWithExitCode "git" ["-C", root, "merge-base", T.unpack tip, T.unpack branch] ""
+      pure $ case code of
+        Exit.ExitSuccess -> Right (RefBase (T.take 10 (T.strip (T.pack out))) (Just branch))
+        Exit.ExitFailure _ -> Left (T.strip (T.pack err))
+  in
+    case given of
+      Nothing -> do
+        mMain <- mainlineRef root
+        maybe (pure (Left "no mainline ref found (origin/main, origin/master, main, master)")) forkFrom mMain
+      Just base -> do
+        branch <- namesBranch root base
+        if branch then forkFrom base else pure (Right (RefBase base Nothing))
+
+namesBranch :: FilePath -> T.Text -> IO Bool
+namesBranch root ref = do
+  (code, out, _) <-
+    Process.readProcessWithExitCode "git" ["-C", root, "rev-parse", "--symbolic-full-name", T.unpack ref] ""
+  let
+    full = T.strip (T.pack out)
+  pure (code == Exit.ExitSuccess && any (`T.isPrefixOf` full) ["refs/heads/", "refs/remotes/"])
 
 -- Whether any tracked file differs from HEAD or the index — the guard
 -- before starting a rebase.

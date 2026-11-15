@@ -25,6 +25,33 @@ remax -C "$REPO" hunks --json
 
 Lists the change set exactly as the reviewer's session sees it: one
 entry per hunk with an `id`, `file`, `line_no` and the marked `lines`.
+The top level is an array with one object per repository in reach
+(one, unless `-C` names a directory of several checkouts), and the
+hunks sit in that object's `hunks` array:
+
+```json
+[
+  {
+    "repo": "/home/me/src/shop",
+    "subject": "feature",
+    "view": "feature vs 1a2b3c4d5e",
+    "hunks": [
+      {
+        "id": "9f2c41d07a…",
+        "file": "src/Cart.hs",
+        "line_no": 42,
+        "lines": ["-total = sum prices", "+total = sum (map price items)"]
+      }
+    ]
+  }
+]
+```
+
+So `jq -r '.[].hunks[] | "\(.id)\t\(.file):\(.line_no)"'` lists one hunk
+per line. `id` is the long hex string `tour step` takes; there is no
+other key to look a hunk up by. `remax hunks --help` and every other
+subcommand's `--help` print their usage.
+
 With no flags it follows **the view their session last had up** — the
 working tree, a `:ref`, a `:commit` — so you do not need to be told
 which commit they have up while they are looking at it. Read the whole listing
@@ -45,12 +72,24 @@ When the reviewer will look later, or has not said which view, name the
 view yourself on `hunks`, `tour begin` and every `tour step`, because
 "the view their session last had up" may be anything by then:
 
-- committed work on a branch: `--ref BRANCH --base BASE`, the base
-  being the branch it was cut from, or `--ref BRANCH` alone for where
-  it forked from the mainline
+- committed work on a branch: `--ref BRANCH` alone. remax compares it
+  with the commit where it forked from the mainline, so only the
+  branch's own changes show.
+- a branch cut from another branch than the mainline: `--ref BRANCH
+  --base PARENT`, naming the parent branch. A branch name as `--base`
+  means where `BRANCH` forked from it, never that branch's tip.
 - a single commit: `--ref SHA --base SHA^`
 - a pull request: `--pr N`
 - uncommitted changes: `--base HEAD`
+
+The base must be where the work forked. Never pass the tip of a branch
+that moves, such as `$(git rev-parse origin/main)`, as `--base`: a sha is
+taken as it is, and everything that landed on main since the branch
+was cut would show up in the tour, reversed, as if the branch had
+undone it. `hunks` and `tour begin` print the base they used (`base
+1a2b3c4d5e, where feature forked from origin/main`) and warn when a
+`--base` is not an ancestor of `--ref`; read that line before posting
+steps.
 
 Give the tour a name with `tour begin --name WORDS`, a few words that
 say what it walks. The reviewer finds it with `:tours` (or Space T when
@@ -106,9 +145,23 @@ one of its hunks out of order still knows where they are; the note
 itself shows only on the first hunk. Give every stop a title when the
 tour has more than a handful.
 
-`tour begin` empties any earlier tour for that view and names the new
-one. Each `tour step`
-appends one stop; the reviewer's session switches to following the
+`tour begin` empties any earlier tour for that view, names the new
+one, and says how many hunks the view has. Each `tour step` appends
+one stop and says how many of the view's hunks the tour now covers and
+how many it leaves out:
+
+```
+step 12: 2 hunks
+the tour covers 81 of the view's 569 hunks; 488 left out
+```
+
+A tour need not cover every hunk, but leaving some out is a choice to
+tell the reviewer about: when the last step still leaves hunks out, say
+in the tour's first note or in your message which ones and why
+(generated files, mechanical renames). The reviewer's session shows the
+same count when the tour starts and in its stops list.
+
+The reviewer's session switches to following the
 tour as the first one lands and each note renders above its hunk on
 its own background. An id that is not in the view is refused, so re-run
 `hunks` after you edit.
