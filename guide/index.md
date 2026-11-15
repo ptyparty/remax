@@ -34,7 +34,7 @@ It prints what awaits you and returns. Act on it, then end your turn and wait: c
 
 The watch holds a mark in the reviewer's header for as long as it runs, so they can see there is somebody on the other end. Its first block is everything already recorded, so nothing is left sitting, and from there it prints a block each time the reviewer acts, until they stop you. Right when they are reviewing *now* and you are working alongside them. The mark says *working* while anything awaits you and *watching* once you have answered it all, and it goes out a few seconds after the watch ends.
 
-**End a watch.** Stop the watch, and say so. Leaving it running tells the reviewer somebody is on this when nobody is. Also do this without being asked if the human says they are done reviewing, or closes the session. A `watch --wake` ends with `remax -C "$REPO" watch --stop`, and on its own when your Claude exits. Without a Monitor tool the watch is two background tasks, `watching` and a `list --wait`, and ending it means killing both.
+**End a watch.** Stop the watch, and say so. Leaving it running tells the reviewer somebody is on this when nobody is. Also do this without being asked if the human says they are done reviewing, or closes the session. A `watch --wake` ends with `remax -C "$REPO" watch --stop`, and on its own when your Claude exits or your conversation is cleared. Without a Monitor tool the watch is two background tasks, `watching` and a `list --wait`, and ending it means killing both.
 
 ## Pages
 

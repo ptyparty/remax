@@ -7,6 +7,8 @@ module Remax.Context
   , KeyCommand (..)
   , Handlers (..)
   , withListener
+  , receiveLine
+  , removeQuietly
   ) where
 
 import Control.Concurrent qualified as Concurrent

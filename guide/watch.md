@@ -12,7 +12,7 @@ remax -C "$REPO" watch --wake
 
 It prints the first block, everything that awaits you, starts watching in the background, and returns. Act on the block, reply, and **end your turn**. While the reviewer is away nothing runs on your side, so a wait of three days costs what a wait of three minutes does. Each time the reviewer acts, komux hands you the next block as a message, starting with a line that says it comes from this watch; act on it and end your turn again. If you are busy when it comes, it waits until you are free. Never start it again to keep it going: it has no timeout, and a second one on the same review replaces the first.
 
-It ends when you run `remax -C "$REPO" watch --stop`, or on its own when the Claude that started it exits. `/clear` starts a new Claude, so a watch does not carry over into a new conversation. Everything below about blocks, the reviewer's mark and the state file holds for it too.
+It ends when you run `remax -C "$REPO" watch --stop`, or on its own when the Claude that started it exits or its conversation is cleared or ended, so a watch never carries over into a new conversation. If it ends because komux could not reach you, the next `remax watch` or `remax list` on the review says why. If it cannot run in the background at all, such as from a sandboxed shell, `watch --wake` says so and exits with an error: use the Monitor form below instead. Everything below about blocks, the reviewer's mark and the state file holds for it too.
 
 ## With a Monitor tool
 
