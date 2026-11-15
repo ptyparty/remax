@@ -576,8 +576,10 @@ it in the popup it was written in and `dd` discards it, asking first
 when text was typed. On an agent's proposal: `⏎` takes it as your own
 reply, opening it in the reply popup, and `dd` drops it. Dropping the
 last unsent post of a new comment thread drops your talk with the agent
-on it too, asking first. Local posts
-never take the band. In the emacs keymap the same verbs sit under
+on it too, asking first. Of the local
+posts, only your own notes take the band: `e` on one opens the note box
+right under it with its text, and saving rewrites the note where it
+stands. The agent's local posts are read, never selected. In the emacs keymap the same verbs sit under
 `C-c`: `C-c r`, `C-c ?`, `C-c !`, `C-c g`, `C-c e`, `C-c d`, `C-c +`, `C-c y`,
 `C-c u`, `C-c C-c` takes a proposal, `C-c z` folds, and `C-n` enters
 the thread.

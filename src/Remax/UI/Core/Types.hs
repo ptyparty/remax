@@ -416,6 +416,7 @@ data WorkAction
   | AnswerNote Conv.Target
   | CommentOn Conv.Anchor
   | EditPending Conv.WorkId WorkOrigin
+  | EditNote Conv.WorkId
   | TakeProposal Conv.WorkId Conv.Target T.Text
   | EditPosted GitHub.CommentKind Store.CommentId
 

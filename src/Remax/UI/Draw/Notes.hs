@@ -170,6 +170,7 @@ workTitle wp =
       Types.ReplyOrigin author -> "reply \183 to " <> author
       Types.CommentOrigin -> "comment \183 " <> T.takeWhile (/= ' ') (Types.wpPlace wp)
       Types.AskOrigin -> "ask \183 the agent"
+    Types.EditNote _ -> "edit \183 your note"
     Types.TakeProposal _ target author -> Threads.takenAs target author <> " \183 from the proposal"
     Types.EditPosted _ _ -> "edit \183 your comment on GitHub"
 
@@ -197,6 +198,7 @@ workHint keys rule mode wp =
       Types.CommentOn (Conv.OnLines _) -> ("saves", sha ++ ["C-s inserts a suggestion"], [])
       Types.CommentOn _ -> ("saves", sha, [])
       Types.EditPending _ _ -> ("saves", sha, [])
+      Types.EditNote _ -> ("saves", sha, [])
       Types.TakeProposal _ (Conv.NewThread _ _) _ -> ("queues for :submit", sha, ["the proposal becomes your comment"])
       Types.TakeProposal {} -> ("queues for :submit", sha, ["the proposal becomes your reply"])
       Types.EditPosted _ _ -> ("edits on GitHub at once", sha, [])
@@ -292,6 +294,7 @@ ruleText wp =
       Types.ReplyOrigin author -> "your reply to " <> author <> " \183 waits for :submit"
       Types.CommentOrigin -> "your comment \183 waits for :submit"
       Types.AskOrigin -> "ask the agent"
+    Types.EditNote _ -> "your note \183 saving rewrites it"
     Types.TakeProposal _ target author -> Threads.takenAs target author <> " \183 waits for :submit"
     Types.EditPosted _ _ -> "your posted comment \183 edits on GitHub when you save"
 

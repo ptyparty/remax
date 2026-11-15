@@ -356,6 +356,11 @@ editKey = do
       | Conv.Draft <- Conv.postState post
       , Just wid <- Conv.postWork post ->
           openWorkPopup conv (Types.EditPending wid (originOf conv post)) (Conv.markdownText (Conv.postBody post))
+    Just (conv, _, post)
+      | Conv.Local _ <- Conv.postState post
+      , Conv.postAuthor post == Conv.Viewer
+      , Just wid <- Conv.postWork post ->
+          openWorkPopup conv (Types.EditNote wid) (Conv.markdownText (Conv.postBody post))
     _ -> editPostedKey
 
 originOf :: Conv.Conversation -> Conv.Post -> Types.WorkOrigin
@@ -522,6 +527,10 @@ saveWork wp text = do
         MonadIO.liftIO (WorkStore.editWork conn wid body)
         reloadAndBand (Types.wpConv wp)
         Types.setMsg "edited \183 still waits for :submit"
+      Types.EditNote wid -> do
+        MonadIO.liftIO (WorkStore.editWork conn wid body)
+        reloadAndBand (Types.wpConv wp)
+        Types.setMsg "note edited"
       Types.TakeProposal wid target author -> do
         MonadIO.liftIO (WorkStore.takeProposal conn scope target wid body)
         reloadAndBand (Types.wpConv wp)

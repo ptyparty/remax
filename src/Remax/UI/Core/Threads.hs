@@ -444,17 +444,27 @@ stripSegs column railAttr keys =
   , Markdown.Segment Attrs.hintAttr (" " <> keys) Nothing
   ]
 
-{- | The posts the band may land on: everything bound for GitHub, in
-order. Local talk with the agent is read, never selected.
+{- | The posts the band may land on: everything bound for GitHub, and
+your own local notes so they can be edited where they draw, in order.
+The agent's local talk is read, never selected.
 -}
 bandable :: Conv.Conversation -> [Int]
 bandable conv =
-  Maybe.mapMaybe (\(i, p) -> if Conv.isLocalPost p then Nothing else Just i) (zip [0 ..] (Conv.convPosts conv))
+  let
+    lands p = not (Conv.isLocalPost p) || editableNote p
+  in
+    Maybe.mapMaybe (\(i, p) -> if lands p then Just i else Nothing) (zip [0 ..] (Conv.convPosts conv))
+
+editableNote :: Conv.Post -> Bool
+editableNote p =
+  case Conv.postState p of
+    Conv.Local _ -> Conv.postAuthor p == Conv.Viewer && Maybe.isJust (Conv.postWork p)
+    _ -> False
 
 bandIndexes :: Types.St -> Conv.Conversation -> [Int]
 bandIndexes st conv =
   case Conv.convVenue conv of
-    Conv.LocalOnly _ -> []
+    Conv.LocalOnly _ -> bandable conv
     _ -> if isFolded st conv then [] else bandable conv
 
 postKeys :: Config.KeyMode -> Types.FlagRule -> Conv.Venue -> Conv.Post -> T.Text
@@ -490,7 +500,9 @@ postKeys keys rule venue post =
             ++ resolve
         Conv.Draft -> [key "e edit" "C-c e edit", key "dd discard" "C-c d discard"]
         Conv.Proposal _ _ -> [key ("\9166 take as your " <> takenWord) ("C-c C-c take as your " <> takenWord), key "dd drop" "C-c d drop"]
-        Conv.Local _ -> []
+        Conv.Local _
+          | editableNote post -> [key "e edit" "C-c e edit"]
+          | otherwise -> []
 
 possessive :: Conv.Author -> T.Text
 possessive author =
