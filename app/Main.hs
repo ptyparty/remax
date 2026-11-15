@@ -1896,7 +1896,9 @@ reply given text = do
       Feedback.Replied n landing -> Just (repo, n, landing)
       Feedback.NoSuchConversation -> Nothing
   case Maybe.mapMaybe replied attached of
-    [] -> Exit.die "No such conversation recorded for this repository."
+    [] -> do
+      retired <- fmap concat (mapM (\r -> WorkStore.retiredNotes conn (T.pack r) given) roots)
+      Exit.die (T.unpack (noConversation given retired))
     hits ->
       Monad.forM_ hits $ \(repo, n, landing) ->
         putStrLn
@@ -1906,6 +1908,25 @@ reply given text = do
               ++ scopeWords landing
               ++ (if length roots > 1 then " in " ++ FilePath.takeFileName repo else "")
           )
+
+noConversation :: T.Text -> [WorkStore.RetiredNote] -> T.Text
+noConversation given retired =
+  let
+    why r = case WorkStore.retiredReason r of
+      WorkStore.LinesAccepted -> "the reviewer accepted its lines"
+      WorkStore.NoteResolved -> "the reviewer resolved it"
+    closed r =
+      "Conversation "
+        <> given
+        <> " is closed: "
+        <> why r
+        <> " at "
+        <> WorkStore.retiredAt r
+        <> " UTC, so nothing waits for a reply there. remax list shows what is still open."
+  in
+    case retired of
+      [r] -> closed r
+      _ -> "No open conversation " <> given <> " in this repository. remax list shows the open ones and their ids; a note the reviewer resolved or whose lines they accepted is gone from it."
 
 resolveTarget :: SQLite.Connection -> [FilePath] -> T.Text -> IO T.Text
 resolveTarget conn roots given = do
@@ -1927,7 +1948,9 @@ showConversation given = do
   listed <- fmap concat (mapM (Feedback.listFor conn) roots)
   resolved <- resolveIn listed given
   case resolved of
-    Nothing -> Exit.die "No such conversation recorded for this repository."
+    Nothing -> do
+      retired <- fmap concat (mapM (\r -> WorkStore.retiredNotes conn (T.pack r) given) roots)
+      Exit.die (T.unpack (noConversation given retired))
     Just full -> do
       let
         repoLine l = if length roots > 1 then ["repo " <> T.pack (Feedback.listedRepo l)] else []

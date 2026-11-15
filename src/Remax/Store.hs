@@ -295,6 +295,14 @@ openStore = do
     \  repo TEXT NOT NULL,\
     \  local_id TEXT PRIMARY KEY,\
     \  thread_id TEXT NOT NULL)"
+  SQLite.execute_
+    conn
+    "CREATE TABLE IF NOT EXISTS retired_note (\
+    \  repo TEXT NOT NULL,\
+    \  local_id TEXT NOT NULL,\
+    \  reason TEXT NOT NULL,\
+    \  retired_at TEXT NOT NULL DEFAULT (datetime('now')),\
+    \  PRIMARY KEY (repo, local_id))"
   -- several instances (sessions, agent CLI calls) share this file; WAL
   -- lets readers proceed under a writer instead of stacking on the lock
   Monad.void (SQLite.query_ conn "PRAGMA journal_mode = WAL" :: IO [SQLite.Only T.Text])
