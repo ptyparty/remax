@@ -79,6 +79,7 @@ data Cmd
   | RunInSession T.Text
   | SetUp Setup.SetupAction
   | ShowGuide T.Text
+  | ShowHelp String
   | ShowVersion
 
 -- How a listing is printed, and when.
@@ -148,6 +149,7 @@ main = do
         RunInSession command -> runInSession command
         SetUp action -> Setup.runSetup action
         ShowGuide page -> showGuide page
+        ShowHelp text -> putStr text
         ShowVersion -> putStrLn ("remax " ++ Version.showVersion Paths.version)
 
 showGuide :: T.Text -> IO ()
@@ -310,6 +312,58 @@ usage =
   \               base are fetched into refs/remax/pull/N, and no branch\n\
   \               of yours moves"
 
+helpRequest :: [String] -> Maybe String
+helpRequest args =
+  let
+    isHelp a = a == "--help" || a == "-h"
+    takesText = ["reply", "note", "comment", "do", "snapshot", "show", "move"]
+  in
+    case args of
+      [] -> Nothing
+      (word : rest)
+        | isHelp word || word == "help" -> Just usage
+        | word `elem` takesText -> if any isHelp (take 1 rest) then Just (usageFor [word]) else Nothing
+        | word == "tour", (sub : more) <- rest, any isHelp (sub : more) -> Just (usageFor (filter (not . isHelp) [word, sub]))
+        | any isHelp rest -> Just (usageFor [word])
+        | otherwise -> Nothing
+
+usageFor :: [String] -> String
+usageFor wanted =
+  let
+    (commands, options) = List.break null (lines usage)
+    isCommandLine l = "remax " `List.isPrefixOf` dropWhile (== ' ') (Maybe.fromMaybe l (List.stripPrefix "usage:" l))
+    grouped ls =
+      case ls of
+        [] -> []
+        _ ->
+          let
+            (heads, afterHeads) = commandRun ls
+            (body, rest) = List.break isCommandLine afterHeads
+          in
+            (heads, body) : grouped rest
+    describedInline l = "  " `List.isInfixOf` dropWhile (== ' ') l
+    commandRun ls =
+      case ls of
+        (l : rest)
+          | isCommandLine l && describedInline l -> ([l], rest)
+          | isCommandLine l -> let (more, after) = commandRun rest in (l : more, after)
+        _ -> ([], ls)
+    entries = grouped commands
+    commandWords l = words (dropWhile (== ' ') (Maybe.fromMaybe l (List.stripPrefix "usage:" l)))
+    names l = case commandWords l of
+      ("remax" : "[-C" : "DIR]" : rest) -> rest
+      (_ : rest) -> rest
+      [] -> []
+    matches (heads, _) = any (\l -> wanted `List.isPrefixOf` names l) heads
+    chosen = filter matches entries
+    reviewWords = ["hunks", "tour"]
+    withOptions = if any (`elem` reviewWords) (take 1 wanted) then options else []
+    guidePointer = if any (`elem` ["hunks", "tour", "snapshot"]) (take 1 wanted) then ["", "  remax guide tour explains tours, with the shape of hunks --json"] else []
+  in
+    case chosen of
+      [] -> usage
+      _ -> unlines (concatMap (\(h, b) -> h ++ b) chosen ++ withOptions ++ guidePointer)
+
 parseArgs :: [String] -> Either String (Maybe FilePath, Cmd)
 parseArgs args0 =
   let
@@ -317,6 +371,8 @@ parseArgs args0 =
       case args of
         ("-C" : dir : rest) -> go (Just dir) rest
         ["-C"] -> Left usage
+        _
+          | Just text <- helpRequest args -> Right (mDir, ShowHelp text)
         ["forget"] -> Right (mDir, Forget Nothing)
         ["forget", path] -> Right (mDir, Forget (Just path))
         ("list" : rest)
