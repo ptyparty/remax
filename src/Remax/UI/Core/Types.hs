@@ -652,6 +652,7 @@ data St = St
   , stSending :: Maybe SubmitDialog
   , stInbox :: Maybe Inbox
   , stTourOverview :: Maybe TourOverview
+  , stTourPlay :: Maybe TourPlay
   , stFollow :: FollowMode
   , stAgentHeld :: Maybe AgentHeld
   , stClaudeLine :: Maybe ClaudeLine

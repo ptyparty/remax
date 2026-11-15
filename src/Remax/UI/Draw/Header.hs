@@ -304,8 +304,11 @@ tourBar st =
                 " \9656 tour of " <> total <> " stops  \183  none of its hunks are in this view any more"
             | otherwise ->
                 " \9656 tour of " <> total <> " stops  \183  off the trail \8212 :tour returns to it, ] goes to the first stop"
+        playing = case Types.stTourPlay st of
+          Just p -> " \9654 playing " <> Types.tshow (Types.tpPlayed p) <> "/" <> Types.tshow (Types.tpTotal p) <> " \183 Esc stops \183"
+          Nothing -> ""
       in
-        Just (Brick.withDefAttr Attrs.guideAttr (Brick.padRight Brick.Max (Brick.txt text)))
+        Just (Brick.withDefAttr Attrs.guideAttr (Brick.padRight Brick.Max (Brick.txt (playing <> text))))
     _ -> Nothing
 
 claudeBar :: Types.St -> Maybe (Brick.Widget Types.Name)

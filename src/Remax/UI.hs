@@ -255,6 +255,7 @@ initialState startup mode pullMeta root roots story watchMode dirWatch clip alre
     , Types.stSending = Nothing
     , Types.stInbox = Nothing
     , Types.stTourOverview = Nothing
+    , Types.stTourPlay = Nothing
     , Types.stFollow = Types.FollowEdits
     , Types.stAgentHeld = Nothing
     , Types.stClaudeLine = Nothing

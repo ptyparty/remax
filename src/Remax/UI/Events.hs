@@ -262,55 +262,68 @@ handleEvent brickEvent =
     Brick.VtyEvent (V.EvMouseUp {}) -> pure ()
     Brick.VtyEvent ev -> do
       st <- State.get
-      -- messages are transient: any keystroke clears the old one, and a
-      -- handler that has something new to say sets it afresh
-      State.modify (\s -> s {Types.stMsg = ""})
-      case (Types.stNotePopup st, Types.stPicker st, Types.stPrompt st) of
-        _
-          | Types.stHelp st -> State.modify (\s -> s {Types.stHelp = False})
-        _
-          | Types.stInfoPopup st /= Nothing ->
-              State.modify (\s -> s {Types.stInfoPopup = Nothing})
-        _
-          | Just confirm <- Types.stConfirm st -> handleConfirmKey ev confirm
-        _
-          | Just picker <- Types.stCiting st -> CiteAction.handleCiteKey ev picker
-        _
-          | Just picker <- Types.stReacting st -> ThreadAction.handleReactionKey ev picker
-        (Just np, _, _) -> do
-          NoteAction.handleNotePopupKey ev np
-          returnToSubmit np
-        _
-          | Just inbox <- Types.stInbox st -> InboxAction.handleInboxKey ev inbox
-        _
-          | Just overview <- Types.stTourOverview st -> TourAction.handleTourOverviewKey ev overview
-        _
-          | Just dialog <- Types.stSubmit st -> SubmitAction.handleSubmitKey ev dialog
-        _
-          | Just tv <- Types.stTree st -> TreeKeys.handleTreeKey ev tv
-        (_, Just pk, _) -> PickerAction.handlePickerKey ev pk
-        (_, _, Just p) -> handlePromptKey ev p
-        _
-          | Just _ <- Types.stPullView st
-          , not (Types.stSpace st)
-          , not (Types.stIdleGo st)
-          , Maybe.isNothing (Types.stEmacsPrefix st) ->
-              handlePullViewKey ev
-        _ ->
-          if Types.stSpace st
-            then handleSpaceKey ev
-            else case Types.stEmacsPrefix st of
-              Just pfx -> do
-                State.modify (\s -> s {Types.stEmacsPrefix = Nothing})
-                if null (Types.stFiles st)
-                  then handleIdlePrefixed pfx ev
-                  else handleEmacsPrefixed pfx ev
-              Nothing
-                | Types.stIdleGo st -> do
-                    State.modify (\s -> s {Types.stIdleGo = False})
-                    handleIdleGo ev
-                | null (Types.stFiles st) -> handleIdleKey ev
-                | otherwise -> handleModalKey ev
+      case (Types.stTourPlay st, ev) of
+        (Just _, V.EvKey V.KEsc []) -> TourAction.stopPlay
+        (Just _, V.EvKey (V.KChar 'q') []) -> TourAction.stopPlay
+        (Just _, V.EvKey _ _) -> do
+          TourAction.stopPlay
+          stopped <- State.gets Types.stMsg
+          handleVtyEvent ev
+          State.modify (\s -> if T.null (Types.stMsg s) then s {Types.stMsg = stopped} else s)
+        _ -> handleVtyEvent ev
+
+handleVtyEvent :: V.Event -> Brick.EventM Types.Name Types.St ()
+handleVtyEvent ev = do
+  st <- State.get
+  -- messages are transient: any keystroke clears the old one, and a
+  -- handler that has something new to say sets it afresh
+  State.modify (\s -> s {Types.stMsg = ""})
+  case (Types.stNotePopup st, Types.stPicker st, Types.stPrompt st) of
+    _
+      | Types.stHelp st -> State.modify (\s -> s {Types.stHelp = False})
+    _
+      | Types.stInfoPopup st /= Nothing ->
+          State.modify (\s -> s {Types.stInfoPopup = Nothing})
+    _
+      | Just confirm <- Types.stConfirm st -> handleConfirmKey ev confirm
+    _
+      | Just picker <- Types.stCiting st -> CiteAction.handleCiteKey ev picker
+    _
+      | Just picker <- Types.stReacting st -> ThreadAction.handleReactionKey ev picker
+    (Just np, _, _) -> do
+      NoteAction.handleNotePopupKey ev np
+      returnToSubmit np
+    _
+      | Just inbox <- Types.stInbox st -> InboxAction.handleInboxKey ev inbox
+    _
+      | Just overview <- Types.stTourOverview st -> TourAction.handleTourOverviewKey ev overview
+    _
+      | Just dialog <- Types.stSubmit st -> SubmitAction.handleSubmitKey ev dialog
+    _
+      | Just tv <- Types.stTree st -> TreeKeys.handleTreeKey ev tv
+    (_, Just pk, _) -> PickerAction.handlePickerKey ev pk
+    (_, _, Just p) -> handlePromptKey ev p
+    _
+      | Just _ <- Types.stPullView st
+      , not (Types.stSpace st)
+      , not (Types.stIdleGo st)
+      , Maybe.isNothing (Types.stEmacsPrefix st) ->
+          handlePullViewKey ev
+    _ ->
+      if Types.stSpace st
+        then handleSpaceKey ev
+        else case Types.stEmacsPrefix st of
+          Just pfx -> do
+            State.modify (\s -> s {Types.stEmacsPrefix = Nothing})
+            if null (Types.stFiles st)
+              then handleIdlePrefixed pfx ev
+              else handleEmacsPrefixed pfx ev
+          Nothing
+            | Types.stIdleGo st -> do
+                State.modify (\s -> s {Types.stIdleGo = False})
+                handleIdleGo ev
+            | null (Types.stFiles st) -> handleIdleKey ev
+            | otherwise -> handleModalKey ev
 
 -- The helix-style space menu: Space, then one key; anything unlisted
 -- just cancels. Dispatch reads spaceMenuEntries, which is also what the

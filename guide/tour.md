@@ -189,3 +189,20 @@ Once the last step is posted, start them on it with
 (see [Pointing the reviewer](pointing.md)). When it is on another view,
 or closed, `do :tours` opens the list for them, or tell them the tour's
 name.
+
+## Walking the reviewer along
+
+When the reviewer asks to be walked through the tour on a timer, start
+it in their session rather than looping over `do :go` yourself:
+
+```sh
+remax -C "$REPO" do ':tour play'      # longer on bigger hunks
+remax -C "$REPO" do ':tour play 4'    # four seconds on each
+remax -C "$REPO" do ':tour stop'
+```
+
+`:tour play` visits the tour's hunks that have no verdict yet, from
+where their cursor is. Esc or q in remax stops it at once and the status
+line says where it stopped, so they never have to come back to you to
+say stop. Do not run a loop of your own that moves their session: they
+cannot stop it from remax.
