@@ -2,6 +2,7 @@
 
 module Remax.Komux
   ( PaneId (..)
+  , answerTimeoutUs
   , AgentPid (..)
   , AgentProcess (..)
   , AgentLookupError (..)

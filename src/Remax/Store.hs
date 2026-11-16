@@ -329,6 +329,9 @@ migrate conn = do
     SQLite.execute_ conn "ALTER TABLE line_verdict ADD COLUMN reply TEXT"
   Monad.unless ("ref" `elem` names) $
     SQLite.execute_ conn "ALTER TABLE line_verdict ADD COLUMN ref TEXT"
+  Monad.unless ("flagged_at" `elem` names) $ do
+    SQLite.execute_ conn "ALTER TABLE line_verdict ADD COLUMN flagged_at TEXT"
+    SQLite.execute_ conn "UPDATE line_verdict SET flagged_at = updated_at WHERE verdict <> 'reviewed'"
   stepCols <-
     SQLite.query_ conn "PRAGMA table_info(tour_step)" ::
       IO [(Int, T.Text, T.Text, Int, Maybe T.Text, Int)]
@@ -649,8 +652,8 @@ recordVerdicts conn repo passId v origin rows =
         conn
         "INSERT INTO line_verdict\
         \ (key, repo, file, line, line_no, verdict, pass_id,\
-        \  commit_sha, commit_subject, ref, updated_at)\
-        \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))\
+        \  commit_sha, commit_subject, ref, updated_at, flagged_at)\
+        \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), strftime('%Y-%m-%d %H:%M:%f', 'now'))\
         \ ON CONFLICT(key) DO UPDATE SET\
         \   repo = excluded.repo, file = excluded.file,\
         \   line = excluded.line, line_no = excluded.line_no,\
@@ -658,7 +661,11 @@ recordVerdicts conn repo passId v origin rows =
         \   commit_sha = excluded.commit_sha,\
         \   commit_subject = excluded.commit_subject,\
         \   ref = excluded.ref,\
-        \   updated_at = excluded.updated_at"
+        \   updated_at = excluded.updated_at,\
+        \   flagged_at = CASE\
+        \     WHEN excluded.verdict = 'reviewed' THEN NULL\
+        \     WHEN line_verdict.flagged_at IS NULL OR line_verdict.verdict = 'reviewed' THEN excluded.flagged_at\
+        \     ELSE line_verdict.flagged_at END"
         (map toParams rows)
       -- accepting closes the conversation; other verdicts keep it open
       Monad.when (v == Reviewed) $
@@ -921,6 +928,7 @@ data PunchRow = PunchRow
   , punchCommitSubject :: Maybe T.Text
   , punchRef :: Maybe T.Text
   , punchAt :: T.Text
+  , punchFlaggedAt :: T.Text
   }
 
 -- Every flagged or questioned line for the repo, grouped by file.
@@ -930,13 +938,13 @@ punchRows conn repo = do
     SQLite.query
       conn
       "SELECT key, file, verdict, line, line_no,\
-      \ commit_sha, commit_subject, ref, updated_at FROM line_verdict\
+      \ commit_sha, commit_subject, ref, updated_at, COALESCE(flagged_at, updated_at) FROM line_verdict\
       \ WHERE repo = ? AND verdict <> 'reviewed'\
       \ ORDER BY file, line_no, updated_at DESC"
       (SQLite.Only repo)
   threads <- loadThreads conn repo
   let
-    toPunch (key, file, verdictName, line, lineNo, sha, subject, ref, at) =
+    toPunch (key, file, verdictName, line, lineNo, sha, subject, ref, at, flaggedAt) =
       fmap
         ( \verdict ->
             PunchRow
@@ -950,6 +958,7 @@ punchRows conn repo = do
               , punchCommitSubject = subject
               , punchRef = ref
               , punchAt = at
+              , punchFlaggedAt = flaggedAt
               }
         )
         (parseVerdict verdictName)

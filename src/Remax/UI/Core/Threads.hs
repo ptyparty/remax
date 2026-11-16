@@ -9,6 +9,7 @@ module Remax.UI.Core.Threads
   , reactionSegs
   , detailsFold
   , bandable
+  , editableNote
   , bandIndexes
   , postKeys
   , postLabel
@@ -458,7 +459,13 @@ bandable conv =
 editableNote :: Conv.Post -> Bool
 editableNote p =
   case Conv.postState p of
-    Conv.Local _ -> Conv.postAuthor p == Conv.Viewer && Maybe.isJust (Conv.postWork p)
+    Conv.Local _ -> Conv.postAuthor p == Conv.Viewer && storedWork (Conv.postWork p)
+    _ -> False
+
+storedWork :: Maybe Conv.WorkId -> Bool
+storedWork wid =
+  case wid of
+    Just (Conv.StoredWork _) -> True
     _ -> False
 
 bandIndexes :: Types.St -> Conv.Conversation -> [Int]

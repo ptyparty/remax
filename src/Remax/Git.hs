@@ -997,7 +997,10 @@ forkFrom root tip branch = do
     Process.readProcessWithExitCode "git" ["-C", root, "merge-base", T.unpack tip, T.unpack branch] ""
   pure $ case code of
     Exit.ExitSuccess -> Right (ForkPoint (T.strip (T.pack out)) branch)
-    Exit.ExitFailure _ -> Left (T.strip (T.pack err))
+    Exit.ExitFailure _
+      | T.null (T.strip (T.pack err)) ->
+          Left (tip <> " and " <> branch <> " share no history, so " <> tip <> " has no fork point from it; pass a sha as --base to compare against that commit as it is")
+      | otherwise -> Left (T.strip (T.pack err))
 
 data RefBase = RefBase
   { refBaseCommit :: T.Text

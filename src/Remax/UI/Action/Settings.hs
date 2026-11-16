@@ -221,6 +221,11 @@ setBaseRef base = do
   case Types.stMode st of
     _ | not ok -> Types.setMsg ("no such ref: " <> base)
     Git.AtPull pr Git.Checkout -> Types.setMsg (Git.pullLabel pr <> " edit mode diffs against the live merge-base \8212 :pr review, then :base picks a range")
+    mode@(Git.AtRef rr) -> do
+      got <- MonadIO.liftIO (Git.refBaseFor (Types.stRoot st) (Git.rrTip rr) (Just base))
+      case got of
+        Left e -> Types.setMsg e
+        Right resolved -> setMode (Git.withBase (Git.refBaseCommit resolved) mode)
     mode -> setMode (Git.withBase base mode)
 
 subjectTip :: Types.St -> T.Text

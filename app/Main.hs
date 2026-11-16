@@ -1323,7 +1323,7 @@ readyPollUs :: Int
 readyPollUs = 100000
 
 readyBeats :: Int
-readyBeats = 50
+readyBeats = (2 * Komux.answerTimeoutUs) `div` readyPollUs + 20
 
 watchStopping :: IO ()
 watchStopping = do
@@ -1373,6 +1373,7 @@ data WatchEnd
   | EndConversationChanged
   | EndKomuxUnreachable
   | EndKomuxRefused T.Text
+  | EndFailed T.Text
 
 renderWatchEnd :: WatchEnd -> T.Text
 renderWatchEnd e =
@@ -1382,6 +1383,7 @@ renderWatchEnd e =
     EndConversationChanged -> "the conversation that started it was cleared or ended"
     EndKomuxUnreachable -> "komux stopped answering"
     EndKomuxRefused why -> "komux would not deliver to the agent (" <> why <> ")"
+    EndFailed why -> "it failed: " <> why
 
 data Deliverer = Deliverer
   { delivererTarget :: WakeTarget
@@ -1403,8 +1405,24 @@ watchDelivering target options = do
   case early of
     Just reason -> noteWatchEnding scope reason
     Nothing -> do
-      TIO.writeFile lock me
-      deliver deliverer `Exception.finally` releaseDeliverer deliverer
+      writeLock lock me
+      deliverRecording deliverer `Exception.finally` releaseDeliverer deliverer
+
+deliverRecording :: Deliverer -> IO ()
+deliverRecording deliverer = do
+  ran <- Exception.try (deliver deliverer)
+  case ran of
+    Right () -> pure ()
+    Left e
+      | Just _ <- (Exception.fromException e :: Maybe Exception.SomeAsyncException) -> Exception.throwIO e
+      | otherwise -> IORef.writeIORef (delivererEnd deliverer) (Just (EndFailed (T.pack (Exception.displayException e))))
+
+writeLock :: FilePath -> T.Text -> IO ()
+writeLock lock owner = do
+  let
+    staged = lock <> "." <> T.unpack owner
+  TIO.writeFile staged owner
+  Directory.renameFile staged lock
 
 releaseDeliverer :: Deliverer -> IO ()
 releaseDeliverer deliverer = do
@@ -1447,7 +1465,7 @@ processEnd deliverer = do
           if live
             then pure (Just EndReplaced)
             else do
-              TIO.writeFile (delivererLock deliverer) (delivererPid deliverer)
+              writeLock (delivererLock deliverer) (delivererPid deliverer)
               pure Nothing
     _ -> pure Nothing
 
@@ -1502,21 +1520,24 @@ deliver deliverer = do
       Monad.forM_ reason (IORef.writeIORef (delivererEnd deliverer) . Just)
       pure (fmap (const WokeOrphaned) reason)
     wait = (blockedWait conn roots party) {waitPresence = whoseMove, waitStop = stop}
-    follow attempt before = do
+    follow retries before = do
       (woke, listing) <- waitForNews wait before
       case woke of
-        WokeNews -> offer attempt before listing
+        WokeNews -> offer retries before listing
         _ -> pure ()
-    retry attempt before listing = do
-      paused <- pauseWatch wait listing (retryBeats attempt)
-      Monad.when (Maybe.isNothing paused) (follow (attempt + 1) before)
-    offer attempt before listing = do
+    retry retries before listing = do
+      paused <- pauseWatch wait listing (retryBeats (retriesBusy retries + retriesMissed retries))
+      Monad.when (Maybe.isNothing paused) (follow retries before)
+    missed retries before listing
+      | retriesMissed retries >= unreachableAttempts = IORef.writeIORef (delivererEnd deliverer) (Just EndKomuxUnreachable)
+      | otherwise = retry retries {retriesMissed = retriesMissed retries + 1} before listing
+    offer retries before listing = do
       let
         now = listDigest party listing
         page = listPage roots party (Just before) listing
         accept = do
           writeDigest (watchScopeStatePath scope) (watchScopeDigest scope) now
-          follow 0 now
+          follow noRetries now
       ending <- firstEnd (delivererStop deliverer) (sessionEnd deliverer)
       case ending of
         Just reason -> IORef.writeIORef (delivererEnd deliverer) (Just reason)
@@ -1526,13 +1547,19 @@ deliver deliverer = do
               prompted <- Komux.promptAgent (wakeTargetSocket target) (wakeTargetPane target) (wakeMessage (watchBlock (watchScopeShownAt scope) page))
               case prompted of
                 Komux.Prompted -> accept
-                Komux.PromptUnanswered -> accept
-                Komux.PromptBusy -> retry attempt before listing
-                Komux.PromptUnreachable
-                  | attempt >= unreachableAttempts -> IORef.writeIORef (delivererEnd deliverer) (Just EndKomuxUnreachable)
-                  | otherwise -> retry attempt before listing
+                Komux.PromptBusy -> retry Retries {retriesBusy = retriesBusy retries + 1, retriesMissed = 0} before listing
+                Komux.PromptUnanswered -> missed retries before listing
+                Komux.PromptUnreachable -> missed retries before listing
                 Komux.PromptRefused why -> IORef.writeIORef (delivererEnd deliverer) (Just (EndKomuxRefused why))
-  follow (0 :: Int) (Maybe.fromMaybe (listDigest party first) seen)
+  follow noRetries (Maybe.fromMaybe (listDigest party first) seen)
+
+data Retries = Retries
+  { retriesBusy :: Int
+  , retriesMissed :: Int
+  }
+
+noRetries :: Retries
+noRetries = Retries {retriesBusy = 0, retriesMissed = 0}
 
 retryBeats :: Int -> Int
 retryBeats attempt = min maxRetryBeats (firstRetryBeats * 2 ^ min attempt 8)

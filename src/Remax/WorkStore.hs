@@ -386,12 +386,13 @@ retireNotesOn conn repo keys =
               conn
               ( SQLite.Query
                   ( "INSERT OR REPLACE INTO retired_note (repo, local_id, reason)\
-                    \ SELECT DISTINCT repo, local_id, 'accepted' FROM work_target_line WHERE repo = ? AND key IN (?"
+                    \ SELECT repo, local_id, 'accepted' FROM work_target WHERE repo = ? AND kind = 'note' AND local_id IN\
+                    \ (SELECT local_id FROM work_target_line WHERE repo = ? AND key IN (?"
                       <> holes
-                      <> ")"
+                      <> "))"
                   )
               )
-              params
+              (SQLite.toRow (SQLite.Only repo) <> params)
             SQLite.execute
               conn
               ( SQLite.Query

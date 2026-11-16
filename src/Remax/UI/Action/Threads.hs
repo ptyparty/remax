@@ -361,8 +361,7 @@ editKey = do
       , Just wid <- Conv.postWork post ->
           openWorkPopup conv (Types.EditPending wid (originOf conv post)) (Conv.markdownText (Conv.postBody post))
     Just (conv, _, post)
-      | Conv.Local _ <- Conv.postState post
-      , Conv.postAuthor post == Conv.Viewer
+      | Threads.editableNote post
       , Just wid <- Conv.postWork post ->
           openWorkPopup conv (Types.EditNote wid) (Conv.markdownText (Conv.postBody post))
     _ -> editPostedKey
@@ -388,7 +387,7 @@ discardKey = do
               Conv.Draft -> dropping "discarded"
               Conv.Proposal _ _ -> dropping "proposal dropped"
               Conv.Local _
-                | Conv.postAuthor post == Conv.Viewer ->
+                | Threads.editableNote post ->
                     confirmDrop (Just "delete your note? y / n") (dropWork [wid] "note deleted")
               _ -> pure Unhandled
     _ -> pure Unhandled
@@ -429,7 +428,7 @@ takeKey = do
       , Just wid <- Conv.postWork post ->
           openWorkPopup conv (Types.TakeProposal wid (Conv.convTarget conv) (repliedAuthor conv Nothing)) (Conv.markdownText (Conv.postBody post))
     Just (_, _, post)
-      | Conv.Local _ <- Conv.postState post -> do
+      | Threads.editableNote post -> do
           Types.setMsg "your note \183 e edits it, r replies, dd deletes it"
           pure Handled
     _ -> pure Unhandled

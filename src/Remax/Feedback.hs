@@ -231,11 +231,11 @@ list under the name a note on them would take.
 bareListed :: FilePath -> ((T.Text, [(Int, T.Text)]) -> Maybe LinesInFile) -> [Store.PunchRow] -> Listed
 bareListed root standing rows =
   let
-    keys = map (Store.lineKeyToText . Store.punchKey) rows
+    byFirstFlag = List.sort (map (\r -> (Store.punchFlaggedAt r, Store.lineKeyToText (Store.punchKey r))) rows)
     placed = Maybe.mapMaybe (\r -> (\n -> traverse unmarked (n, Store.punchLine r)) =<< Store.punchLineNo r) rows
   in
     Listed
-      { listedId = Key.noteGroupId (T.pack root) (take 1 (List.sort keys))
+      { listedId = Key.noteGroupId (T.pack root) (take 1 (map snd byFirstFlag))
       , listedRepo = root
       , listedKind = "note"
       , listedFile = fmap Store.punchFile (Maybe.listToMaybe rows)
