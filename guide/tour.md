@@ -145,8 +145,8 @@ one of its hunks out of order still knows where they are; the note
 itself shows only on the first hunk. Give every stop a title when the
 tour has more than a handful.
 
-`tour begin` empties any earlier tour for that view, names the new
-one, and says how many hunks the view has. Each `tour step` appends
+`tour begin` empties any earlier tour for that view and names the new
+one. Each `tour step` appends
 one stop and says how many of the view's hunks the tour now covers and
 how many it leaves out:
 

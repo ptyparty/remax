@@ -482,7 +482,7 @@ data TourOverview = TourOverview
 
 data TourPlay = TourPlay
   { tpId :: Int
-  , tpAhead :: [(Int, Int)]
+  , tpAhead :: [T.Text]
   , tpPlayed :: Int
   , tpTotal :: Int
   , tpPace :: PlayPace

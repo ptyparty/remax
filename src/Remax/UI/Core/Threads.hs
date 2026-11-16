@@ -501,7 +501,7 @@ postKeys keys rule venue post =
         Conv.Draft -> [key "e edit" "C-c e edit", key "dd discard" "C-c d discard"]
         Conv.Proposal _ _ -> [key ("\9166 take as your " <> takenWord) ("C-c C-c take as your " <> takenWord), key "dd drop" "C-c d drop"]
         Conv.Local _
-          | editableNote post -> [key "e edit" "C-c e edit"]
+          | editableNote post -> [key "e edit" "C-c e edit", key "r reply" "C-c r reply", key "dd delete" "C-c d delete"]
           | otherwise -> []
 
 possessive :: Conv.Author -> T.Text

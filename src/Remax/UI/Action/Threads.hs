@@ -249,6 +249,10 @@ replyToPost conv post =
       case Conv.convVenue conv of
         Conv.ReviewThread {} -> openWorkPopup conv (Types.ReplyTo (Conv.convTarget conv) (repliedAuthor conv (Just post))) ""
         _ -> quoteReply conv cid post
+    Conv.Local _ ->
+      case Conv.convVenue conv of
+        Conv.LocalOnly _ -> openWorkPopup conv (Types.AnswerNote (Conv.convTarget conv)) ""
+        _ -> openWorkPopup conv (Types.ReplyTo (Conv.convTarget conv) (repliedAuthor conv Nothing)) ""
     _ -> pure Handled
 
 offerThreads :: [Conv.Conversation] -> Brick.EventM Types.Name Types.St ()
@@ -383,6 +387,9 @@ discardKey = do
             case Conv.postState post of
               Conv.Draft -> dropping "discarded"
               Conv.Proposal _ _ -> dropping "proposal dropped"
+              Conv.Local _
+                | Conv.postAuthor post == Conv.Viewer ->
+                    confirmDrop (Just "delete your note? y / n") (dropWork [wid] "note deleted")
               _ -> pure Unhandled
     _ -> pure Unhandled
 
@@ -421,6 +428,10 @@ takeKey = do
       | Conv.Proposal _ _ <- Conv.postState post
       , Just wid <- Conv.postWork post ->
           openWorkPopup conv (Types.TakeProposal wid (Conv.convTarget conv) (repliedAuthor conv Nothing)) (Conv.markdownText (Conv.postBody post))
+    Just (_, _, post)
+      | Conv.Local _ <- Conv.postState post -> do
+          Types.setMsg "your note \183 e edits it, r replies, dd deletes it"
+          pure Handled
     _ -> pure Unhandled
 
 toggleFold :: Brick.EventM Types.Name Types.St ()

@@ -46,6 +46,7 @@ import Remax.UI qualified as UI
 import Remax.WorkStore qualified as WorkStore
 import System.Posix.Process qualified as Posix
 import System.Process qualified as Process
+import Text.Read qualified as Read
 
 data ModeArg
   = ArgHead
@@ -630,16 +631,13 @@ tourBegin args = do
       )
   roots <- targetRepos
   conn <- Store.openStore
-  cfg <- Config.loadConfig
   Monad.forM_ roots $ \root -> do
     view <- clearTourFor conn root flags
     let
       mode = avMode view
     Store.nameTour conn (T.pack root) (Git.subjectText mode) (Git.modeToText mode) (fmap T.pack (Map.lookup "--name" flags))
-    found <- Hunks.changeSetHunks cfg mode root
     putStrLn ("tour begun for " ++ T.unpack (Git.modeLabel mode) ++ repoSuffix roots root)
     mapM_ TIO.putStrLn (baseReport view)
-    putStrLn ("the view has " ++ countText (length found) "hunk" ++ "; each tour step reports how many the tour still leaves out")
 
 tourClear :: [String] -> IO ()
 tourClear args = do
@@ -1123,8 +1121,8 @@ watchArgs =
               go options {watchMode = WatchStopping} rest
         ("--deliver" : socket : pane : agent : started : session : rest)
           | printing options
-          , Just paneId <- readWhole pane
-          , Just agentPid <- readWhole agent ->
+          , Just paneId <- Read.readMaybe pane
+          , Just agentPid <- Read.readMaybe agent ->
               go options {watchMode = WatchDelivering (wakeTargetArgs socket paneId agentPid started session)} rest
         _ -> Nothing
   in
@@ -1141,12 +1139,6 @@ wakeTargetArgs socket paneId agentPid started session =
 
 noSession :: String
 noSession = "-"
-
-readWhole :: String -> Maybe Int
-readWhole s =
-  case reads s of
-    [(n, "")] -> Just n
-    _ -> Nothing
 
 watch :: WatchOptions -> IO ()
 watch options =
@@ -1248,7 +1240,7 @@ watchWaking options = do
   pane <- Env.lookupEnv "KOMUX_PANE_ID"
   session <- Env.lookupEnv "CLAUDE_CODE_SESSION_ID"
   agent <- Komux.findAgent
-  case (socket, pane >>= readWhole, agent) of
+  case (socket, pane >>= Read.readMaybe, agent) of
     (Just socketPath, Just paneId, Right found) -> do
       target <- watchScopeFor (watchStateFile options)
       conn <- Store.openStore
@@ -1347,7 +1339,11 @@ watchStopping = do
 delivererRunning :: FilePath -> IO Bool
 delivererRunning lock = do
   owner <- readLock lock
-  case owner >>= readWhole . T.unpack of
+  maybe (pure False) delivererPidLive owner
+
+delivererPidLive :: T.Text -> IO Bool
+delivererPidLive owner =
+  case Read.readMaybe (T.unpack owner) :: Maybe Int of
     Nothing -> pure False
     Just pid -> do
       got <- Exception.try (TIO.readFile ("/proc/" <> show pid <> "/cmdline")) :: IO (Either Exception.IOException T.Text)
@@ -1403,7 +1399,7 @@ watchDelivering target options = do
   lock <- wakeLockPath (watchScopeDigest scope)
   me <- fmap (T.pack . show) Posix.getProcessID
   deliverer <- Deliverer target scope lock me <$> IORef.newIORef False <*> IORef.newIORef 0 <*> IORef.newIORef Nothing
-  early <- firstEnd (processEnd deliverer) (sessionEnd deliverer)
+  early <- firstEnd (agentEnd deliverer) (sessionEnd deliverer)
   case early of
     Just reason -> noteWatchEnding scope reason
     Nothing -> do
@@ -1434,16 +1430,26 @@ noteWatchEnding scope reason =
       path <- wakeEndingPath (watchScopeDigest scope)
       TIO.writeFile path (renderWatchEnd reason)
 
+agentEnd :: Deliverer -> IO (Maybe WatchEnd)
+agentEnd deliverer = do
+  alive <- Komux.agentAlive (wakeTargetAgent (delivererTarget deliverer))
+  pure (if alive then Nothing else Just EndAgentExited)
+
 processEnd :: Deliverer -> IO (Maybe WatchEnd)
 processEnd deliverer = do
+  ended <- agentEnd deliverer
   owner <- readLock (delivererLock deliverer)
-  alive <- Komux.agentAlive (wakeTargetAgent (delivererTarget deliverer))
-  pure $
-    if not alive
-      then Just EndAgentExited
-      else case owner of
-        Just pid | pid /= delivererPid deliverer -> Just EndReplaced
-        _ -> Nothing
+  case (ended, owner) of
+    (Just _, _) -> pure ended
+    (Nothing, Just pid)
+      | pid /= delivererPid deliverer -> do
+          live <- delivererPidLive pid
+          if live
+            then pure (Just EndReplaced)
+            else do
+              TIO.writeFile (delivererLock deliverer) (delivererPid deliverer)
+              pure Nothing
+    _ -> pure Nothing
 
 sessionEnd :: Deliverer -> IO (Maybe WatchEnd)
 sessionEnd deliverer =
@@ -1515,7 +1521,7 @@ deliver deliverer = do
       case ending of
         Just reason -> IORef.writeIORef (delivererEnd deliverer) (Just reason)
         Nothing
-          | awaitsNothing page -> follow 0 now
+          | awaitsNothing page -> accept
           | otherwise -> do
               prompted <- Komux.promptAgent (wakeTargetSocket target) (wakeTargetPane target) (wakeMessage (watchBlock (watchScopeShownAt scope) page))
               case prompted of

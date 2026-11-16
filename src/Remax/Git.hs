@@ -46,6 +46,9 @@ module Remax.Git
   , changedFiles
   , reviewFiles
   , baseLines
+  , baseLinesWith
+  , Renames
+  , renamesFor
   , RefContent (..)
   , refContent
   , looksBinary
@@ -540,7 +543,15 @@ reviewFiles mode withNew root = do
 -- The base copy of one file. A file with no base copy (new file, or the
 -- ref side is missing) reviews against nothing.
 baseLines :: ReviewMode -> FilePath -> FilePath -> IO [T.Text]
-baseLines mode root path =
+baseLines = baseLinesWith RenamesUnasked
+
+data Renames = RenamesOf (Map.Map FilePath FilePath) | RenamesUnasked
+
+renamesFor :: ReviewMode -> FilePath -> IO Renames
+renamesFor mode root = fmap RenamesOf (renameMap (diffView mode) root)
+
+baseLinesWith :: Renames -> ReviewMode -> FilePath -> FilePath -> IO [T.Text]
+baseLinesWith renames mode root path =
   case diffView mode of
     Untracked -> pure []
     viewed -> do
@@ -548,7 +559,9 @@ baseLines mode root path =
       case atPath of
         Just ls -> pure ls
         Nothing -> do
-          from <- renameSource viewed root path
+          from <- case renames of
+            RenamesOf known -> pure (Map.lookup path known)
+            RenamesUnasked -> renameSource viewed root path
           case from of
             Nothing -> pure []
             Just old -> fmap (Maybe.fromMaybe []) (baseCopy viewed root old)
@@ -569,25 +582,33 @@ baseCopy viewed root path = do
 renameSource :: ReviewMode -> FilePath -> FilePath -> IO (Maybe FilePath)
 renameSource viewed root path =
   case viewed of
-    AtRef rr -> renamedFrom root [T.unpack (rrBase rr), T.unpack (rrTip rr)] path
-    VsRef ref -> do
+    VsRef _ -> do
       tracked <- isTracked root path
-      if tracked then renamedFrom root [T.unpack ref] path else pure Nothing
-    _ -> pure Nothing
+      if tracked then fmap (Map.lookup path) (renameMap viewed root) else pure Nothing
+    _ -> fmap (Map.lookup path) (renameMap viewed root)
 
-renamedFrom :: FilePath -> [String] -> FilePath -> IO (Maybe FilePath)
-renamedFrom root refArgs path = do
-  (code, out, _) <-
-    Process.readProcessWithExitCode
-      "git"
-      (["-C", root, "diff", "-M", "--name-status", "-z", "--diff-filter=R"] ++ refArgs)
-      ""
-  pure $ case code of
-    Exit.ExitSuccess ->
-      case Map.lookup path (parseNameStatus (nulFields (T.pack out))) of
-        Just (PathRenamed old) -> Just old
-        _ -> Nothing
-    Exit.ExitFailure _ -> Nothing
+renameMap :: ReviewMode -> FilePath -> IO (Map.Map FilePath FilePath)
+renameMap viewed root =
+  let
+    refArgs = case viewed of
+      AtRef rr -> Just [T.unpack (rrBase rr), T.unpack (rrTip rr)]
+      VsRef ref -> Just [T.unpack ref]
+      _ -> Nothing
+    renamedOld change = case change of
+      PathRenamed old -> Just old
+      _ -> Nothing
+  in
+    case refArgs of
+      Nothing -> pure Map.empty
+      Just args -> do
+        (code, out, _) <-
+          Process.readProcessWithExitCode
+            "git"
+            (["-C", root, "diff", "-M", "--name-status", "-z", "--diff-filter=R"] ++ args)
+            ""
+        pure $ case code of
+          Exit.ExitSuccess -> Map.mapMaybe renamedOld (parseNameStatus (nulFields (T.pack out)))
+          Exit.ExitFailure _ -> Map.empty
 
 data RefContent = RefBinary | RefText [T.Text]
   deriving (Eq, Show)
@@ -958,19 +979,25 @@ branchRoot :: FilePath -> IO (Either T.Text T.Text)
 branchRoot root = branchRootOf root "HEAD"
 
 branchRootOf :: FilePath -> T.Text -> IO (Either T.Text T.Text)
-branchRootOf root tip = do
+branchRootOf root tip = fmap (fmap forkPointSha) (forkFromMainline root tip)
+
+data ForkPoint = ForkPoint
+  { forkPointSha :: T.Text
+  , forkPointBranch :: T.Text
+  }
+
+forkFromMainline :: FilePath -> T.Text -> IO (Either T.Text ForkPoint)
+forkFromMainline root tip = do
   mMain <- mainlineRef root
-  case mMain of
-    Nothing -> pure (Left "no mainline ref found (origin/main, origin/master, main, master)")
-    Just mainline -> do
-      (code, out, err) <-
-        Process.readProcessWithExitCode
-          "git"
-          ["-C", root, "merge-base", T.unpack tip, T.unpack mainline]
-          ""
-      pure $ case code of
-        Exit.ExitSuccess -> Right (T.strip (T.pack out))
-        Exit.ExitFailure _ -> Left (T.strip (T.pack err))
+  maybe (pure (Left "no mainline ref found (origin/main, origin/master, main, master)")) (forkFrom root tip) mMain
+
+forkFrom :: FilePath -> T.Text -> T.Text -> IO (Either T.Text ForkPoint)
+forkFrom root tip branch = do
+  (code, out, err) <-
+    Process.readProcessWithExitCode "git" ["-C", root, "merge-base", T.unpack tip, T.unpack branch] ""
+  pure $ case code of
+    Exit.ExitSuccess -> Right (ForkPoint (T.strip (T.pack out)) branch)
+    Exit.ExitFailure _ -> Left (T.strip (T.pack err))
 
 data RefBase = RefBase
   { refBaseCommit :: T.Text
@@ -980,20 +1007,13 @@ data RefBase = RefBase
 refBaseFor :: FilePath -> T.Text -> Maybe T.Text -> IO (Either T.Text RefBase)
 refBaseFor root tip given =
   let
-    forkFrom branch = do
-      (code, out, err) <-
-        Process.readProcessWithExitCode "git" ["-C", root, "merge-base", T.unpack tip, T.unpack branch] ""
-      pure $ case code of
-        Exit.ExitSuccess -> Right (RefBase (T.take 10 (T.strip (T.pack out))) (Just branch))
-        Exit.ExitFailure _ -> Left (T.strip (T.pack err))
+    asBase = fmap (\fp -> RefBase (T.take 10 (forkPointSha fp)) (Just (forkPointBranch fp)))
   in
     case given of
-      Nothing -> do
-        mMain <- mainlineRef root
-        maybe (pure (Left "no mainline ref found (origin/main, origin/master, main, master)")) forkFrom mMain
+      Nothing -> fmap asBase (forkFromMainline root tip)
       Just base -> do
         branch <- namesBranch root base
-        if branch then forkFrom base else pure (Right (RefBase base Nothing))
+        if branch then fmap asBase (forkFrom root tip base) else pure (Right (RefBase base Nothing))
 
 namesBranch :: FilePath -> T.Text -> IO Bool
 namesBranch root ref = do

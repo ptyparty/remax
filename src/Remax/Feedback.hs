@@ -232,11 +232,10 @@ bareListed :: FilePath -> ((T.Text, [(Int, T.Text)]) -> Maybe LinesInFile) -> [S
 bareListed root standing rows =
   let
     keys = map (Store.lineKeyToText . Store.punchKey) rows
-    firstMarked = take 1 (map snd (List.sort (map (\r -> (Store.punchAt r, Store.lineKeyToText (Store.punchKey r))) rows)))
     placed = Maybe.mapMaybe (\r -> (\n -> traverse unmarked (n, Store.punchLine r)) =<< Store.punchLineNo r) rows
   in
     Listed
-      { listedId = Key.noteGroupId (T.pack root) (if null firstMarked then keys else firstMarked)
+      { listedId = Key.noteGroupId (T.pack root) (take 1 (List.sort keys))
       , listedRepo = root
       , listedKind = "note"
       , listedFile = fmap Store.punchFile (Maybe.listToMaybe rows)

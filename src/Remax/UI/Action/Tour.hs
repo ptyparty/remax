@@ -16,6 +16,8 @@ import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
 import Data.List qualified as List
 import Data.List.NonEmpty qualified as NEL
+import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
 import Data.Text qualified as T
 import GHC.Clock qualified as GHCClock
 import Graphics.Vty qualified as V
@@ -131,7 +133,7 @@ playTour pace = do
         playing =
           Types.TourPlay
             { Types.tpId = fromIntegral stamp
-            , Types.tpAhead = rest
+            , Types.tpAhead = Maybe.mapMaybe (hunkKeyAt st) rest
             , Types.tpPlayed = 0
             , Types.tpTotal = length ahead
             , Types.tpPace = pace
@@ -170,12 +172,29 @@ playNext wanted = do
   case Types.stTourPlay st of
     Just playing
       | Types.tpId playing == wanted ->
-          case dropWhile (not . Verdict.pairUnvisited st) (Types.tpAhead playing) of
-            [] -> do
+          case nextUnvisited st (Types.tpAhead playing) of
+            Nothing -> do
               State.modify (\s -> s {Types.stTourPlay = Nothing})
               Types.setMsg "\9632 played the tour to its end"
-            (pair : rest) -> landAndWait playing {Types.tpAhead = rest} pair
+            Just (pair, rest) -> landAndWait playing {Types.tpAhead = rest} pair
     _ -> pure ()
+
+hunkKeyAt :: Types.St -> (Int, Int) -> Maybe T.Text
+hunkKeyAt st pair = Verdict.runAt st pair >>= Maybe.listToMaybe . DiffModel.runKeys
+
+nextUnvisited :: Types.St -> [T.Text] -> Maybe ((Int, Int), [T.Text])
+nextUnvisited st keys =
+  let
+    places = Map.fromList (concatMap (\(pair, r) -> map (\k -> (k, pair)) (DiffModel.runKeys r)) (Verdict.allRunsInOrder st))
+    go remaining =
+      case remaining of
+        [] -> Nothing
+        (k : rest) ->
+          case Map.lookup k places of
+            Just pair | Verdict.pairUnvisited st pair -> Just (pair, rest)
+            _ -> go rest
+  in
+    go keys
 
 stopPlay :: Brick.EventM Types.Name Types.St ()
 stopPlay = do

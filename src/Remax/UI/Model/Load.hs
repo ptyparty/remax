@@ -59,32 +59,34 @@ loadAll cfg hls mode root = do
     fmap
       (filter (not . Config.ignoredPath ignores))
       (Git.reviewFiles mode (Config.cfgUntracked cfg) root)
-  Maybe.catMaybes <$> Jobs.forMaybeBounded (loadOne cfg hls mode root) names
+  renames <- Git.renamesFor mode root
+  Maybe.catMaybes <$> Jobs.forMaybeBounded (loadOne cfg hls renames mode root) names
 
 loadOne ::
   Config.Config ->
   TS.HighlighterTable ->
+  Git.Renames ->
   Git.ReviewMode ->
   FilePath ->
   FilePath ->
   IO (Maybe Types.FileView)
-loadOne cfg hls mode root path =
+loadOne cfg hls renames mode root path =
   case Git.sourceOf mode of
     Git.FromWorkingTree -> do
       present <- Directory.doesFileExist (root </> path)
       if present
-        then loadPresent cfg hls mode root path
+        then loadPresent cfg hls renames mode root path
         else loadRemoved cfg hls mode root path
-    Git.FromRef tip -> loadAtRef cfg hls mode root tip path
+    Git.FromRef tip -> loadAtRef cfg hls renames mode root tip path
 
-loadAtRef :: Config.Config -> TS.HighlighterTable -> Git.ReviewMode -> FilePath -> T.Text -> FilePath -> IO (Maybe Types.FileView)
-loadAtRef cfg hls mode root tip path = do
+loadAtRef :: Config.Config -> TS.HighlighterTable -> Git.Renames -> Git.ReviewMode -> FilePath -> T.Text -> FilePath -> IO (Maybe Types.FileView)
+loadAtRef cfg hls renames mode root tip path = do
   got <- Git.refContent root tip path
   case got of
     Nothing -> loadRemoved cfg hls mode root path
     Just Git.RefBinary -> pure Nothing
     Just (Git.RefText newLs) -> do
-      base <- Git.baseLines mode root path
+      base <- Git.baseLinesWith renames mode root path
       fmap Just (buildView cfg hls root path False base newLs)
 
 -- No working copy, but git still has the base: the change set
@@ -98,14 +100,14 @@ loadRemoved cfg hls mode root path = do
     [] -> pure Nothing
     _ -> fmap Just (buildView cfg hls root path True base [])
 
-loadPresent :: Config.Config -> TS.HighlighterTable -> Git.ReviewMode -> FilePath -> FilePath -> IO (Maybe Types.FileView)
-loadPresent cfg hls mode root path = do
+loadPresent :: Config.Config -> TS.HighlighterTable -> Git.Renames -> Git.ReviewMode -> FilePath -> FilePath -> IO (Maybe Types.FileView)
+loadPresent cfg hls renames mode root path = do
   readable <- Exception.try (Git.looksBinary root path) :: IO (Either Exception.IOException Bool)
   case readable of
     Left _ -> pure Nothing
     Right True -> pure Nothing
     Right False -> do
-      base <- Git.baseLines mode root path
+      base <- Git.baseLinesWith renames mode root path
       gotNew <- Exception.try (TIO.readFile (root </> path)) :: IO (Either Exception.IOException T.Text)
       case gotNew of
         Left _ -> pure Nothing
@@ -591,6 +593,7 @@ refreshWork st = do
   let
     mode = Types.rebaseEffMode rebaseNow modeNow
   (branchNow, headNow) <- Git.subjectPlace mode root
+  renames <- Git.renamesFor mode root
   baseAt <- case Git.subjectOf modeNow of
     Git.Pull pr _ -> fmap (fmap fst) (Git.commitAt root (Git.prBase pr))
     _ -> pure Nothing
@@ -605,7 +608,7 @@ refreshWork st = do
       got <-
         if tipSettled && Map.member name existing
           then pure (Right (Unchanged name))
-          else Exception.try (refreshOne st mode existing name)
+          else Exception.try (refreshOne st renames mode existing name)
       pure $ case got of
         Left e -> let _ = (e :: Exception.IOException) in Dropped
         Right r -> r
@@ -634,23 +637,23 @@ editModeNow root mode =
           pure (Git.AtPull pr {Git.prBase = Maybe.fromMaybe (Git.prBase pr) base} Git.Checkout, Nothing)
     _ -> pure (mode, Nothing)
 
-refreshOne :: Types.St -> Git.ReviewMode -> Map.Map FilePath Types.FileView -> FilePath -> IO Refreshed
-refreshOne st mode existing name =
+refreshOne :: Types.St -> Git.Renames -> Git.ReviewMode -> Map.Map FilePath Types.FileView -> FilePath -> IO Refreshed
+refreshOne st renames mode existing name =
   case Map.lookup name existing of
-    Nothing -> reloadOne st mode name
+    Nothing -> reloadOne st renames mode name
     Just fv ->
       case Git.sourceOf mode of
-        Git.FromWorkingTree -> refreshWorking st mode name fv
-        Git.FromRef tip -> refreshAtRef st mode tip name fv
+        Git.FromWorkingTree -> refreshWorking st renames mode name fv
+        Git.FromRef tip -> refreshAtRef st renames mode tip name fv
 
-reloadOne :: Types.St -> Git.ReviewMode -> FilePath -> IO Refreshed
-reloadOne st mode name =
+reloadOne :: Types.St -> Git.Renames -> Git.ReviewMode -> FilePath -> IO Refreshed
+reloadOne st renames mode name =
   fmap
     (maybe Dropped (\fv -> Replaced (Verdict.recountIn st fv) id))
-    (loadOne (Types.stConfig st) (Types.stHls st) mode (Types.stRoot st) name)
+    (loadOne (Types.stConfig st) (Types.stHls st) renames mode (Types.stRoot st) name)
 
-refreshWorking :: Types.St -> Git.ReviewMode -> FilePath -> Types.FileView -> IO Refreshed
-refreshWorking st mode name fv = do
+refreshWorking :: Types.St -> Git.Renames -> Git.ReviewMode -> FilePath -> Types.FileView -> IO Refreshed
+refreshWorking st renames mode name fv = do
   let
     root = Types.stRoot st
   -- a file that has come or gone since it was loaded is a
@@ -658,19 +661,19 @@ refreshWorking st mode name fv = do
   -- read afresh rather than patched
   present <- Directory.doesFileExist (root </> name)
   if present == Types.fvDeleted fv
-    then reloadOne st mode name
+    then reloadOne st renames mode name
     else do
-      base <- Git.baseLines mode root name
+      base <- Git.baseLinesWith renames mode root name
       if base == Types.fvBase fv
         then pure (Unchanged name)
         else do
           (rebuilt, _) <- rebuildFV (Types.stConfig st) (Types.repoText st) fv {Types.fvBase = base}
           pure (Replaced (Verdict.recountIn st rebuilt) id)
 
-refreshAtRef :: Types.St -> Git.ReviewMode -> T.Text -> FilePath -> Types.FileView -> IO Refreshed
-refreshAtRef st mode tip name fv = do
+refreshAtRef :: Types.St -> Git.Renames -> Git.ReviewMode -> T.Text -> FilePath -> Types.FileView -> IO Refreshed
+refreshAtRef st renames mode tip name fv = do
   got <- Git.refContent (Types.stRoot st) tip name
-  base <- Git.baseLines mode (Types.stRoot st) name
+  base <- Git.baseLinesWith renames mode (Types.stRoot st) name
   let
     shown = if Types.fvDeleted fv then Nothing else Just (Modal.bufferLines (Types.fvEd fv))
     now = case got of
@@ -679,7 +682,7 @@ refreshAtRef st mode tip name fv = do
   if now == shown && base == Types.fvBase fv
     then pure (Unchanged name)
     else do
-      refreshed <- reloadOne st mode name
+      refreshed <- reloadOne st renames mode name
       case (refreshed, shown, now) of
         (Replaced fresh _, Just oldLs, Just newLs) -> fmap (Replaced fresh) (rowsThroughEdit oldLs newLs)
         _ -> pure refreshed

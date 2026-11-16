@@ -35,11 +35,12 @@ changeSetHunks cfg mode root = do
     fmap
       (filter (not . Config.ignoredPath ignores))
       (Git.reviewFiles mode (Config.cfgUntracked cfg) root)
-  fmap concat (mapM (fileHunks cfg mode root) names)
+  renames <- Git.renamesFor mode root
+  fmap concat (mapM (fileHunks cfg renames mode root) names)
 
-fileHunks :: Config.Config -> Git.ReviewMode -> FilePath -> FilePath -> IO [Hunk]
-fileHunks cfg mode root path = do
-  sides <- fileSides mode root path
+fileHunks :: Config.Config -> Git.Renames -> Git.ReviewMode -> FilePath -> FilePath -> IO [Hunk]
+fileHunks cfg renames mode root path = do
+  sides <- fileSides renames mode root path
   pure $ case sides of
     Nothing -> []
     Just (base, new) ->
@@ -87,15 +88,15 @@ toHunk path numbers r =
           , hunkNumbers = numbers
           }
 
-fileSides :: Git.ReviewMode -> FilePath -> FilePath -> IO (Maybe ([T.Text], [T.Text]))
-fileSides mode root path =
+fileSides :: Git.Renames -> Git.ReviewMode -> FilePath -> FilePath -> IO (Maybe ([T.Text], [T.Text]))
+fileSides renames mode root path =
   case Git.sourceOf mode of
     Git.FromRef tip -> do
       got <- Git.refContent root tip path
       case got of
         Just Git.RefBinary -> pure Nothing
         Just (Git.RefText new) -> do
-          base <- Git.baseLines mode root path
+          base <- Git.baseLinesWith renames mode root path
           pure (Just (base, new))
         Nothing -> removedSides mode root path
     Git.FromWorkingTree -> do
@@ -110,7 +111,7 @@ fileSides mode root path =
               case got of
                 Left _ -> pure Nothing
                 Right txt -> do
-                  base <- Git.baseLines mode root path
+                  base <- Git.baseLinesWith renames mode root path
                   pure (Just (base, T.lines txt))
             _ -> pure Nothing
 

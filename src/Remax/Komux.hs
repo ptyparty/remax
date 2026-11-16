@@ -24,6 +24,7 @@ import Network.Socket.ByteString qualified as SocketBS
 import System.Environment qualified as Env
 import System.Posix.Process qualified as Posix
 import System.Timeout qualified as Timeout
+import Text.Read qualified as Read
 
 import Remax.Context qualified as Context
 import Remax.Json qualified as Json
@@ -72,7 +73,7 @@ findAgent = do
   declared <- Env.lookupEnv "CLAUDE_PID"
   ancestors <- ancestry (fromIntegral parent)
   let
-    declaredPid = declared >>= readWhole
+    declaredPid = declared >>= Read.readMaybe
     isAgent (pid, stat) =
       case declaredPid of
         Just wanted -> pid == wanted
@@ -93,12 +94,6 @@ ancestry =
             Just found -> fmap ((pid, found) :) (climb (depth + 1) (procStatParent found))
   in
     climb 0
-
-readWhole :: String -> Maybe Int
-readWhole s =
-  case reads s of
-    [(n, "")] -> Just n
-    _ -> Nothing
 
 agentAlive :: AgentProcess -> IO Bool
 agentAlive agent = do
@@ -121,7 +116,7 @@ parseProcStat raw =
   in
     case (T.null beforeName, drop 1 fields, drop 19 fields) of
       (False, parentField : _, started : _)
-        | Just parent <- readWhole (T.unpack parentField) ->
+        | Just parent <- Read.readMaybe (T.unpack parentField) ->
             Just
               ProcStat
                 { procStatName = T.dropEnd 1 name
@@ -154,7 +149,7 @@ paneSession socketPath pane = do
     entry json =
       case (Json.field "paneId" json, Json.field "sessionId" json) of
         (Just (Json.JNumber n), Just (Json.JString session))
-          | readWhole (T.unpack n) == Just (paneIdToInt pane) -> Just session
+          | Read.readMaybe (T.unpack n) == Just (paneIdToInt pane) -> Just session
         _ -> Nothing
   pure $ case got of
     Answered answer
