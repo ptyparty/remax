@@ -25,6 +25,7 @@ import Data.Text.Read qualified as TR
 import Remax.Config qualified as Config
 import Remax.DiffModel qualified as DiffModel
 import Remax.Git qualified as Git
+import Remax.NoteArchive qualified as NoteArchive
 import Remax.Store qualified as Store
 import Remax.Theme qualified as Theme
 import Remax.UI.Core.Attrs qualified as Attrs
@@ -41,6 +42,7 @@ settingNames =
   [ "keys"
   , "scrolloff"
   , "note-on-flag"
+  , "archive-notes"
   , "ignore-whitespace"
   , "word-diff"
   , "untracked"
@@ -59,6 +61,9 @@ settingValue cfg key =
     "keys" -> Config.keyModeToText (Config.cfgKeys cfg)
     "scrolloff" -> Types.tshow (Config.cfgScrolloff cfg)
     "note-on-flag" -> if Config.cfgNoteOnFlag cfg then "1" else "0"
+    "archive-notes" -> case Config.cfgNoteRetention cfg of
+      NoteArchive.ArchiveNotes -> "1"
+      NoteArchive.DeleteNotes -> "0"
     "ignore-whitespace" -> if Config.cfgIgnoreWs cfg then "1" else "0"
     "word-diff" -> if Config.cfgWordDiff cfg then "1" else "0"
     "untracked" -> if Config.cfgUntracked cfg then "1" else "0"
@@ -112,6 +117,10 @@ applySet key val = do
     "scrolloff" -> withInt (\n -> cfg {Config.cfgScrolloff = max 0 n}) (pure ())
     "note-on-flag" ->
       withInt (\n -> cfg {Config.cfgNoteOnFlag = n /= 0}) (pure ())
+    "archive-notes" ->
+      withInt
+        (\n -> cfg {Config.cfgNoteRetention = if n /= 0 then NoteArchive.ArchiveNotes else NoteArchive.DeleteNotes})
+        (pure ())
     -- both change what the diff says, so every file is decorated again
     "ignore-whitespace" ->
       withInt (\n -> cfg {Config.cfgIgnoreWs = n /= 0}) Load.rebuildAllFiles

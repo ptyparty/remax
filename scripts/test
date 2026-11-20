@@ -5,7 +5,7 @@ set -o errexit
 . scripts/lib/run-in-container.sh
 
 if [ "$CI" ]; then
-  stack --lock-file error-on-write build --flag remax:ci "$@"
+  stack --lock-file error-on-write build --test --flag remax:ci "$@"
 else
-  stack build --fast "$@"
+  stack build --fast --test "$@"
 fi

@@ -1,12 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Remax.Conversation
-  ( Login (..)
-  , AgentName (..)
-  , Author (..)
-  , authorText
+  ( module Export
   , remoteAuthor
-  , parseAuthor
   , Markdown (..)
   , Side (..)
   , sideText
@@ -76,33 +72,11 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Ord qualified as Ord
 import Data.Text qualified as T
+import Remax.Author as Export
 import Remax.Store qualified as Store
-
-newtype Login = Login {loginToText :: T.Text}
-  deriving (Eq, Ord, Show)
-
-newtype AgentName = AgentName {agentNameToText :: T.Text}
-  deriving (Eq, Ord, Show)
-
-data Author = Viewer | Person Login | Agent AgentName
-  deriving (Eq, Ord, Show)
-
-authorText :: Author -> T.Text
-authorText a =
-  case a of
-    Viewer -> "viewer"
-    Person (Login l) -> "person:" <> l
-    Agent (AgentName n) -> "agent:" <> n
 
 remoteAuthor :: Maybe Login -> Login -> Author
 remoteAuthor viewer login = if viewer == Just login then Viewer else Person login
-
-parseAuthor :: T.Text -> Author
-parseAuthor t
-  | t == "viewer" = Viewer
-  | Just l <- T.stripPrefix "person:" t = Person (Login l)
-  | Just n <- T.stripPrefix "agent:" t = Agent (AgentName n)
-  | otherwise = Agent (AgentName t)
 
 newtype Markdown = Markdown {markdownText :: T.Text}
   deriving (Eq, Ord, Show)

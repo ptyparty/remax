@@ -69,6 +69,7 @@ module Remax.UI.Core.Types
   , OldToks (..)
   , St (..)
   , repoText
+  , noteRetention
   , titleCrumb
   , currentFile
   , currentFileMay
@@ -135,6 +136,7 @@ import Remax.GitHub qualified as GitHub
 import Remax.Highlight qualified as Highlight
 import Remax.LineRange qualified as LineRange
 import Remax.Modal qualified as Modal
+import Remax.NoteArchive qualified as NoteArchive
 import Remax.PullPoll qualified as PullPoll
 import Remax.Remote qualified as Remote
 import Remax.Store qualified as Store
@@ -768,6 +770,9 @@ openPullState st =
   case (Git.subjectOf (stMode st), stPullMeta st) of
     (Git.Pull pr _, Just meta) | GitHub.metaNumber meta == Git.prNumber pr -> Just (GitHub.metaState meta)
     _ -> Nothing
+
+noteRetention :: St -> NoteArchive.Retention
+noteRetention = Config.cfgNoteRetention . stConfig
 
 repoText :: St -> T.Text
 repoText = T.pack . stRoot

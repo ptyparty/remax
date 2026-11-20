@@ -34,6 +34,7 @@ import System.FilePath qualified as FilePath
 import Data.List qualified as List
 
 import Remax.DiffModel qualified as DiffModel
+import Remax.NoteArchive qualified as NoteArchive
 
 -- Which keybinding family drives the buffer: helix-style modal,
 -- vi-style modal, or modeless emacs chords.
@@ -73,6 +74,7 @@ data Config = Config
   , cfgSplit :: DiffModel.SplitConfig
   , cfgPrWorktree :: T.Text -- where :pr edit puts a pull request's worktree; <repo> and <N> are filled in
   , cfgTheme :: ThemeChoice
+  , cfgNoteRetention :: NoteArchive.Retention
   }
 
 data ThemeChoice
@@ -96,6 +98,7 @@ defaultConfig =
     , cfgSplit = DiffModel.defaultSplitConfig
     , cfgPrWorktree = defaultPrWorktree
     , cfgTheme = ThemeNamed "harbor"
+    , cfgNoteRetention = NoteArchive.DeleteNotes
     }
 
 defaultPrWorktree :: T.Text
@@ -217,6 +220,7 @@ fromEntries entries =
           Just raw | not (T.null raw) -> raw
           _ -> defaultPrWorktree
       , cfgTheme = maybe (cfgTheme base) themeChoiceFromText (lookup "theme" entries)
+      , cfgNoteRetention = if getInt "archive-notes" (0 :: Int) /= 0 then NoteArchive.ArchiveNotes else NoteArchive.DeleteNotes
       }
 
 themeChoiceFromText :: T.Text -> ThemeChoice

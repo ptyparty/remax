@@ -122,3 +122,67 @@ executables:
       - unix
       - vty >= 6.0
       - vty-crossplatform
+
+tests:
+  retire:
+    main: Main.hs
+    source-dirs:
+      - test
+      - src
+    language: Haskell2010
+    default-extensions:
+      - ImportQualifiedPost
+    ghc-options:
+      - -Wall
+      - -threaded
+    when:
+      - condition: flag(ci)
+        dependencies:
+          - henforcer
+        ghc-options:
+          - -Werror
+          - -Wcompat
+          - -Widentities
+          - -Wpartial-fields
+          - -fplugin Henforcer
+          - -fplugin-opt "Henforcer:-c./henforcer.toml"
+    other-modules:
+      - Remax.Author
+      - Remax.Config
+      - Remax.Conversation
+      - Remax.DiffModel
+      - Remax.Feedback
+      - Remax.Git
+      - Remax.Highlight
+      - Remax.Hunks
+      - Remax.Json
+      - Remax.Key
+      - Remax.LineRange
+      - Remax.NoteArchive
+      - Remax.NoteExport
+      - Remax.RemoteCache
+      - Remax.Store
+      - Remax.WorkStore
+    dependencies:
+      - array
+      - base >= 4.17 && < 5
+      - base16-bytestring
+      - brick >= 2.0
+      - bytestring
+      - containers
+      - cryptohash-sha256
+      - Diff
+      - directory
+      - file-embed
+      - filepath
+      - fsnotify >= 0.4
+      - mtl
+      - network
+      - process
+      - sqlite-simple
+      - text
+      - time
+      - unix
+      - vty >= 6.0
+      - vty-crossplatform
+      - QuickCheck

@@ -445,6 +445,27 @@ qualified = { qualifiedPost = true }
 alias = "Conv"
 
 [[forAnyModule.allowedQualifications]]
+module = "Remax.Author"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "Author"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { unqualified = true }
+alias = "Export"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.NoteArchive"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "NoteArchive"
+
+[[forAnyModule.allowedQualifications]]
+module = "Remax.NoteExport"
+[[forAnyModule.allowedQualifications.importScheme]]
+qualified = { qualifiedPost = true }
+alias = "NoteExport"
+
+[[forAnyModule.allowedQualifications]]
 module = "Remax.WorkStore"
 [[forAnyModule.allowedQualifications.importScheme]]
 qualified = { qualifiedPost = true }

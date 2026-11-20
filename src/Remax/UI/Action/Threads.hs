@@ -30,6 +30,7 @@ module Remax.UI.Action.Threads
   , pollSoon
   , aimAt
   , retireNotesOn
+  , retireNotesInJob
   , openWorkPopup
   , openWorkPopupAt
   , toggleFoldOf
@@ -42,6 +43,7 @@ module Remax.UI.Action.Threads
   ) where
 
 import Brick qualified as Brick
+import Control.Exception qualified as Exception
 import Control.Monad qualified as Monad
 import Control.Monad.IO.Class qualified as MonadIO
 import Control.Monad.State qualified as State
@@ -51,6 +53,7 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe qualified as Maybe
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Database.SQLite.Simple qualified as SQLite
 import Graphics.Vty qualified as V
 import Remax.Clipboard qualified as Clipboard
 import Remax.Conversation qualified as Conv
@@ -58,6 +61,7 @@ import Remax.DiffModel qualified as DiffModel
 import Remax.Git qualified as Git
 import Remax.GitHub qualified as GitHub
 import Remax.Modal qualified as Modal
+import Remax.NoteArchive qualified as NoteArchive
 import Remax.PullPoll qualified as PullPoll
 import Remax.Store qualified as Store
 import Remax.UI.Core.Anchor qualified as Anchor
@@ -729,39 +733,76 @@ editPostedKey = do
           openWorkPopup conv (Types.EditPosted (commentKindOf (Conv.convVenue conv)) cid) (Conv.markdownText (Conv.postBody post))
     _ -> pure Unhandled
 
+data NoteRetirement = NoteRetirement
+  { nrReason :: NoteArchive.RetiredReason
+  , nrKeys :: [Store.LineKey]
+  , nrOutdated :: [Conv.LocalId]
+  , nrThreads :: [Store.RemoteThreadId]
+  }
+
+planRetirement :: NoteArchive.RetiredReason -> [Types.FileView] -> [Store.LineKey] -> Types.St -> NoteRetirement
+planRetirement reason files keys st =
+  let
+    keyTexts = Set.fromList (map Store.lineKeyToText keys)
+    outdatedIn fv =
+      let
+        rowIxs = Maybe.mapMaybe (\(i, r) -> if maybe False (`Set.member` keyTexts) (DiffModel.rKey r) then Just i else Nothing) (zip [0 ..] (Types.fvRows fv))
+        drawn = Anchor.conversationsIn st (concatMap (\i -> Map.findWithDefault [] i (Types.fvThreads fv)) rowIxs)
+      in
+        Maybe.mapMaybe (\c -> if Map.member (Conv.convId c) (Types.stOutdated st) then Conv.targetLocalId (Conv.convTarget c) else Nothing) drawn
+    threadsIn fv =
+      let
+        path = T.pack (Types.fvPath fv)
+        keyIxs = Maybe.mapMaybe (\(i, r) -> if any (`Set.member` keyTexts) (Maybe.catMaybes [DiffModel.rKey r, DiffModel.rRemarkKey r]) then Just i else Nothing) (zip [0 ..] (Types.fvRows fv))
+        covered = Anchor.coveredRows path (Types.fvRows fv)
+        covers c = any (`Set.member` covered (Conv.convAnchor c)) keyIxs
+        threadId c = case Conv.convVenue c of
+          Conv.ReviewThread (Just tid) _ | covers c -> Just tid
+          _ -> Nothing
+      in
+        Maybe.mapMaybe threadId (Types.stConversations st)
+  in
+    NoteRetirement
+      { nrReason = reason
+      , nrKeys = keys
+      , nrOutdated = List.nub (concatMap outdatedIn files)
+      , nrThreads = List.nub (concatMap threadsIn files)
+      }
+
+runRetirement :: SQLite.Connection -> NoteArchive.Retention -> T.Text -> NoteRetirement -> IO ()
+runRetirement conn retention repo plan = do
+  WorkStore.retireNotesOn conn retention (nrReason plan) repo (nrKeys plan)
+  WorkStore.retireNotes conn retention repo (nrOutdated plan)
+  WorkStore.retireAsides conn repo (nrThreads plan)
+
 {- | Accepting lines retires the notes written on them, the outdated
 notes drawn under them, and the talk with the agent on GitHub threads
 over them.
 -}
-retireNotesOn :: [Store.LineKey] -> Brick.EventM Types.Name Types.St ()
-retireNotesOn keys = do
+retireNotesOn :: NoteArchive.RetiredReason -> [Types.FileView] -> [Store.LineKey] -> Brick.EventM Types.Name Types.St ()
+retireNotesOn reason files keys = do
+  st <- State.get
+  MonadIO.liftIO (runRetirement (Types.stConn st) (Types.noteRetention st) (Types.repoText st) (planRetirement reason files keys st))
+  WorkModel.reloadWork
+
+{- | The same off the event loop, on a connection of its own, for accepting
+every file under a path.
+-}
+retireNotesInJob :: NoteArchive.RetiredReason -> [Types.FileView] -> [Store.LineKey] -> Brick.EventM Types.Name Types.St ()
+retireNotesInJob reason files keys = do
   st <- State.get
   let
-    outdatedHere = case Types.currentFileMay st of
-      Nothing -> []
-      Just fv ->
-        let
-          rowIxs = Maybe.mapMaybe (\(i, r) -> if maybe False (`elem` map Store.lineKeyToText keys) (DiffModel.rKey r) then Just i else Nothing) (zip [0 ..] (Types.fvRows fv))
-          drawn = Anchor.conversationsIn st (concatMap (\i -> Map.findWithDefault [] i (Types.fvThreads fv)) rowIxs)
-        in
-          Maybe.mapMaybe (\c -> if Map.member (Conv.convId c) (Types.stOutdated st) then Conv.targetLocalId (Conv.convTarget c) else Nothing) drawn
-    threadsHere = case Types.currentFileMay st of
-      Nothing -> []
-      Just fv ->
-        let
-          path = T.pack (Types.fvPath fv)
-          keyIxs = Maybe.mapMaybe (\(i, r) -> if any (`elem` map Store.lineKeyToText keys) (Maybe.catMaybes [DiffModel.rKey r, DiffModel.rRemarkKey r]) then Just i else Nothing) (zip [0 ..] (Types.fvRows fv))
-          covered = Anchor.coveredRows path (Types.fvRows fv)
-          covers c = any (`Set.member` covered (Conv.convAnchor c)) keyIxs
-          threadId c = case Conv.convVenue c of
-            Conv.ReviewThread (Just tid) _ | covers c -> Just tid
-            _ -> Nothing
-        in
-          Maybe.mapMaybe threadId (Types.stConversations st)
-  MonadIO.liftIO (WorkStore.retireNotesOn (Types.stConn st) (Types.repoText st) keys)
-  MonadIO.liftIO (mapM_ (WorkStore.retireNote (Types.stConn st) (Types.repoText st)) outdatedHere)
-  MonadIO.liftIO (WorkStore.retireAsides (Types.stConn st) (Types.repoText st) threadsHere)
-  WorkModel.reloadWork
+    plan = planRetirement reason files keys st
+    retention = Types.noteRetention st
+    repo = Types.repoText st
+    epoch = Types.stEpoch st
+    work = Exception.bracket Store.openStore SQLite.close (\conn -> runRetirement conn retention repo plan)
+  Jobs.startJob "retiring notes" work $ \outcome -> do
+    latest <- State.get
+    Monad.when (Types.stEpoch latest == epoch) $
+      case outcome of
+        Left err -> Jobs.jobFailed "retiring notes" err
+        Right () -> WorkModel.reloadWork
 
 anchorKeys :: Conv.Anchor -> [Store.LineKey]
 anchorKeys anchor =

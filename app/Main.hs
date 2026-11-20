@@ -38,6 +38,7 @@ import Remax.Json qualified as Json
 import Remax.Key qualified as Key
 import Remax.Komux qualified as Komux
 import Remax.LineRange qualified as LineRange
+import Remax.NoteExport qualified as NoteExport
 import Remax.Remote qualified as Remote
 import Remax.RemoteCache qualified as RemoteCache
 import Remax.Setup qualified as Setup
@@ -68,6 +69,7 @@ data Cmd
   | Reply T.Text T.Text
   | Comment CommentArgs
   | Note T.Text T.Text
+  | Notes NoteExport.Which
   | Move T.Text Int
   | Attend
   | Watch WatchOptions
@@ -138,6 +140,7 @@ main = do
         Reply target text -> reply target text
         Comment commentArgs -> comment commentArgs
         Note place text -> openNote place text
+        Notes which -> printNotes which
         Move target pull -> move target pull
         Attend -> attend
         Watch options -> watch options
@@ -229,6 +232,15 @@ usage =
   \                                     lines; it waits for them until they\n\
   \                                     answer or resolve it, and never\n\
   \                                     reaches GitHub\n\
+  \       remax notes --json [--retired]\n\
+  \                                     every note in the store, in every\n\
+  \                                     repository, as a JSON array: its\n\
+  \                                     repository, file, lines, ref and\n\
+  \                                     commit where known, and its posts;\n\
+  \                                     with archive-notes = 1, notes\n\
+  \                                     resolved or accepted away stay\n\
+  \                                     with state retired and a retired_at;\n\
+  \                                     --retired lists only those\n\
   \       remax [-C DIR] comment HUNK TEXT\n\
   \                                     propose a GitHub comment on a hunk; the\n\
   \                                     reviewer takes it with Enter\n\
@@ -403,6 +415,9 @@ parseArgs args0 =
               Right (mDir, Reply (T.pack target) (T.pack (unwords rest)))
         ("note" : place : rest)
           | not (null rest) -> Right (mDir, Note (T.pack place) (T.pack (unwords rest)))
+        ["notes", "--json"] -> Right (mDir, Notes NoteExport.AllNotes)
+        ["notes", "--json", "--retired"] -> Right (mDir, Notes NoteExport.RetiredOnly)
+        ["notes", "--retired", "--json"] -> Right (mDir, Notes NoteExport.RetiredOnly)
         ["comment", "--withdraw", target] -> Right (mDir, Comment (Withdraw (T.pack target)))
         ("comment" : "--revise" : target : rest)
           | not (null rest) ->
@@ -852,6 +867,7 @@ forget mPath = do
   roots <- targetRepos
   here <- Directory.getCurrentDirectory
   conn <- Store.openStore
+  cfg <- Config.loadConfig
   let
     target = case mPath of
       Nothing -> here
@@ -927,9 +943,8 @@ forget mPath = do
       answer <- getLine
       if answer == "y"
         then do
-          Monad.forM_ hits $ \(root, _, rows) -> do
-            Store.deleteFiles conn (T.pack root) (List.nub (map snd rows))
-            WorkStore.forgetWork conn (T.pack root)
+          Monad.forM_ hits $ \(root, scope, rows) ->
+            WorkStore.forgetWork conn (Config.cfgNoteRetention cfg) (T.pack root) scope (List.nub (map snd rows))
           Monad.forM_ tourHits (uncurry (forgetTours conn))
           putStrLn ("  \10003 forgot " ++ show doomedCount ++ " line verdict(s)" ++ (if null tourHits then "" else " and " ++ show (length (concatMap snd tourHits)) ++ " tour(s)"))
         else putStrLn "  left alone"
@@ -954,6 +969,12 @@ forgetTours conn root tours = do
     Store.clearTour conn (T.pack root) subject
     Store.clearTourRequest conn (T.pack root) subject
     Monad.when present (Monad.void (Git.dropSnapshot root subject))
+
+printNotes :: NoteExport.Which -> IO ()
+printNotes which = do
+  conn <- Store.openStore
+  notes <- NoteExport.exportNotes conn which
+  TIO.putStrLn (NoteExport.notesJson notes)
 
 -- Hold a review open in the reviewer's header for as long as this runs.
 --

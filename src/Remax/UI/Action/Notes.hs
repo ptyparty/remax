@@ -24,6 +24,7 @@ import Remax.Config qualified as Config
 import Remax.Conversation qualified as Conv
 import Remax.DiffModel qualified as DiffModel
 import Remax.Modal qualified as Modal
+import Remax.NoteArchive qualified as NoteArchive
 import Remax.SoftWrap qualified as SoftWrap
 import Remax.Store qualified as Store
 import Remax.UI.Action.Cite qualified as CiteAction
@@ -162,7 +163,7 @@ unnoteCmd = do
   if null notes
     then Types.setMsg "nothing here to resolve"
     else do
-      ThreadAction.retireNotesOn keys
+      ThreadAction.retireNotesOn NoteArchive.NoteResolved (Maybe.maybeToList (Types.currentFileMay st)) keys
       Conversation.resolveNotesInMemory (map Store.lineKeyToText keys)
       Types.setMsg ("resolved " <> Types.tshow (length notes) <> " note(s)")
 

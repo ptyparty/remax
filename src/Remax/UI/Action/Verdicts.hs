@@ -36,6 +36,7 @@ import Remax.Conversation qualified as Conv
 import Remax.DiffModel qualified as DiffModel
 import Remax.Git qualified as Git
 import Remax.Modal qualified as Modal
+import Remax.NoteArchive qualified as NoteArchive
 import Remax.Store qualified as Store
 import Remax.UI.Action.Conversation qualified as Conversation
 import Remax.UI.Action.Threads qualified as ThreadAction
@@ -305,9 +306,9 @@ recordLineVerdicts v fv lo picks = do
     storeRow (k, l, n) = (k, path, l, n)
     keys = map (\(k, _, _) -> k) picks
   origin <- verdictOrigin
-  MonadIO.liftIO (Store.recordVerdicts (Types.stConn st) (Types.repoText st) (Types.stPassId st) v origin (map storeRow picks))
+  MonadIO.liftIO (Store.recordVerdicts (Types.stConn st) (Types.noteRetention st) (Types.repoText st) (Types.stPassId st) v origin (map storeRow picks))
   Monad.when (v == Store.Reviewed) (Conversation.closeConversation keys)
-  Monad.when (v == Store.Reviewed) (ThreadAction.retireNotesOn (map Store.LineKey keys))
+  Monad.when (v == Store.Reviewed) (ThreadAction.retireNotesOn NoteArchive.LinesAccepted (Maybe.maybeToList (Types.currentFileMay st)) (map Store.LineKey keys))
   Monad.when (v == Store.Reviewed) (Jobs.settleKeys (Types.fvPath fv) keys)
   State.modify $ \s ->
     s
@@ -388,7 +389,7 @@ clearVerdictBySelection = do
   if null marked
     then State.modify (\s -> s {Types.stMsg = "nothing marked here"})
     else do
-      MonadIO.liftIO (Store.deleteKeys (Types.stConn st) (Types.repoText st) marked)
+      MonadIO.liftIO (Store.deleteKeys (Types.stConn st) (Types.noteRetention st) (Types.repoText st) marked)
       State.modify $ \s ->
         s
           { Types.stVerdicts = foldr Map.delete (Types.stVerdicts s) marked
@@ -410,12 +411,13 @@ cancelMark undoing = do
     replaced = Map.fromListWith (++) [(v, [k]) | (k, Just v) <- Map.toList before]
     rowsFor ks = filter (\(k, _, _, _) -> k `elem` ks) (Types.muRows undoing)
   Monad.unless (null fresh) $
-    MonadIO.liftIO (Store.deleteKeys (Types.stConn st) (Types.repoText st) fresh)
+    MonadIO.liftIO (Store.deleteKeys (Types.stConn st) (Types.noteRetention st) (Types.repoText st) fresh)
   origin <- verdictOrigin
   Monad.forM_ (Map.toList replaced) $ \(v, ks) ->
     MonadIO.liftIO
       ( Store.recordVerdicts
           (Types.stConn st)
+          (Types.noteRetention st)
           (Types.repoText st)
           (Types.stPassId st)
           v
@@ -543,12 +545,14 @@ acceptPath rawPath = do
       MonadIO.liftIO
         ( Store.recordVerdicts
             (Types.stConn st)
+            (Types.noteRetention st)
             (Types.repoText st)
             (Types.stPassId st)
             Store.Reviewed
             origin
             rows
         )
+      ThreadAction.retireNotesInJob NoteArchive.LinesAccepted targets (map Store.LineKey keys)
       Conversation.resolveNotesInMemory keys
       State.modify $ \s ->
         s

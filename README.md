@@ -61,7 +61,13 @@ remax --unstaged      # working tree vs index
 remax --untracked     # new files only, reviewed as pure additions; ordinary
                       #   reviews already include them (:set untracked 0 to stop)
 remax forget          # forget verdicts under the current directory (asks first), and from a repository's root its tours and their snapshots
-                      #   in a folder of checkouts, reaches all of them
+                      #   in a folder of checkouts, reaches all of them;
+                      #   notes under the path are deleted, or archived
+                      #   with archive-notes = 1
+remax notes --json [--retired]
+                      # every open note in the store and every archived one,
+                      #   with its posts and where it was written; --retired
+                      #   lists only the archived ones (see Retired notes)
 remax list [--json]   # flagged/questioned punch list for this repository,
                       #   compact for agents; --json prints it whole
 remax show ID         # one conversation whole; any unique id prefix works
@@ -384,8 +390,8 @@ stays a prefix there too.
 | `:continue` | fold this stop's edits into the stopped commit and advance — *everything* dirty at the stop counts, including edits made through `$EDITOR` or by an agent, since the stop started clean |
 | `:abort!` | abort the rebase (`:abort` asks first) |
 | `:amend` | open the commit message of the commit under review (HEAD; the stopped commit mid-rebase) in the popup editor — `⏎` in its normal mode amends. Outside a rebase the session's edits fold in with it; at a rebase stop the amend is message-only (`:continue` owns the folding). At a conflict stop, where git has not made the stopped commit yet, the edit sets the message that `:continue` commits. Each paragraph and list item of the body opens as one soft-wrapped line and is wrapped at 72 columns when the message is written; the subject line and trailers are left as typed |
-| `:unnote` / `:resolve` | drop the whole conversation from the same target |
-| `:resolve all` | sweep every **answered** conversation in the repository — any thread whose newest post isn't yours clears; threads awaiting an answer stay |
+| `:unnote` / `:resolve` | resolve the whole conversation on the same target; the note leaves the session; with `archive-notes = 1` it stays in the store, retired |
+| `:resolve all` | sweep every **answered** conversation in the repository — any thread or note whose newest post isn't yours is retired (notes follow `archive-notes`); conversations awaiting an answer stay |
 | `:accept PATH` | mark every hunk under a directory (or in one file) reviewed — the bulk verb for generated code; matching is by path component |
 | `:open PATH` / `:close` | open any repository file in the session / drop it again |
 | `:repo` | switch which repository the session is looking at (also `Space R`, or `:repo NAME`). Start remax in a directory that *holds* checkouts rather than being one — a story directory of worktrees, say — and it opens the first and offers the rest here, with each row's branch and state (`clean`, `3 changed`, `rebasing 2/7`, `CONFLICT`) so you can see which one wants you. Your place in a repository is remembered, so leaving one mid-rebase and coming back lands you on the same hunk with the rebase still in progress — that state lives in `.git` and is read back on arrival, while buffers are re-read from disk, since the reason you stepped away may well have been to let an agent work there |
@@ -897,6 +903,7 @@ piece-min = 6         # smaller pieces merge forward (within a function)
 piece-max = 32        # bigger pieces keep splitting
 pr-worktree = ../<repo>-pr-<N>  # where :pr edit puts a pull request's worktree
 theme = harbor        # harbor | helix | the name of any helix theme
+archive-notes = 0     # 1 keeps retired notes in the store's archive (see Retired notes)
 ```
 
 `theme = harbor` (default) draws in Harbor, the theme vendored into
@@ -950,6 +957,45 @@ lines dimmed.
 Verdicts live in `~/.local/state/remax/review.db` (sqlite): `line_verdict`
 rows (key, file, line text, verdict, pass) plus a `pass` table recording
 when each review ran and what scope it covered.
+
+### Retired notes
+
+With `archive-notes = 1` in the config, a note that ends is kept; with the
+default `0` it is deleted, and `remax notes --json` lists only the open
+notes plus whatever the archive already holds.
+
+A note ends when the review moves on: its lines are accepted, `:resolve`
+or `:resolve all` closes it, or it was outdated and the hunk it hung
+under is accepted. With archiving on it is *retired*, not deleted: the note and every
+post in it, the reviewer's and the agent's, move to archive tables in the
+store with a retirement time, and nothing that reads notes (the punch
+list, `remax list`, `remax watch`, the session) sees it any more. The note
+keeps its repository, file, side, the text and number of each line it
+covered, and the commit and ref those lines were last reviewed at, so it
+still says what it was about once the verdicts on those lines are gone.
+`remax forget` archives notes the same way, only those under the path it was given. Discarding a note popup that
+was never saved, and the agent's talk on GitHub threads, are still
+deleted outright.
+
+`remax notes --json` prints every note in the store, whatever the
+current directory, as a JSON array, in the order the notes were started, those without posts
+last; `--retired` keeps only
+the retired ones:
+
+```json
+[{"id": "…", "repo": "/path/to/checkout", "state": "retired",
+  "retired_at": "2026-11-20T16:12:51Z", "file": "src/a.hs", "side": "head",
+  "verdict": "flagged", "ref": "feature", "commit": "abc123",
+  "lines": [{"line_no": 12, "text": "+  foo bar"}],
+  "posts": [{"kind": "aside", "author": "viewer", "body": "why?",
+             "at": "2026-11-20T16:10:02Z"},
+            {"kind": "aside", "author": "agent:claude", "body": "because…",
+             "at": "2026-11-20T16:11:30Z"}]}]
+```
+
+`state` is `open` or `retired` (`retired_at` is null while open);
+`ref`, `commit`, `verdict` and `side` are null where unknown, as they are
+for notes from before the store kept them. Times are UTC.
 
 ### Where a conversation lives
 

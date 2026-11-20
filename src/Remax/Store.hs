@@ -39,7 +39,7 @@ module Remax.Store
   , PunchRow (..)
   , punchRows
   , repoRows
-  , deleteFiles
+  , deleteFilesInTransaction
   , PullNumber (..)
   , RemoteThreadId (..)
   , CommentId (..)
@@ -84,6 +84,7 @@ import System.IO.Error qualified as IOError
 import System.Posix.Process qualified as Posix
 
 import Remax.Key qualified as Key
+import Remax.NoteArchive qualified as NoteArchive
 
 data Verdict = Reviewed | Flagged | Questioned
   deriving (Eq, Ord, Show)
@@ -303,6 +304,7 @@ openStore = do
     \  reason TEXT NOT NULL,\
     \  retired_at TEXT NOT NULL DEFAULT (datetime('now')),\
     \  PRIMARY KEY (repo, local_id))"
+  NoteArchive.createSchema conn
   -- several instances (sessions, agent CLI calls) share this file; WAL
   -- lets readers proceed under a writer instead of stacking on the lock
   Monad.void (SQLite.query_ conn "PRAGMA journal_mode = WAL" :: IO [SQLite.Only T.Text])
@@ -370,6 +372,7 @@ migrate conn = do
   Monad.unless ("group_id" `elem` postNames) $ do
     SQLite.execute_ conn "ALTER TABLE note_post ADD COLUMN group_id TEXT"
     nameExistingGroups conn
+  NoteArchive.absorbRetiredRows conn
 
 recordView :: SQLite.Connection -> T.Text -> T.Text -> IO ()
 recordView conn repo mode =
@@ -633,13 +636,14 @@ noOrigin = VerdictOrigin {originCommit = Nothing, originRef = Nothing}
 
 recordVerdicts ::
   SQLite.Connection ->
+  NoteArchive.Retention ->
   T.Text ->
   DataInt.Int64 ->
   Verdict ->
   VerdictOrigin ->
   [(T.Text, T.Text, T.Text, Int)] ->
   IO ()
-recordVerdicts conn repo passId v origin rows =
+recordVerdicts conn retention repo passId v origin rows =
   let
     (sha, subject) = case originCommit origin of
       Just (s, subj) -> (Just s, Just subj)
@@ -647,7 +651,7 @@ recordVerdicts conn repo passId v origin rows =
     toParams (key, file, line, lineNo) =
       (key, repo, file, line, lineNo, verdictText v, passId, sha, subject, originRef origin)
   in
-    SQLite.withTransaction conn $ do
+    SQLite.withImmediateTransaction conn $ do
       SQLite.executeMany
         conn
         "INSERT INTO line_verdict\
@@ -669,17 +673,7 @@ recordVerdicts conn repo passId v origin rows =
         (map toParams rows)
       -- accepting closes the conversation; other verdicts keep it open
       Monad.when (v == Reviewed) $
-        mapM_
-          ( \ks ->
-              let
-                holes = mconcat (replicate (length ks - 1) ", ?")
-              in
-                SQLite.execute
-                  conn
-                  (SQLite.Query ("DELETE FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
-                  (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow ks)
-          )
-          (chunks 400 (map (\(key, _, _, _) -> key) rows))
+        NoteArchive.retireOnKeys conn retention NoteArchive.LegacyPostsOnly repo (map (\(key, _, _, _) -> key) rows)
 
 -- Every conversation in the repo, by line key, posts in order. Keys of
 -- a noted group carry identical threads, so display code can collapse
@@ -871,8 +865,8 @@ loadNoteGroups conn repo = do
 
 -- Drop the whole conversation from some lines. Returns how many lines
 -- actually had one.
-clearThread :: SQLite.Connection -> T.Text -> [T.Text] -> IO Int
-clearThread conn repo keys =
+clearThread :: SQLite.Connection -> NoteArchive.Retention -> T.Text -> [T.Text] -> IO Int
+clearThread conn retention repo keys =
   let
     batch ks = do
       let
@@ -883,29 +877,26 @@ clearThread conn repo keys =
           (SQLite.Query ("SELECT COUNT(DISTINCT key) FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
           (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow ks) ::
           IO [SQLite.Only Int]
-      SQLite.execute
-        conn
-        (SQLite.Query ("DELETE FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
-        (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow ks)
       pure $ case cleared of
         (SQLite.Only n : _) -> n
         [] -> 0
   in
-    SQLite.withTransaction conn $ do
+    SQLite.withImmediateTransaction conn $ do
       counts <- mapM batch (chunks 400 keys)
+      NoteArchive.retireOnKeys conn retention NoteArchive.LegacyPostsOnly repo keys
       pure (sum counts)
 
 -- Close every answered conversation at once: a thread whose newest post
 -- came from someone other than the reviewer clears entirely. Returns
 -- how many lines.
-resolveAnswered :: SQLite.Connection -> T.Text -> IO Int
-resolveAnswered conn repo = do
+resolveAnswered :: SQLite.Connection -> NoteArchive.Retention -> T.Text -> IO Int
+resolveAnswered conn retention repo = do
   threads <- loadThreads conn repo
   let
     answered = answeredKeys threads
   case answered of
     [] -> pure 0
-    keys -> clearThread conn repo keys
+    keys -> clearThread conn retention repo keys
 
 answeredKeys :: Map.Map T.Text [Post] -> [T.Text]
 answeredKeys threads =
@@ -970,8 +961,8 @@ repoRows conn repo =
 
 -- Forget the verdicts for particular line keys (unmarking a hunk or a
 -- selection of lines).
-deleteKeys :: SQLite.Connection -> T.Text -> [T.Text] -> IO ()
-deleteKeys conn repo keys =
+deleteKeys :: SQLite.Connection -> NoteArchive.Retention -> T.Text -> [T.Text] -> IO ()
+deleteKeys conn retention repo keys =
   let
     batch ks =
       let
@@ -982,41 +973,33 @@ deleteKeys conn repo keys =
             conn
             (SQLite.Query ("DELETE FROM line_verdict WHERE repo = ? AND key IN (?" <> holes <> ")"))
             (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow ks)
-          SQLite.execute
-            conn
-            (SQLite.Query ("DELETE FROM note_post WHERE repo = ? AND key IN (?" <> holes <> ")"))
-            (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow ks)
   in
-    SQLite.withTransaction conn $
+    SQLite.withImmediateTransaction conn $ do
+      NoteArchive.retireOnKeys conn retention NoteArchive.LegacyPostsOnly repo keys
       mapM_ batch (chunks 400 keys)
 
 -- Batched so a repository with thousands of recorded lines stays inside
 -- sqlite's limit on parameters per statement.
-deleteFiles :: SQLite.Connection -> T.Text -> [T.Text] -> IO ()
-deleteFiles conn repo files =
+deleteFilesInTransaction :: SQLite.Connection -> NoteArchive.Retention -> T.Text -> [T.Text] -> IO ()
+deleteFilesInTransaction conn retention repo files =
   let
     batch fs =
       let
         holes = mconcat (replicate (length fs - 1) ", ?") -- first hole below
       in
         do
-          SQLite.execute
-            conn
-            ( SQLite.Query
-                ( "DELETE FROM note_post WHERE repo = ? AND key IN\
-                  \ (SELECT key FROM line_verdict WHERE repo = ? AND file IN (?"
-                    <> holes
-                    <> "))"
-                )
-            )
-            (SQLite.toRow (repo, repo) <> SQLite.toRow fs)
+          keys <-
+            SQLite.query
+              conn
+              (SQLite.Query ("SELECT key FROM line_verdict WHERE repo = ? AND file IN (?" <> holes <> ")"))
+              (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow fs)
+          NoteArchive.retireOnKeys conn retention NoteArchive.LegacyPostsOnly repo (map SQLite.fromOnly keys)
           SQLite.execute
             conn
             (SQLite.Query ("DELETE FROM line_verdict WHERE repo = ? AND file IN (?" <> holes <> ")"))
             (SQLite.toRow (SQLite.Only repo) <> SQLite.toRow fs)
   in
-    SQLite.withTransaction conn $
-      mapM_ batch (chunks 400 files)
+    mapM_ batch (chunks 400 files)
 
 newtype PullNumber = PullNumber {pullNumberToInt :: Int}
   deriving (Eq, Ord, Show)

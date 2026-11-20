@@ -129,6 +129,7 @@ cmdCandidates st input =
       ["set"] -> prefixed Settings.settingNames
       ["set", "keys"] -> prefixed Config.keyModeNames
       ["set", "note-on-flag"] -> prefixed ["0", "1"]
+      ["set", "archive-notes"] -> prefixed ["0", "1"]
       ["resolve"] -> prefixed ["all"]
       ["pr"] -> prefixed ["commits", "edit", "review"]
       ["tour"] -> prefixed ["list", "ask", "show", "play", "stop"]

@@ -20,13 +20,15 @@ module Remax.WorkStore
   , recordSubmitted
   , growNote
   , retireNotesOn
-  , retireNote
+  , resolveAnsweredNotes
+  , retireNotes
   , retireAsides
   , forgetWork
   , RetiredNote (..)
-  , RetiredReason (..)
+  , NoteArchive.RetiredReason (..)
   , retiredNotes
   , newLocalId
+  , isoStamp
   ) where
 
 import Control.Monad qualified as Monad
@@ -40,6 +42,7 @@ import Data.Time.Clock qualified as Clock
 import Database.SQLite.Simple qualified as SQLite
 import Remax.Conversation qualified as Conv
 import Remax.Key qualified as Key
+import Remax.NoteArchive qualified as NoteArchive
 import Remax.Store qualified as Store
 
 -- | Which repository's work, and which pull request's when one is open.
@@ -217,7 +220,7 @@ loadLegacyNotes conn repo = do
         firstKey = NEL.head spanLines
         onFirst (k, _, _, _, _) = Store.LineKey k == Conv.slKey firstKey
         post (k, s, a, b, at) =
-          (Conv.LegacyPost k s, Conv.Aside (if a == "reviewer" then Conv.Viewer else Conv.Agent (Conv.AgentName a)) (Conv.Markdown b) (isoStamp at))
+          (Conv.LegacyPost k s, Conv.Aside (Conv.legacyAuthor a) (Conv.Markdown b) (isoStamp at))
       Just (Conv.OnLinesOnly (Conv.LocalId gid) lineSpan verdict, map post (filter onFirst rows))
   pure (Map.fromList (Maybe.mapMaybe note (Map.toList byGroup)))
 
@@ -373,67 +376,32 @@ growNote conn repo lid lineSpan =
       )
 
 -- | Accepting lines retires the notes written on them, old and new alike.
-retireNotesOn :: SQLite.Connection -> T.Text -> [Store.LineKey] -> IO ()
-retireNotesOn conn repo keys =
+retireNotesOn :: SQLite.Connection -> NoteArchive.Retention -> NoteArchive.RetiredReason -> T.Text -> [Store.LineKey] -> IO ()
+retireNotesOn conn retention reason repo keys =
   Monad.unless (null keys) $
-    SQLite.withTransaction conn $
-      mapM_
-        ( \batch -> do
-            let
-              holes = mconcat (replicate (length batch - 1) ", ?")
-              params = SQLite.toRow (SQLite.Only repo) <> SQLite.toRow (map Store.lineKeyToText batch)
-            SQLite.execute
-              conn
-              ( SQLite.Query
-                  ( "INSERT OR REPLACE INTO retired_note (repo, local_id, reason)\
-                    \ SELECT repo, local_id, 'accepted' FROM work_target WHERE repo = ? AND kind = 'note' AND local_id IN\
-                    \ (SELECT local_id FROM work_target_line WHERE repo = ? AND key IN (?"
-                      <> holes
-                      <> "))"
-                  )
-              )
-              (SQLite.toRow (SQLite.Only repo) <> params)
-            SQLite.execute
-              conn
-              ( SQLite.Query
-                  ( "DELETE FROM work WHERE repo = ? AND target_kind = 'note' AND target_id IN\
-                    \ (SELECT local_id FROM work_target_line WHERE repo = ? AND key IN (?"
-                      <> holes
-                      <> "))"
-                  )
-              )
-              (SQLite.toRow (SQLite.Only repo) <> params)
-            SQLite.execute
-              conn
-              ( SQLite.Query
-                  ( "DELETE FROM work_target WHERE repo = ? AND kind = 'note' AND local_id IN\
-                    \ (SELECT local_id FROM work_target_line WHERE repo = ? AND key IN (?"
-                      <> holes
-                      <> "))"
-                  )
-              )
-              (SQLite.toRow (SQLite.Only repo) <> params)
-            SQLite.execute
-              conn
-              "DELETE FROM work_target_line WHERE repo = ? AND local_id NOT IN (SELECT local_id FROM work_target WHERE repo = ?)"
-              (repo, repo)
-        )
-        (chunksOf 400 keys)
+    SQLite.withImmediateTransaction conn $
+      NoteArchive.retireOnKeys conn retention (NoteArchive.EveryNote reason) repo (map Store.lineKeyToText keys)
 
-chunksOf :: Int -> [a] -> [[a]]
-chunksOf n xs =
-  case splitAt n xs of
-    ([], _) -> []
-    (chunk, rest) -> chunk : chunksOf n rest
+resolveAnsweredNotes :: SQLite.Connection -> NoteArchive.Retention -> T.Text -> IO Int
+resolveAnsweredNotes conn retention repo =
+  SQLite.withImmediateTransaction conn $ do
+    answered <-
+      SQLite.query
+        conn
+        "SELECT w.target_id FROM work w\
+        \ WHERE w.repo = ? AND w.target_kind = 'note' AND w.kind = 'aside' AND w.author <> ?\
+        \   AND w.id = (SELECT MAX(l.id) FROM work l WHERE l.repo = w.repo AND l.target_kind = 'note' AND l.target_id = w.target_id AND l.kind = 'aside')\
+        \ GROUP BY w.target_id ORDER BY w.target_id"
+        (repo, Conv.authorText Conv.Viewer)
+    let
+      ids = map SQLite.fromOnly answered
+    NoteArchive.retireIds conn retention repo ids
+    pure (length ids)
 
-retireNote :: SQLite.Connection -> T.Text -> Conv.LocalId -> IO ()
-retireNote conn repo (Conv.LocalId lid) =
-  SQLite.withTransaction conn $ do
-    SQLite.execute conn "INSERT OR REPLACE INTO retired_note (repo, local_id, reason) VALUES (?, ?, 'resolved')" (repo, lid)
-    SQLite.execute conn "DELETE FROM work WHERE repo = ? AND target_kind = 'note' AND target_id = ?" (repo, lid)
-    SQLite.execute conn "DELETE FROM work_target WHERE repo = ? AND local_id = ?" (repo, lid)
-    SQLite.execute conn "DELETE FROM work_target_line WHERE repo = ? AND local_id = ?" (repo, lid)
-    SQLite.execute conn "DELETE FROM note_post WHERE repo = ? AND group_id = ?" (repo, lid)
+retireNotes :: SQLite.Connection -> NoteArchive.Retention -> T.Text -> [Conv.LocalId] -> IO ()
+retireNotes conn retention repo lids =
+  Monad.unless (null lids) $
+    SQLite.withImmediateTransaction conn (NoteArchive.retireIds conn retention repo (map Conv.localIdToText lids))
 
 retireAsides :: SQLite.Connection -> T.Text -> [Store.RemoteThreadId] -> IO ()
 retireAsides conn repo tids =
@@ -442,22 +410,34 @@ retireAsides conn repo tids =
       (\(Store.RemoteThreadId t) -> SQLite.execute conn "DELETE FROM work WHERE repo = ? AND target_kind = 'thread' AND target_id = ? AND kind = 'aside'" (repo, t))
       tids
 
-forgetWork :: SQLite.Connection -> T.Text -> IO ()
-forgetWork conn repo =
-  SQLite.withTransaction conn $ do
-    SQLite.execute conn "DELETE FROM work WHERE repo = ?" (SQLite.Only repo)
-    SQLite.execute conn "DELETE FROM work_target_line WHERE repo = ?" (SQLite.Only repo)
-    SQLite.execute conn "DELETE FROM work_target WHERE repo = ?" (SQLite.Only repo)
-    SQLite.execute conn "DELETE FROM work_submitted WHERE repo = ?" (SQLite.Only repo)
-    SQLite.execute conn "DELETE FROM retired_note WHERE repo = ?" (SQLite.Only repo)
+forgetWork :: SQLite.Connection -> NoteArchive.Retention -> T.Text -> T.Text -> [T.Text] -> IO ()
+forgetWork conn retention repo scope files =
+  SQLite.withImmediateTransaction conn $ do
+    NoteArchive.retireUnder conn retention repo scope
+    Store.deleteFilesInTransaction conn retention repo files
+    if T.null scope
+      then do
+        SQLite.execute conn "DELETE FROM work WHERE repo = ? AND target_kind <> 'note'" (SQLite.Only repo)
+        SQLite.execute conn "DELETE FROM work_target WHERE repo = ? AND kind <> 'note'" (SQLite.Only repo)
+        SQLite.execute conn "DELETE FROM work_submitted WHERE repo = ?" (SQLite.Only repo)
+        SQLite.execute conn "DELETE FROM retired_note WHERE repo = ?" (SQLite.Only repo)
+      else do
+        let
+          underScope = "SELECT local_id FROM work_target WHERE repo = ? AND kind = 'new' AND (path = ? OR substr(path, 1, length(?) + 1) = ? || '/')"
+          scoped = (repo, repo, scope, scope, scope)
+        SQLite.execute conn ("DELETE FROM work WHERE repo = ? AND target_kind = 'new' AND target_id IN (" <> underScope <> ")") scoped
+        SQLite.execute conn ("DELETE FROM work_submitted WHERE repo = ? AND local_id IN (" <> underScope <> ")") scoped
+        SQLite.execute conn ("DELETE FROM work_target WHERE repo = ? AND local_id IN (" <> underScope <> ")") scoped
+    SQLite.execute
+      conn
+      "DELETE FROM work_target_line WHERE repo = ? AND local_id NOT IN (SELECT local_id FROM work_target WHERE repo = ?)"
+      (repo, repo)
 
 data RetiredNote = RetiredNote
   { retiredId :: T.Text
-  , retiredReason :: RetiredReason
+  , retiredReason :: NoteArchive.RetiredReason
   , retiredAt :: T.Text
   }
-
-data RetiredReason = LinesAccepted | NoteResolved
 
 retiredNotes :: SQLite.Connection -> T.Text -> T.Text -> IO [RetiredNote]
 retiredNotes conn repo prefix = do
@@ -467,9 +447,7 @@ retiredNotes conn repo prefix = do
       "SELECT local_id, reason, retired_at FROM retired_note WHERE repo = ? AND substr(local_id, 1, length(?)) = ?"
       (repo, prefix, prefix) ::
       IO [(T.Text, T.Text, T.Text)]
-  let
-    reasonOf r = if r == "accepted" then LinesAccepted else NoteResolved
-  pure (map (\(lid, r, at) -> RetiredNote {retiredId = lid, retiredReason = reasonOf r, retiredAt = at}) rows)
+  pure (map (\(lid, r, at) -> RetiredNote {retiredId = lid, retiredReason = NoteArchive.reasonFromText r, retiredAt = at}) rows)
 
 {- | A name for a new thread or note: the lines it covers and the moment
 it was written, so two notes on one selection stay apart.

@@ -19,6 +19,8 @@ import Data.Text qualified as T
 import Remax.Store qualified as Store
 import Remax.UI.Core.Types qualified as Types
 import Remax.UI.Core.Verdict qualified as Verdict
+import Remax.UI.Model.Work qualified as WorkModel
+import Remax.WorkStore qualified as WorkStore
 
 -- Attach a reviewer note to the selection's lines (or the current hunk),
 -- so a ! or ? carries its reason into `remax list`.
@@ -27,14 +29,16 @@ import Remax.UI.Core.Verdict qualified as Verdict
 resolveAllAnswered :: Brick.EventM Types.Name Types.St ()
 resolveAllAnswered = do
   st <- State.get
-  n <- MonadIO.liftIO (Store.resolveAnswered (Types.stConn st) (Types.repoText st))
+  n <- MonadIO.liftIO (Store.resolveAnswered (Types.stConn st) (Types.noteRetention st) (Types.repoText st))
+  m <- MonadIO.liftIO (WorkStore.resolveAnsweredNotes (Types.stConn st) (Types.noteRetention st) (Types.repoText st))
+  WorkModel.reloadWork
   threads <- MonadIO.liftIO (Store.loadThreads (Types.stConn st) (Types.repoText st))
   groups <- MonadIO.liftIO (Store.loadNoteGroups (Types.stConn st) (Types.repoText st))
   State.modify (\s -> s {Types.stThreads = threads, Types.stNoteGroups = groups})
   Types.setMsg $
-    if n == 0
+    if n + m == 0
       then "no answered notes to resolve"
-      else "resolved " <> Types.tshow n <> " answered line(s)"
+      else "resolved " <> Types.tshow (n + m) <> " answered conversation(s)"
 
 -- Acceptance closes the note conversation; the store upsert already
 -- cleared the rows, this keeps the inline display in step.
@@ -114,8 +118,8 @@ closeConversation keys = do
       Just fv -> conversationKeys st fv keys
     beyond = filter (`notElem` keys) wider
   Monad.unless (null beyond) $ do
-    Monad.void (MonadIO.liftIO (Store.clearThread (Types.stConn st) (Types.repoText st) beyond))
-    MonadIO.liftIO (Store.deleteKeys (Types.stConn st) (Types.repoText st) beyond)
+    Monad.void (MonadIO.liftIO (Store.clearThread (Types.stConn st) (Types.noteRetention st) (Types.repoText st) beyond))
+    MonadIO.liftIO (Store.deleteKeys (Types.stConn st) (Types.noteRetention st) (Types.repoText st) beyond)
     State.modify $ \s ->
       s {Types.stVerdicts = foldr Map.delete (Types.stVerdicts s) beyond}
   resolveNotesInMemory wider
